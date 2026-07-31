@@ -29,6 +29,7 @@ The first usable version is intentionally focused:
 
 - One owner controlling 1–5 Yuanshu Nodes;
 - Windows 11 x64 Node first;
+- Linux amd64 Server and Standalone as the initial self-hosting target;
 - Codex app-server integration;
 - Local workspace allowlist;
 - Create, list, read, and resume threads;
@@ -41,6 +42,18 @@ The first usable version is intentionally focused:
 - Outbound-only HTTPS/WSS connections for ordinary Node machines.
 
 Team roles, hosted compute, remote desktop, a general-purpose web terminal, and permanent cloud storage of task content are deliberately outside the first MVP.
+
+## Platform roadmap
+
+Windows, macOS, and Linux are all first-class product targets. The order is phased to keep the first release achievable:
+
+1. Windows 11 x64 Yuanshu Node;
+2. Linux amd64 Yuanshu Server and Standalone;
+3. Linux amd64 Yuanshu Node;
+4. macOS arm64 Yuanshu Node;
+5. macOS amd64 and Linux arm64 builds based on actual usage.
+
+The protocol, transports, adapters, configuration model, and event journal will share one Go implementation. Platform-specific code is limited to secure storage, IPC, process lifecycle, autostart, path validation, and release signing. The project prefers pure-Go dependencies; introducing CGO requires an explicit cross-platform build and supply-chain review.
 
 ## Architecture direction
 
@@ -86,11 +99,14 @@ These commands describe the planned interface and are not available in the curre
 - [ ] Codex app-server proof of concept
 - [ ] Cross-language protocol and signed-control test vectors
 - [ ] Windows Yuanshu Node alpha
-- [ ] Self-hosted Server, Standalone, and device pairing
+- [ ] Linux Server and Standalone self-hosting preview
+- [ ] Self-hosted device and control-client pairing
+- [ ] Linux Yuanshu Node
+- [ ] macOS arm64 Yuanshu Node
 - [ ] Mobile PWA task loop
 - [ ] Security hardening and first public preview
 
-The roadmap favors a reliable daily-use loop for one developer before adding more operating systems, agent adapters, or team features.
+The roadmap establishes a reliable daily-use loop for one developer first, then completes the committed Linux and macOS integrations before expanding into more agent adapters or team features.
 
 ## Security principles
 
@@ -110,11 +126,11 @@ These are design goals until the corresponding implementation and security tests
 Yuanshu is at an early stage, so focused feedback is especially useful. Good first contributions include:
 
 - Codex app-server compatibility findings;
-- Windows Node lifecycle experiments;
+- Windows, Linux, and macOS Node lifecycle experiments;
 - Protocol and threat-model review;
 - Mobile task and approval UX proposals;
 - Self-hosting feedback;
-- Research on the next operating system or agent adapter.
+- Cross-platform integration findings or research on the next agent adapter.
 
 Please use GitHub Issues for reproducible bugs, scoped proposals, and design discussion. Avoid posting credentials, private source code, or security vulnerabilities in public issues.
 

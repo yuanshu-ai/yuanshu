@@ -29,6 +29,7 @@
 
 - 单 Owner 控制 1–5 个 Yuanshu Node；
 - 首发 Windows 11 x64 Node；
+- Linux amd64 Server 和 Standalone 作为首个自托管目标；
 - Codex app-server 集成；
 - 本地工作区白名单；
 - 创建、列出、读取和恢复 Thread；
@@ -41,6 +42,18 @@
 - 普通 Node 机器只需主动发起 HTTPS/WSS 出站连接。
 
 团队角色、托管计算、远程桌面、通用 Web Terminal 和云端永久保存任务正文均不进入首个 MVP。
+
+## 平台路线
+
+Windows、macOS 和 Linux 都是确定支持的一等平台。为了控制首个版本范围，按以下顺序交付：
+
+1. Windows 11 x64 Yuanshu Node；
+2. Linux amd64 Yuanshu Server 和 Standalone；
+3. Linux amd64 Yuanshu Node；
+4. macOS arm64 Yuanshu Node；
+5. 根据实际使用量提供 macOS amd64 和 Linux arm64 构建。
+
+协议、Transport、Adapter、配置模型和事件日志共用同一套 Go 实现。平台专属代码仅包含安全存储、IPC、进程生命周期、自动启动、路径校验和发布签名。项目优先使用纯 Go 依赖；引入 CGO 必须先完成跨平台构建和供应链评审。
 
 ## 架构方向
 
@@ -86,11 +99,14 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [ ] Codex app-server 技术验证
 - [ ] 跨语言协议和控制签名测试向量
 - [ ] Windows Yuanshu Node Alpha
-- [ ] 自托管 Server、Standalone 与设备配对
+- [ ] Linux Server 与 Standalone 自托管预览版
+- [ ] 自托管设备与控制端配对
+- [ ] Linux Yuanshu Node
+- [ ] macOS arm64 Yuanshu Node
 - [ ] 移动 PWA 任务闭环
 - [ ] 安全加固与首个公开预览版
 
-路线图会先确保一个开发者能够稳定地每天使用，再增加更多操作系统、AgentAdapter 或团队功能。
+路线图会先确保一个开发者能够稳定地每天使用，再完成已经确定的 Linux 和 macOS 集成，之后扩展更多 AgentAdapter 或团队功能。
 
 ## 安全原则
 
@@ -110,11 +126,11 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 远枢仍处于早期阶段，以下反馈尤其有价值：
 
 - Codex app-server 兼容性测试结论；
-- Windows Node 生命周期实验；
+- Windows、Linux 和 macOS Node 生命周期实验；
 - 协议与威胁模型评审；
 - 移动端任务和审批体验建议；
 - 自托管使用反馈；
-- 第二操作系统或第二 AgentAdapter 的需求研究。
+- 跨平台集成结论或第二 AgentAdapter 的需求研究。
 
 请使用 GitHub Issues 提交可复现问题、范围明确的提案和设计讨论。不要在公开 Issue 中发布凭据、私有代码或安全漏洞细节。
 
