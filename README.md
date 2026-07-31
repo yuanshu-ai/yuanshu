@@ -16,65 +16,77 @@ The name **远枢** combines “remote” (远) and “hub/pivot” (枢): a rem
 
 ## Why Yuanshu?
 
-- **One controller, many hosts** — Follow work across a personal PC, work machine, always-on computer, or development server from one interface.
-- **Authentication-neutral** — Reuse the Codex setup already working on each host, whether it uses ChatGPT sign-in, an API key, or a supported custom provider.
-- **Local execution and credentials** — Model requests, source code, shell access, Git/SSH credentials, and agent authentication stay on the host.
+- **One controller, many nodes** — Follow work across a personal PC, work machine, always-on computer, or development server from one interface.
+- **Authentication-neutral** — Reuse the Codex setup already working on each node machine, whether it uses ChatGPT sign-in, an API key, or a supported custom provider.
+- **Local execution and credentials** — Model requests, source code, shell access, Git/SSH credentials, and agent authentication stay on the node machine.
 - **Agent-native remote experience** — Display task state, streamed events, approvals, commands, and diffs instead of mirroring a desktop.
-- **Open and self-hostable** — The host agent, relay, protocol, web client, and adapters are intended to remain auditable and self-hostable.
+- **Open and self-hostable** — Yuanshu Node, Server, Web, protocol, and adapters are intended to remain auditable and self-hostable.
 - **Designed to grow beyond one agent** — The first adapter targets Codex app-server; additional local coding agents can be added through explicit capability adapters.
 
 ## Planned personal MVP
 
 The first usable version is intentionally focused:
 
-- One owner controlling 1–5 hosts;
-- Windows 11 x64 host first;
+- One owner controlling 1–5 Yuanshu Nodes;
+- Windows 11 x64 Node first;
 - Codex app-server integration;
 - Local workspace allowlist;
 - Create, list, read, and resume threads;
 - Stream agent messages, commands, tool activity, file changes, and diffs;
 - Steer or interrupt an active turn;
 - Review and resolve approvals from a mobile-friendly PWA;
-- Signed control messages verified by the host;
-- Host-side event journal, reconnect, replay, and snapshot recovery;
-- A small self-hosted relay using outbound HTTPS/WSS connections.
+- Signed control messages verified by the Node;
+- Node-side event journal, reconnect, replay, and snapshot recovery;
+- Standard Server + Node and single-deployment Standalone modes;
+- Outbound-only HTTPS/WSS connections for ordinary Node machines.
 
 Team roles, hosted compute, remote desktop, a general-purpose web terminal, and permanent cloud storage of task content are deliberately outside the first MVP.
 
 ## Architecture direction
 
 ```mermaid
-flowchart LR
+flowchart TB
     Client["Phone / Tablet / Browser"]
-    Relay["Yuanshu Relay"]
+    Server["Yuanshu Server<br/>Web + Pairing + Routing + Relay"]
 
-    subgraph Host["Your Host"]
-        Agent["Yuanshu Host Agent"]
+    subgraph Machine["Your computer or server"]
+        Node["Yuanshu Node<br/>Local bridge & security boundary"]
         Adapter["CodexAdapter"]
         Codex["Codex app-server"]
         Workspace["Allowed Workspaces"]
         Credentials["Local Auth & Provider Credentials"]
     end
 
-    Client -->|"Signed control messages over WSS"| Relay
-    Relay -->|"Route only"| Agent
-    Agent --> Adapter
+    Client -->|"HTTPS / WSS"| Server
+    Node -->|"Outbound WSS / RelayTransport"| Server
+    Server -->|"Signed control messages"| Node
+    Node --> Adapter
     Adapter --> Codex
     Codex --> Workspace
     Codex --> Credentials
 ```
 
-The relay coordinates connections and routes structured messages. The host remains the final enforcement point for trusted controllers, workspace boundaries, sandbox policy, and approvals. Yuanshu does not proxy model API traffic or manage model credentials.
+Yuanshu has four logical components: the Agent Runtime (Codex first, Claude Code later), Yuanshu Node, Yuanshu Server, and the browser/PWA Control Client. The Server provides Web, pairing, registry, routing, and relay capabilities. The Node remains the final enforcement point for trusted controllers, workspace boundaries, sandbox policy, and approvals.
+
+The planned runtime modes are:
+
+```text
+yuanshu server       Web, control plane, and relay
+yuanshu node         Local bridge connecting an Agent Runtime to a Server
+yuanshu standalone   Server + Web + local Node in one deployment
+```
+
+These commands describe the planned interface and are not available in the current pre-alpha repository. On a cloud server that also runs Codex or another supported agent, one Standalone deployment is enough; it does not need a second relay service. Standalone still routes local Agent access through the Node module, so Server code cannot bypass local policy and approvals. Codex app-server and other agents' internal interfaces must never be exposed directly to the public internet.
 
 ## Project status
 
 - [x] Product scope and architecture baseline
-- [x] Personal-first, one-to-many-host direction
+- [x] Personal-first, one-to-many-Node direction
 - [x] Authentication-neutral Codex positioning
 - [ ] Codex app-server proof of concept
 - [ ] Cross-language protocol and signed-control test vectors
-- [ ] Windows host agent alpha
-- [ ] Self-hosted relay and device pairing
+- [ ] Windows Yuanshu Node alpha
+- [ ] Self-hosted Server, Standalone, and device pairing
 - [ ] Mobile PWA task loop
 - [ ] Security hardening and first public preview
 
@@ -82,12 +94,12 @@ The roadmap favors a reliable daily-use loop for one developer before adding mor
 
 ## Security principles
 
-Yuanshu is designed around a high-trust local execution environment and a minimally trusted relay:
+Yuanshu is designed around a high-trust local execution environment and a minimally trusted Server relay:
 
-- Host and control clients use independent device identities;
-- Control operations and approval decisions are signed end to end and revalidated by the host;
+- Node and control clients use independent device identities;
+- Control operations and approval decisions are signed end to end and revalidated by the Node;
 - Remote clients cannot choose arbitrary local paths;
-- The relay does not permanently store prompts, responses, command output, diffs, or source code;
+- The Server relay does not permanently store prompts, responses, command output, diffs, or source code;
 - ChatGPT tokens, API keys, provider keys, and Git/SSH credentials must never be uploaded to Yuanshu;
 - Ambiguous operations after a crash must not be silently replayed.
 
@@ -98,7 +110,7 @@ These are design goals until the corresponding implementation and security tests
 Yuanshu is at an early stage, so focused feedback is especially useful. Good first contributions include:
 
 - Codex app-server compatibility findings;
-- Windows host lifecycle experiments;
+- Windows Node lifecycle experiments;
 - Protocol and threat-model review;
 - Mobile task and approval UX proposals;
 - Self-hosting feedback;
