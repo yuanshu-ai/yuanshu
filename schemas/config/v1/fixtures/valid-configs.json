@@ -1,0 +1,48 @@
+[
+  {
+    "config_version": 1,
+    "host": { "name": "devbox" },
+    "transport": { "mode": "relay" },
+    "relay": {
+      "url": "wss://relay.example.test/node/connect",
+      "proxy_url": "",
+      "connect_timeout_seconds": 15,
+      "credential_ref": "yuanshu/relay/main",
+      "proxy_credential_ref": ""
+    },
+    "identity": { "private_key_ref": "yuanshu/identity/node" },
+    "adapters": {
+      "codex": { "enabled": true, "binary": "codex", "runtime_mode": "stdio", "home": "" }
+    },
+    "events": { "max_age_hours": 24, "max_size_mib": 256 },
+    "workspaces": [
+      {
+        "id": "workspace-1",
+        "display_name": "Synthetic workspace",
+        "path": "SYNTHETIC_WORKSPACE_PATH",
+        "allowed_adapters": ["codex"],
+        "default_adapter": "codex",
+        "permission_profile": "workspace-write",
+        "allow_network": false
+      }
+    ]
+  },
+  {
+    "config_version": 1,
+    "host": { "name": "standalone" },
+    "transport": { "mode": "standalone" },
+    "relay": {
+      "url": "",
+      "proxy_url": "socks5://proxy.example.test:1080",
+      "connect_timeout_seconds": 30,
+      "credential_ref": "",
+      "proxy_credential_ref": "proxy/ref"
+    },
+    "identity": { "private_key_ref": "" },
+    "adapters": {
+      "codex": { "enabled": false, "binary": "", "runtime_mode": "stdio", "home": "" }
+    },
+    "events": { "max_age_hours": 1, "max_size_mib": 16 },
+    "workspaces": []
+  }
+]

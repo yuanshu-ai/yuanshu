@@ -138,6 +138,7 @@ pnpm install --frozen-lockfile
 ```shell
 go test ./...
 go test ./internal/platform/... ./tests/contract/platform/...
+go test ./internal/config/... ./tests/contract/config/...
 go vet ./...
 go build ./...
 pnpm --dir web test
@@ -153,6 +154,12 @@ pnpm protocol:test
 ```
 
 协议生成同时需要 Node.js 与 Go（`gofmt`），并可在 Windows、macOS 和 Linux 上确定性执行。临时 `m0-poc-1` 帧与 Protocol v1 保持隔离。
+
+### 正式 Node 配置
+
+版本化 Node 配置合约使用严格 TOML，由 `schemas/config/v1/node-config.schema.json` 定义。当前只接受 `relay`、`standalone` 和 Codex `stdio`。设备、Relay 与代理凭据只能表示为不透明 SecretRef；配置文件不会包含凭据字节，安全存储不可用时也绝不降级为明文。
+
+配置包支持原子替换、最近有效的 `.bak` 备份、显式恢复状态和脱敏 SecretRef 健康检查。目前尚未接入 CLI 或 Runtime；默认操作系统路径和设置界面属于后续任务。
 
 查看不会启动服务的 CLI 帮助：
 

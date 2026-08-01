@@ -1,3 +1,6 @@
 # Schemas
 
-This directory is reserved for versioned Yuanshu protocol schemas and cross-language fixtures. AC-001 does not define a protocol or generate types.
+This directory contains versioned Yuanshu protocol and local-configuration schemas with their shared fixtures.
+
+- `yuanshu/v1` is the formal wire protocol source.
+- `config/v1` defines the strict TOML-backed Node configuration data model.
