@@ -100,6 +100,8 @@ These commands currently expose only the disposable, loopback-only M0 engineerin
 - [x] M0 Codex app-server and minimal vertical proof of concept
 - [x] Protocol v1 Schema, generated Go/TypeScript types, and compatibility fixtures
 - [x] JCS + Ed25519 control encoding and cross-language test vectors
+- [x] Node-side signed control validation and atomic replay protection
+- [x] Transport contract and shared Relay/Standalone behavior tests
 - [ ] Windows Yuanshu Node alpha
 - [ ] Linux Server and Standalone self-hosting preview
 - [ ] Self-hosted device and control-client pairing
