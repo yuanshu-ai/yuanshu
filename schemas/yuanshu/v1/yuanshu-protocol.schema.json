@@ -34,7 +34,7 @@
     },
     "operationDigest": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_-]{16,256}$"
+      "pattern": "^[A-Za-z0-9_-]{43}$"
     },
     "signer": {
       "type": "object",
@@ -113,7 +113,7 @@
         "correlationId": { "$ref": "#/$defs/opaqueId" },
         "nonce": { "type": "string", "minLength": 16, "maxLength": 256 },
         "signer": { "$ref": "#/$defs/signer" },
-        "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,1024}$" },
+        "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" },
         "payload": { "type": "object" }
       },
       "additionalProperties": false,

@@ -10,6 +10,7 @@ const load = async (path) => JSON.parse(await readFile(path, "utf8"));
 const schema = await load(resolve(root, "schemas", "yuanshu", "v1", "yuanshu-protocol.schema.json"));
 const valid = await load(resolve(fixtureRoot, "valid-messages.json"));
 const invalid = await load(resolve(fixtureRoot, "invalid-cases.json"));
+const signing = await load(resolve(fixtureRoot, "signing-vectors.json"));
 
 const ajv = new Ajv2020({ allErrors: true, strict: true, strictTypes: false });
 addFormats(ajv);
@@ -35,6 +36,13 @@ let failures = 0;
 for (const message of [...controls, ...events, ...forwardEvents]) {
   if (!validate(message)) {
     process.stderr.write(`expected valid ${message.type}: ${ajv.errorsText(validate.errors)}\n`);
+    failures += 1;
+  }
+}
+
+for (const message of [signing.control.message, signing.approval.message]) {
+  if (!validate(message)) {
+    process.stderr.write(`expected valid signing vector ${message.type}: ${ajv.errorsText(validate.errors)}\n`);
     failures += 1;
   }
 }
@@ -65,4 +73,4 @@ if (Buffer.byteLength(JSON.stringify(oversizedEvent), "utf8") <= 1048576) {
 }
 
 if (failures > 0) process.exitCode = 1;
-else process.stdout.write(`validated ${controls.length} controls, ${events.length} events, ${forwardEvents.length} forward-compatible events, and ${invalid.cases.length} invalid cases\n`);
+else process.stdout.write(`validated ${controls.length} controls, ${events.length} events, ${forwardEvents.length} forward-compatible events, 2 signing vectors, and ${invalid.cases.length} invalid cases\n`);

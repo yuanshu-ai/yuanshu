@@ -20,6 +20,9 @@ importers:
 
   web:
     dependencies:
+      canonicalize:
+        specifier: 2.1.0
+        version: 2.1.0
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -593,6 +596,10 @@ packages:
 
   buffer@6.0.3:
     resolution: {integrity: sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA==}
+
+  canonicalize@2.1.0:
+    resolution: {integrity: sha512-F705O3xrsUtgt98j7leetNhTWPe+5S72rlL5O4jA1pKqBVQ/dT1O1D6PFxmSXvc0SUOinWS57DKx0I3CHrXJHQ==}
+    hasBin: true
 
   chai@6.2.2:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
@@ -1714,6 +1721,8 @@ snapshots:
     dependencies:
       base64-js: 1.5.1
       ieee754: 1.2.1
+
+  canonicalize@2.1.0: {}
 
   chai@6.2.2: {}
 

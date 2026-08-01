@@ -99,7 +99,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] 可构建工作区、占位 CLI、Web 骨架与基础 CI
 - [x] M0 Codex app-server 与最小纵向链路技术验证
 - [x] Protocol v1 Schema、Go/TypeScript 生成类型与兼容夹具
-- [ ] 控制消息签名编码与跨语言测试向量
+- [x] JCS + Ed25519 控制消息编码与跨语言测试向量
 - [ ] Windows Yuanshu Node Alpha
 - [ ] Linux Server 与 Standalone 自托管预览版
 - [ ] 自托管设备与控制端配对

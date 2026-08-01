@@ -99,7 +99,7 @@ These commands currently expose only the disposable, loopback-only M0 engineerin
 - [x] Buildable workspace, placeholder CLI, Web scaffold, and base CI
 - [x] M0 Codex app-server and minimal vertical proof of concept
 - [x] Protocol v1 Schema, generated Go/TypeScript types, and compatibility fixtures
-- [ ] Signed-control encoding and cross-language test vectors
+- [x] JCS + Ed25519 control encoding and cross-language test vectors
 - [ ] Windows Yuanshu Node alpha
 - [ ] Linux Server and Standalone self-hosting preview
 - [ ] Self-hosted device and control-client pairing

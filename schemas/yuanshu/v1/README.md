@@ -12,4 +12,6 @@ pnpm protocol:check
 pnpm protocol:test
 ```
 
-The signature and `operationDigest` fields are opaque in this baseline. Their canonical byte encoding and verification behavior remain an ADR-013 / AC-102 decision.
+ADR-013 fixes control signing to `Ed25519(UTF8("yuanshu-control-v1\\0") || RFC8785-JCS(controlWithoutSignature))`. Signatures are unpadded Base64url. Approval operation digests use SHA-256 over the separately domain-separated stable approval binding. Shared public test vectors live in `fixtures/signing-vectors.json`.
+
+This package only defines deterministic encoding and digest helpers. Trust lookup, signature verification, TTL, nonce, sequence, replay, revocation, and key storage belong to later protocol-security tasks.

@@ -14,6 +14,10 @@
     { "name": "parent path segment", "source": "event", "type": "file.changed", "payloadSet": { "path": "src/../private.txt" } },
     { "name": "backslash path", "source": "event", "type": "file.changed", "payloadSet": { "path": "src\\private.txt" } },
     { "name": "invalid approval decision", "source": "control", "type": "approval.resolve", "payloadSet": { "decision": "acceptForSession" } },
-    { "name": "invalid operation digest", "source": "control", "type": "approval.resolve", "payloadSet": { "operationDigest": "short" } }
+    { "name": "invalid operation digest", "source": "control", "type": "approval.resolve", "payloadSet": { "operationDigest": "short" } },
+    { "name": "padded operation digest", "source": "control", "type": "approval.resolve", "payloadSet": { "operationDigest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" } },
+    { "name": "short Ed25519 signature", "source": "control", "type": "turn.start", "set": { "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } },
+    { "name": "padded Ed25519 signature", "source": "control", "type": "turn.start", "set": { "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" } },
+    { "name": "non-base64url signature", "source": "control", "type": "turn.start", "set": { "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+" } }
   ]
 }

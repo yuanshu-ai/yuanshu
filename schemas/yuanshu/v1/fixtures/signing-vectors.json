@@ -1,0 +1,75 @@
+{
+  "description": "Public deterministic Protocol v1 test vectors. The synthetic seed is not a credential and must never be used outside tests.",
+  "controlDomain": "yuanshu-control-v1\u0000",
+  "operationDomain": "yuanshu-operation-v1\u0000",
+  "jcsCases": [
+    {
+      "name": "RFC 8785 primitives and number formatting",
+      "inputJson": "{\"numbers\":[333333333.33333329,1E30,4.50,2e-3,0.000000000000000000000000001],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\"/\",\"literals\":[null,true,false]}",
+      "canonicalJson": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\"/\"}"
+    },
+    {
+      "name": "UTF-16 property ordering",
+      "inputJson": "{\"€\":\"euro\",\"\\r\":\"cr\",\"1\":\"one\",\"😀\":\"emoji\",\"ö\":\"latin\"}",
+      "canonicalJson": "{\"\\r\":\"cr\",\"1\":\"one\",\"ö\":\"latin\",\"€\":\"euro\",\"😀\":\"emoji\"}"
+    }
+  ],
+  "control": {
+    "testOnlySeedHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "publicKeyBase64Url": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+    "message": {
+      "protocolVersion": "1.0",
+      "messageId": "msg_sign_1",
+      "type": "turn.start",
+      "sentAt": "2026-08-01T06:00:00.000Z",
+      "expiresAt": "2026-08-01T06:01:00.000Z",
+      "ownerId": "owner_签名",
+      "nodeId": "node_1",
+      "workspaceId": "workspace_1",
+      "threadId": "thread_1",
+      "turnId": "turn_1",
+      "itemId": "item_1",
+      "streamId": "stream_1",
+      "sequence": 9007199254740991,
+      "correlationId": "request_1",
+      "nonce": "AAECAwQFBgcICQoLDA0ODw",
+      "signer": { "clientId": "client_1", "keyId": "key_1" },
+      "signature": "RWcO9tiUBOMT6qBTM1_5P4iv-a1zAp9a8OsafkecYkDPMN7aSM4uPpwcIBm-VTVndyp3eOTGymcZCyjuGjmeCg",
+      "payload": { "input": "Review € / 中文 / line\r\nnext" }
+    },
+    "canonicalWithoutSignature": "{\"correlationId\":\"request_1\",\"expiresAt\":\"2026-08-01T06:01:00.000Z\",\"itemId\":\"item_1\",\"messageId\":\"msg_sign_1\",\"nodeId\":\"node_1\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODw\",\"ownerId\":\"owner_签名\",\"payload\":{\"input\":\"Review € / 中文 / line\\r\\nnext\"},\"protocolVersion\":\"1.0\",\"sentAt\":\"2026-08-01T06:00:00.000Z\",\"sequence\":9007199254740991,\"signer\":{\"clientId\":\"client_1\",\"keyId\":\"key_1\"},\"streamId\":\"stream_1\",\"threadId\":\"thread_1\",\"turnId\":\"turn_1\",\"type\":\"turn.start\",\"workspaceId\":\"workspace_1\"}",
+    "signingInputBase64Url": "eXVhbnNodS1jb250cm9sLXYxAHsiY29ycmVsYXRpb25JZCI6InJlcXVlc3RfMSIsImV4cGlyZXNBdCI6IjIwMjYtMDgtMDFUMDY6MDE6MDAuMDAwWiIsIml0ZW1JZCI6Iml0ZW1fMSIsIm1lc3NhZ2VJZCI6Im1zZ19zaWduXzEiLCJub2RlSWQiOiJub2RlXzEiLCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHciLCJvd25lcklkIjoib3duZXJf562-5ZCNIiwicGF5bG9hZCI6eyJpbnB1dCI6IlJldmlldyDigqwgLyDkuK3mlocgLyBsaW5lXHJcbm5leHQifSwicHJvdG9jb2xWZXJzaW9uIjoiMS4wIiwic2VudEF0IjoiMjAyNi0wOC0wMVQwNjowMDowMC4wMDBaIiwic2VxdWVuY2UiOjkwMDcxOTkyNTQ3NDA5OTEsInNpZ25lciI6eyJjbGllbnRJZCI6ImNsaWVudF8xIiwia2V5SWQiOiJrZXlfMSJ9LCJzdHJlYW1JZCI6InN0cmVhbV8xIiwidGhyZWFkSWQiOiJ0aHJlYWRfMSIsInR1cm5JZCI6InR1cm5fMSIsInR5cGUiOiJ0dXJuLnN0YXJ0Iiwid29ya3NwYWNlSWQiOiJ3b3Jrc3BhY2VfMSJ9",
+    "signatureBase64Url": "RWcO9tiUBOMT6qBTM1_5P4iv-a1zAp9a8OsafkecYkDPMN7aSM4uPpwcIBm-VTVndyp3eOTGymcZCyjuGjmeCg"
+  },
+  "approval": {
+    "message": {
+      "protocolVersion": "1.0",
+      "messageId": "msg_approval_1",
+      "type": "approval.requested",
+      "sentAt": "2026-08-01T06:00:10Z",
+      "ownerId": "owner_1",
+      "nodeId": "node_1",
+      "workspaceId": "workspace_1",
+      "threadId": "thread_1",
+      "turnId": "turn_1",
+      "itemId": "item_1",
+      "streamId": "stream_1",
+      "sequence": 44,
+      "correlationId": "request_approval_1",
+      "payload": {
+        "approvalId": "approval_1",
+        "operationDigest": "1rEX6UrVEYCB3QMmc-NfHAMzoPBHUB-7RoTV-ftNCu0",
+        "kind": "file-change",
+        "summary": "Create 合成文件",
+        "operation": {
+          "path": "src/example.txt",
+          "changeType": "created",
+          "hunks": ["+first", "+second"],
+          "size": 13
+        }
+      }
+    },
+    "canonicalBinding": "{\"itemId\":\"item_1\",\"nodeId\":\"node_1\",\"ownerId\":\"owner_1\",\"payload\":{\"approvalId\":\"approval_1\",\"kind\":\"file-change\",\"operation\":{\"changeType\":\"created\",\"hunks\":[\"+first\",\"+second\"],\"path\":\"src/example.txt\",\"size\":13},\"summary\":\"Create 合成文件\"},\"protocolVersion\":\"1.0\",\"threadId\":\"thread_1\",\"turnId\":\"turn_1\",\"type\":\"approval.requested\",\"workspaceId\":\"workspace_1\"}",
+    "operationDigest": "1rEX6UrVEYCB3QMmc-NfHAMzoPBHUB-7RoTV-ftNCu0"
+  }
+}
