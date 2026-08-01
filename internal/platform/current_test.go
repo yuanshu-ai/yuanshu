@@ -13,22 +13,17 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 		t.Fatalf("Family() = %q, want %q", current.Family(), expectedCurrentFamily)
 	}
 
+	wantSecureStore := expectedCurrentFamily == FamilyWindows
+	if current.SecureStore().Available() != wantSecureStore {
+		t.Fatalf("SecureStore().Available() = %v, want %v", current.SecureStore().Available(), wantSecureStore)
+	}
+
 	const canary = "platform-sensitive-canary"
 	tests := []struct {
 		name      string
 		available bool
 		call      func() error
 	}{
-		{"secure put", current.SecureStore().Available(), func() error {
-			return current.SecureStore().Put(context.Background(), SecretRef(canary), []byte(canary))
-		}},
-		{"secure get", current.SecureStore().Available(), func() error {
-			_, err := current.SecureStore().Get(context.Background(), SecretRef(canary))
-			return err
-		}},
-		{"secure delete", current.SecureStore().Available(), func() error {
-			return current.SecureStore().Delete(context.Background(), SecretRef(canary))
-		}},
 		{"process", current.Processes().Available(), func() error {
 			_, err := current.Processes().Start(context.Background(), ProcessSpec{
 				Executable: canary,

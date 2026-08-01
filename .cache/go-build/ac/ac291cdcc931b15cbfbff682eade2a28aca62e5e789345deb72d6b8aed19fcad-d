@@ -1,0 +1,4 @@
+./current_windows.go
+./platform.go
+./secure_store_windows.go
+./unavailable.go

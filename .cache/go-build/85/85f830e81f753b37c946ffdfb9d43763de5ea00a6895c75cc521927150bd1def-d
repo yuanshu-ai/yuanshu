@@ -1,0 +1,7 @@
+./current_windows.go
+./platform.go
+./secure_store_windows.go
+./unavailable.go
+./current_test.go
+./current_windows_test.go
+./secure_store_windows_test.go
