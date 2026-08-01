@@ -1,0 +1,6 @@
+{"id":"<ID>","method":"item/commandExecution/requestApproval","params":{"threadId":"<THREAD_ID>","turnId":"<TURN_ID>","itemId":"<ITEM_ID>","command":"<REDACTED_COMMAND>","cwd":"<WORKSPACE>"}}
+{"id":"<ID>","result":{"decision":"decline"}}
+{"method":"serverRequest/resolved","params":{"threadId":"<THREAD_ID>","requestId":"<ID>"}}
+{"id":"<ID>","method":"item/fileChange/requestApproval","params":{"threadId":"<THREAD_ID>","turnId":"<TURN_ID>","itemId":"<ITEM_ID>","grantRoot":"<WORKSPACE>"}}
+{"id":"<ID>","result":{"decision":"decline"}}
+{"method":"serverRequest/resolved","params":{"threadId":"<THREAD_ID>","requestId":"<ID>"}}

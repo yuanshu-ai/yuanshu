@@ -1,0 +1,9 @@
+{"id":1,"result":{"platformFamily":"windows","platformOs":"windows","userAgent":"<REDACTED_TEXT>"}}
+{"method":"thread/started","params":{"thread":{"id":"<ID>","sessionId":"<SESSION_ID>","ephemeral":false,"modelProvider":"openai"}}}
+{"method":"turn/started","params":{"turn":{"id":"<ID>","status":"inProgress","items":[]}}}
+{"method":"item/started","params":{"threadId":"<THREAD_ID>","turnId":"<TURN_ID>","item":{"id":"<ID>","type":"agentMessage","text":"<REDACTED_TEXT>"}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"<THREAD_ID>","turnId":"<TURN_ID>","itemId":"<ITEM_ID>","delta":"<REDACTED_TEXT>"}}
+{"method":"item/completed","params":{"threadId":"<THREAD_ID>","turnId":"<TURN_ID>","item":{"id":"<ID>","type":"commandExecution","command":"<REDACTED_COMMAND>","cwd":"<WORKSPACE>","status":"completed"}}}
+{"method":"item/completed","params":{"threadId":"<THREAD_ID>","turnId":"<TURN_ID>","item":{"id":"<ID>","type":"fileChange","changes":[{"path":"<WORKSPACE>","kind":"add","diff":"<REDACTED_DIFF>"}],"status":"completed"}}}
+{"method":"turn/diff/updated","params":{"threadId":"<THREAD_ID>","turnId":"<TURN_ID>","diff":"<REDACTED_DIFF>"}}
+{"method":"turn/completed","params":{"turn":{"id":"<ID>","status":"completed","items":[]}}}

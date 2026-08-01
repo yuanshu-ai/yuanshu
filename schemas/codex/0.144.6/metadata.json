@@ -1,0 +1,15 @@
+{
+  "codexVersion": "0.144.6",
+  "schemaFiles": [
+    {
+      "file": "codex_app_server_protocol.v2.schemas.json",
+      "sha256": "4cb97dea527407136266b810de4270f0ccedcc5c2061a4da46c43d057c71baad"
+    },
+    {
+      "file": "ServerRequest.json",
+      "sha256": "927e97dcbaf45971abfa9f76b9b58633a0d8c08af2e167af2cecada792c50cdc"
+    }
+  ],
+  "generationCommand": "codex app-server generate-json-schema --out <TEMP_DIR>",
+  "experimental": false
+}
