@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yuanshu.ai/schemas/protocol/v1/yuanshu-protocol.schema.json",
+  "title": "YuanshuMessage",
+  "description": "Yuanshu Protocol v1 control and event envelope.",
+  "oneOf": [
+    { "$ref": "#/$defs/controlMessage" },
+    { "$ref": "#/$defs/eventMessage" }
+  ],
+  "$defs": {
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "logicalPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "operationDigest": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,256}$"
+    },
+    "signer": {
+      "type": "object",
+      "required": ["clientId", "keyId"],
+      "properties": {
+        "clientId": { "$ref": "#/$defs/opaqueId" },
+        "keyId": { "$ref": "#/$defs/opaqueId" }
+      },
+      "additionalProperties": false
+    },
+    "controlType": {
+      "type": "string",
+      "enum": [
+        "device.sync",
+        "workspace.list",
+        "thread.list",
+        "thread.read",
+        "thread.start",
+        "thread.resume",
+        "turn.start",
+        "turn.steer",
+        "turn.interrupt",
+        "approval.resolve",
+        "events.replay",
+        "snapshot.request"
+      ]
+    },
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "device.status",
+        "runtime.status",
+        "thread.snapshot",
+        "thread.started",
+        "turn.started",
+        "turn.completed",
+        "turn.failed",
+        "turn.interrupted",
+        "agent.message.delta",
+        "agent.message.completed",
+        "command.started",
+        "command.output.delta",
+        "command.completed",
+        "tool.started",
+        "tool.completed",
+        "file.changed",
+        "diff.updated",
+        "approval.requested",
+        "approval.resolved",
+        "control.result",
+        "history.gap",
+        "error"
+      ]
+    },
+    "controlMessage": {
+      "type": "object",
+      "required": [
+        "protocolVersion", "messageId", "type", "sentAt", "expiresAt",
+        "ownerId", "nodeId", "streamId", "sequence", "correlationId",
+        "nonce", "signer", "signature", "payload"
+      ],
+      "properties": {
+        "protocolVersion": { "const": "1.0" },
+        "messageId": { "$ref": "#/$defs/opaqueId" },
+        "type": { "$ref": "#/$defs/controlType" },
+        "sentAt": { "$ref": "#/$defs/timestamp" },
+        "expiresAt": { "$ref": "#/$defs/timestamp" },
+        "ownerId": { "$ref": "#/$defs/opaqueId" },
+        "nodeId": { "$ref": "#/$defs/opaqueId" },
+        "workspaceId": { "$ref": "#/$defs/opaqueId" },
+        "threadId": { "$ref": "#/$defs/opaqueId" },
+        "turnId": { "$ref": "#/$defs/opaqueId" },
+        "itemId": { "$ref": "#/$defs/opaqueId" },
+        "streamId": { "$ref": "#/$defs/opaqueId" },
+        "sequence": { "$ref": "#/$defs/sequence" },
+        "correlationId": { "$ref": "#/$defs/opaqueId" },
+        "nonce": { "type": "string", "minLength": 16, "maxLength": 256 },
+        "signer": { "$ref": "#/$defs/signer" },
+        "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,1024}$" },
+        "payload": { "type": "object" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/controlPayloadRules" }
+      ]
+    },
+    "eventMessage": {
+      "type": "object",
+      "required": [
+        "protocolVersion", "messageId", "type", "sentAt", "ownerId",
+        "nodeId", "streamId", "sequence", "correlationId", "payload"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+$"
+        },
+        "messageId": { "$ref": "#/$defs/opaqueId" },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "not": { "$ref": "#/$defs/controlType" }
+        },
+        "sentAt": { "$ref": "#/$defs/timestamp" },
+        "ownerId": { "$ref": "#/$defs/opaqueId" },
+        "nodeId": { "$ref": "#/$defs/opaqueId" },
+        "workspaceId": { "$ref": "#/$defs/opaqueId" },
+        "threadId": { "$ref": "#/$defs/opaqueId" },
+        "turnId": { "$ref": "#/$defs/opaqueId" },
+        "itemId": { "$ref": "#/$defs/opaqueId" },
+        "streamId": { "$ref": "#/$defs/opaqueId" },
+        "sequence": { "$ref": "#/$defs/sequence" },
+        "correlationId": { "$ref": "#/$defs/opaqueId" },
+        "payload": { "type": "object" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/eventPayloadRules" }
+      ]
+    },
+    "emptyControlPayload": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "listPayload": {
+      "type": "object",
+      "properties": {
+        "cursor": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
+      },
+      "additionalProperties": false
+    },
+    "threadReadPayload": {
+      "type": "object",
+      "properties": {
+        "includeTurns": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "textInputPayload": {
+      "type": "object",
+      "required": ["input"],
+      "properties": {
+        "input": { "type": "string", "minLength": 1, "maxLength": 65536 }
+      },
+      "additionalProperties": false
+    },
+    "approvalResolvePayload": {
+      "type": "object",
+      "required": ["approvalId", "decision", "operationDigest"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/opaqueId" },
+        "decision": { "type": "string", "enum": ["accept", "decline"] },
+        "operationDigest": { "$ref": "#/$defs/operationDigest" }
+      },
+      "additionalProperties": false
+    },
+    "eventsReplayPayload": {
+      "type": "object",
+      "required": ["afterSequence"],
+      "properties": {
+        "afterSequence": { "$ref": "#/$defs/sequence" }
+      },
+      "additionalProperties": false
+    },
+    "controlPayloadRules": {
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "device.sync" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } },
+        { "if": { "properties": { "type": { "const": "workspace.list" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/listPayload" } } } },
+        { "if": { "properties": { "type": { "const": "thread.list" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/listPayload" } } } },
+        { "if": { "properties": { "type": { "const": "thread.read" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/threadReadPayload" } } } },
+        { "if": { "properties": { "type": { "const": "thread.start" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/textInputPayload" } } } },
+        { "if": { "properties": { "type": { "const": "thread.resume" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } },
+        { "if": { "properties": { "type": { "const": "turn.start" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/textInputPayload" } } } },
+        { "if": { "properties": { "type": { "const": "turn.steer" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/textInputPayload" } } } },
+        { "if": { "properties": { "type": { "const": "turn.interrupt" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } },
+        { "if": { "properties": { "type": { "const": "approval.resolve" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/approvalResolvePayload" } } } },
+        { "if": { "properties": { "type": { "const": "events.replay" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/eventsReplayPayload" } } } },
+        { "if": { "properties": { "type": { "const": "snapshot.request" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } }
+      ]
+    },
+    "statusPayload": {
+      "type": "object",
+      "required": ["status"],
+      "properties": { "status": { "type": "string", "minLength": 1, "maxLength": 64 } },
+      "additionalProperties": true
+    },
+    "threadSnapshotPayload": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "latestSequence": { "$ref": "#/$defs/sequence" }
+      },
+      "additionalProperties": true
+    },
+    "lifecyclePayload": {
+      "type": "object",
+      "properties": { "status": { "type": "string", "minLength": 1, "maxLength": 64 } },
+      "additionalProperties": true
+    },
+    "textPayload": {
+      "type": "object",
+      "required": ["text"],
+      "properties": { "text": { "type": "string", "maxLength": 1048576 } },
+      "additionalProperties": true
+    },
+    "commandPayload": {
+      "type": "object",
+      "required": ["commandId"],
+      "properties": {
+        "commandId": { "$ref": "#/$defs/opaqueId" },
+        "displayText": { "type": "string", "maxLength": 4096 },
+        "exitCode": { "type": "integer" }
+      },
+      "additionalProperties": true
+    },
+    "commandOutputPayload": {
+      "type": "object",
+      "required": ["commandId", "stream", "text"],
+      "properties": {
+        "commandId": { "$ref": "#/$defs/opaqueId" },
+        "stream": { "type": "string", "enum": ["stdout", "stderr"] },
+        "text": { "type": "string", "maxLength": 1048576 }
+      },
+      "additionalProperties": true
+    },
+    "toolPayload": {
+      "type": "object",
+      "required": ["toolName"],
+      "properties": { "toolName": { "type": "string", "minLength": 1, "maxLength": 128 } },
+      "additionalProperties": true
+    },
+    "fileChangedPayload": {
+      "type": "object",
+      "required": ["path", "changeType"],
+      "properties": {
+        "path": { "$ref": "#/$defs/logicalPath" },
+        "changeType": { "type": "string", "enum": ["created", "modified", "deleted", "renamed"] }
+      },
+      "additionalProperties": true
+    },
+    "diffUpdatedPayload": {
+      "type": "object",
+      "required": ["path", "diff"],
+      "properties": {
+        "path": { "$ref": "#/$defs/logicalPath" },
+        "diff": { "type": "string", "maxLength": 1048576 }
+      },
+      "additionalProperties": true
+    },
+    "approvalRequestedPayload": {
+      "type": "object",
+      "required": ["approvalId", "operationDigest", "kind"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/opaqueId" },
+        "operationDigest": { "$ref": "#/$defs/operationDigest" },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "summary": { "type": "string", "maxLength": 4096 }
+      },
+      "additionalProperties": true
+    },
+    "approvalResolvedPayload": {
+      "type": "object",
+      "required": ["approvalId", "decision"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/opaqueId" },
+        "decision": { "type": "string", "enum": ["accept", "decline"] }
+      },
+      "additionalProperties": true
+    },
+    "controlResultPayload": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["received", "validated", "dispatching", "confirmed", "rejected", "ambiguous"]
+        },
+        "errorCode": { "$ref": "#/$defs/errorCode" },
+        "message": { "type": "string", "maxLength": 4096 }
+      },
+      "additionalProperties": true
+    },
+    "historyGapPayload": {
+      "type": "object",
+      "required": ["afterSequence", "earliestSequence"],
+      "properties": {
+        "afterSequence": { "$ref": "#/$defs/sequence" },
+        "earliestSequence": { "$ref": "#/$defs/sequence" }
+      },
+      "additionalProperties": true
+    },
+    "errorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_message", "unsupported_protocol", "unsupported_control",
+        "unauthorized", "forbidden", "expired", "replay", "not_found",
+        "conflict", "rate_limited", "payload_too_large", "runtime_unavailable",
+        "runtime_failed", "history_gap", "ambiguous", "internal"
+      ]
+    },
+    "errorPayload": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/errorCode" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "eventPayloadRules": {
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "device.status" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/statusPayload" } } } },
+        { "if": { "properties": { "type": { "const": "runtime.status" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/statusPayload" } } } },
+        { "if": { "properties": { "type": { "const": "thread.snapshot" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/threadSnapshotPayload" } } } },
+        { "if": { "properties": { "type": { "enum": ["thread.started", "turn.started", "turn.completed", "turn.failed", "turn.interrupted"] } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/lifecyclePayload" } } } },
+        { "if": { "properties": { "type": { "enum": ["agent.message.delta", "agent.message.completed"] } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/textPayload" } } } },
+        { "if": { "properties": { "type": { "enum": ["command.started", "command.completed"] } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/commandPayload" } } } },
+        { "if": { "properties": { "type": { "const": "command.output.delta" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/commandOutputPayload" } } } },
+        { "if": { "properties": { "type": { "enum": ["tool.started", "tool.completed"] } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/toolPayload" } } } },
+        { "if": { "properties": { "type": { "const": "file.changed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/fileChangedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "diff.updated" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/diffUpdatedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "approval.requested" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/approvalRequestedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "approval.resolved" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/approvalResolvedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "control.result" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/controlResultPayload" } } } },
+        { "if": { "properties": { "type": { "const": "history.gap" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/historyGapPayload" } } } },
+        { "if": { "properties": { "type": { "const": "error" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/errorPayload" } } } }
+      ]
+    }
+  }
+}

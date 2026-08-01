@@ -8,6 +8,14 @@
   },
   "scripts": {
     "build": "pnpm --dir web build",
+    "protocol:check": "node scripts/protocol.mjs check",
+    "protocol:generate": "node scripts/protocol.mjs generate",
+    "protocol:test": "node scripts/protocol-test.mjs",
     "test": "pnpm --dir web test"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "quicktype": "26.0.0"
   }
 }

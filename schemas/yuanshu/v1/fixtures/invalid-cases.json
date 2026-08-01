@@ -1,0 +1,19 @@
+{
+  "cases": [
+    { "name": "missing required field", "source": "control", "type": "turn.start", "remove": "messageId" },
+    { "name": "unknown envelope field", "source": "control", "type": "turn.start", "set": { "unexpected": true } },
+    { "name": "unknown control payload field", "source": "control", "type": "turn.interrupt", "payloadSet": { "force": true } },
+    { "name": "invalid RFC3339 time", "source": "control", "type": "turn.start", "set": { "sentAt": "not-a-time" } },
+    { "name": "sequence above JavaScript safe integer", "source": "event", "type": "turn.completed", "set": { "sequence": 9007199254740992 } },
+    { "name": "unknown control", "source": "control", "type": "turn.start", "set": { "type": "turn.attach" } },
+    { "name": "new major control", "source": "control", "type": "turn.start", "set": { "protocolVersion": "2.0" } },
+    { "name": "new minor control", "source": "control", "type": "turn.start", "set": { "protocolVersion": "1.1" } },
+    { "name": "new major event", "source": "event", "type": "turn.completed", "set": { "protocolVersion": "2.0" } },
+    { "name": "absolute Unix path", "source": "event", "type": "file.changed", "payloadSet": { "path": "/etc/passwd" } },
+    { "name": "absolute Windows path", "source": "event", "type": "file.changed", "payloadSet": { "path": "C:/private/file.txt" } },
+    { "name": "parent path segment", "source": "event", "type": "file.changed", "payloadSet": { "path": "src/../private.txt" } },
+    { "name": "backslash path", "source": "event", "type": "file.changed", "payloadSet": { "path": "src\\private.txt" } },
+    { "name": "invalid approval decision", "source": "control", "type": "approval.resolve", "payloadSet": { "decision": "acceptForSession" } },
+    { "name": "invalid operation digest", "source": "control", "type": "approval.resolve", "payloadSet": { "operationDigest": "short" } }
+  ]
+}

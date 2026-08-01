@@ -1,0 +1,17 @@
+{
+  "protocolVersion": "1.0",
+  "schemaDraft": "https://json-schema.org/draft/2020-12/schema",
+  "schemaFile": "yuanshu-protocol.schema.json",
+  "schemaSha256": "ecb46655f6cfa2b902b9ecf7620c8cdafc68ffce0a4262db2a4c5b40b74e8716",
+  "generator": "quicktype@26.0.0",
+  "generatedTargets": [
+    "internal/protocol/v1/types.generated.go",
+    "web/src/protocol/v1/types.generated.ts",
+    "internal/protocol/v1/catalog.generated.go",
+    "web/src/protocol/v1/catalog.generated.ts"
+  ],
+  "frameLimits": {
+    "control": 262144,
+    "event": 1048576
+  }
+}

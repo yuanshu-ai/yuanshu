@@ -98,7 +98,8 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] Codex 认证方式中立定位
 - [x] 可构建工作区、占位 CLI、Web 骨架与基础 CI
 - [x] M0 Codex app-server 与最小纵向链路技术验证
-- [ ] 跨语言协议和控制签名测试向量
+- [x] Protocol v1 Schema、Go/TypeScript 生成类型与兼容夹具
+- [ ] 控制消息签名编码与跨语言测试向量
 - [ ] Windows Yuanshu Node Alpha
 - [ ] Linux Server 与 Standalone 自托管预览版
 - [ ] 自托管设备与控制端配对
@@ -136,6 +137,16 @@ go build ./...
 pnpm --dir web test
 pnpm --dir web build
 ```
+
+正式 Protocol v1 Schema 是线上的唯一类型来源。可使用以下命令重新生成并检查提交的 Go/TypeScript 类型：
+
+```shell
+pnpm protocol:generate
+pnpm protocol:check
+pnpm protocol:test
+```
+
+协议生成同时需要 Node.js 与 Go（`gofmt`），并可在 Windows、macOS 和 Linux 上确定性执行。临时 `m0-poc-1` 帧与 Protocol v1 保持隔离。
 
 查看不会启动服务的 CLI 帮助：
 

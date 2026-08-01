@@ -1,0 +1,27 @@
+{
+  "currentVersion": "1.0",
+  "frameLimits": {
+    "control": 262144,
+    "event": 1048576
+  },
+  "cases": [
+    { "name": "known current control", "version": "1.0", "kind": "control", "type": "turn.start", "expected": "known_control" },
+    { "name": "unknown current control", "version": "1.0", "kind": "control", "type": "turn.attach", "expected": "unsupported_control" },
+    { "name": "new minor known control", "version": "1.1", "kind": "control", "type": "turn.start", "expected": "unsupported_control" },
+    { "name": "known current event", "version": "1.0", "kind": "event", "type": "turn.completed", "expected": "known_event" },
+    { "name": "unknown current event", "version": "1.0", "kind": "event", "type": "agent.plan.updated", "expected": "unknown_event" },
+    { "name": "new minor known event", "version": "1.1", "kind": "event", "type": "turn.completed", "expected": "known_event" },
+    { "name": "new minor unknown event", "version": "1.1", "kind": "event", "type": "agent.plan.updated", "expected": "unknown_event" },
+    { "name": "new major control", "version": "2.0", "kind": "control", "type": "turn.start", "expected": "incompatible_version" },
+    { "name": "new major event", "version": "2.0", "kind": "event", "type": "turn.completed", "expected": "incompatible_version" },
+    { "name": "malformed version", "version": "v1", "kind": "event", "type": "turn.completed", "expected": "incompatible_version" }
+  ],
+  "controlResultStates": [
+    { "state": "received", "terminal": false },
+    { "state": "validated", "terminal": false },
+    { "state": "dispatching", "terminal": false },
+    { "state": "confirmed", "terminal": true },
+    { "state": "rejected", "terminal": true },
+    { "state": "ambiguous", "terminal": true }
+  ]
+}

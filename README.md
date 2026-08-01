@@ -98,7 +98,8 @@ These commands currently expose only the disposable, loopback-only M0 engineerin
 - [x] Authentication-neutral Codex positioning
 - [x] Buildable workspace, placeholder CLI, Web scaffold, and base CI
 - [x] M0 Codex app-server and minimal vertical proof of concept
-- [ ] Cross-language protocol and signed-control test vectors
+- [x] Protocol v1 Schema, generated Go/TypeScript types, and compatibility fixtures
+- [ ] Signed-control encoding and cross-language test vectors
 - [ ] Windows Yuanshu Node alpha
 - [ ] Linux Server and Standalone self-hosting preview
 - [ ] Self-hosted device and control-client pairing
@@ -136,6 +137,16 @@ go build ./...
 pnpm --dir web test
 pnpm --dir web build
 ```
+
+The formal Protocol v1 Schema is the sole wire-type source. Regenerate and verify the committed Go/TypeScript types with:
+
+```shell
+pnpm protocol:generate
+pnpm protocol:check
+pnpm protocol:test
+```
+
+Protocol generation requires both Node.js and Go (`gofmt`) and is deterministic on Windows, macOS, and Linux. The temporary `m0-poc-1` frames are intentionally separate from Protocol v1.
 
 Inspect the CLI without starting any service:
 
