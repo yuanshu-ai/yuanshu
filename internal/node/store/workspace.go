@@ -63,6 +63,9 @@ func (s *Store) ReplaceWorkspaces(ctx context.Context, records []WorkspaceRecord
 			return internal("workspace replace")
 		}
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM runtime_threads WHERE workspace_id NOT IN (SELECT id FROM workspaces)"); err != nil {
+		return internal("workspace runtime cleanup")
+	}
 	if err := tx.Commit(); err != nil {
 		return internal("workspace replace")
 	}

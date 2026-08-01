@@ -4,5 +4,6 @@ package platform
 
 const (
 	expectedCurrentFamily      = FamilyDarwin
+	expectedProcessAvailable   = false
 	expectedWorkspaceAvailable = false
 )

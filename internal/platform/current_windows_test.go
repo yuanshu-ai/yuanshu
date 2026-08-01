@@ -4,5 +4,6 @@ package platform
 
 const (
 	expectedCurrentFamily      = FamilyWindows
+	expectedProcessAvailable   = true
 	expectedWorkspaceAvailable = true
 )

@@ -55,7 +55,7 @@ Windows, macOS, and Linux are all first-class product targets. The order is phas
 
 The protocol, transports, adapters, configuration model, and event journal will share one Go implementation. Platform-specific code is limited to secure storage, IPC, process lifecycle, autostart, path validation, and release signing. The project prefers pure-Go dependencies; introducing CGO requires an explicit cross-platform build and supply-chain review.
 
-The shared Platform contract is established for all three target families. Windows now provides current-user DPAPI secure storage and handle-based workspace inspection; other unimplemented production capabilities continue to fail closed. Stateful in-memory fakes cover secure storage, direct process lifecycle, logical local IPC, current-user autostart, and workspace facts. Keychain, Secret Service, Named Pipe, Unix socket, Job Object, LaunchAgent, and systemd integrations remain later platform tasks. Workspace inspection reports operating-system facts only—the Node policy layer makes every allow/deny decision.
+The shared Platform contract is established for all three target families. Windows now provides current-user DPAPI secure storage, handle-based workspace inspection, and direct user-process lifecycle management; other unimplemented production capabilities continue to fail closed. Stateful in-memory fakes cover secure storage, direct process lifecycle, logical local IPC, current-user autostart, and workspace facts. Keychain, Secret Service, Named Pipe, Unix socket, Job Object, LaunchAgent, and systemd integrations remain later platform tasks. Workspace inspection reports operating-system facts only—the Node policy layer makes every allow/deny decision.
 
 ## Architecture direction
 
@@ -106,6 +106,7 @@ These commands currently expose only the disposable, loopback-only M0 engineerin
 - [x] Transport contract and shared Relay/Standalone behavior tests
 - [x] Windows/macOS/Linux Platform contract, safe skeletons, and stateful fakes
 - [x] Windows DPAPI identity storage and local workspace policy boundary
+- [x] Node-managed Codex stdio Runtime, formal Adapter contract, and Thread/Turn ownership
 - [ ] Windows Yuanshu Node alpha
 - [ ] Linux Server and Standalone self-hosting preview
 - [ ] Self-hosted device and control-client pairing
@@ -118,7 +119,7 @@ The roadmap establishes a reliable daily-use loop for one developer first, then 
 
 ## Development
 
-The repository now contains the temporary `m0-poc-1` Gate G0 implementation. It is for local engineering validation only and intentionally omits formal pairing, signed controls, persistence, production certificates, and the stable Adapter API.
+The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. It is not wired to the public CLI, Server, Transport, or PWA yet.
 
 Prerequisites:
 
@@ -141,6 +142,7 @@ go test ./...
 go test ./internal/platform/... ./tests/contract/platform/...
 go test ./internal/config/... ./tests/contract/config/...
 go test ./internal/node/... ./tests/contract/node/...
+go test ./internal/adapter/... ./tests/integration/codex/...
 go vet ./...
 go build ./...
 pnpm --dir web test
@@ -161,7 +163,7 @@ Protocol generation requires both Node.js and Go (`gofmt`) and is deterministic 
 
 The versioned Node configuration contract uses strict TOML and is defined by `schemas/config/v1/node-config.schema.json`. It currently accepts `relay` and `standalone` transport modes and Codex `stdio` only. Device, Relay, and proxy credentials are represented solely by opaque SecretRef values; configuration files never contain credential bytes, and an unavailable secure store never triggers a plaintext fallback.
 
-The configuration package supports atomic replacement, a last-known-good `.bak` file, explicit recovery status, and sanitized SecretRef health checks. On Windows, configured workspaces can now be reconciled into the Node's local SQLite policy store. Remote callers use only opaque workspace IDs; canonical paths, stable file identities, reparse-point checks, and read/write/network ceilings remain local. Runtime wiring, default OS paths, and settings UI belong to later tasks.
+The configuration package supports atomic replacement, a last-known-good `.bak` file, explicit recovery status, and sanitized SecretRef health checks. On Windows, configured workspaces can now be reconciled into the Node's local SQLite policy store. Remote callers use only opaque workspace IDs; canonical paths, stable file identities, reparse-point checks, and read/write/network ceilings remain local. The formal CodexAdapter now consumes that boundary and persists only Runtime Thread ownership/state in SQLite; event replay, default OS paths, Runner assembly, and settings UI belong to later tasks.
 
 Inspect the CLI without starting any service:
 

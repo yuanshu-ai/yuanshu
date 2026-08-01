@@ -10,6 +10,7 @@ import (
 
 type windowsPlatform struct {
 	secure     SecureStore
+	processes  ProcessManager
 	workspaces WorkspaceInspector
 	all        unavailableCapabilities
 }
@@ -23,13 +24,14 @@ func Current() Platform {
 			}
 			return filepath.Join(root, "Yuanshu", "secrets-v1"), nil
 		}),
+		processes:  newWindowsProcessManager(),
 		workspaces: newWindowsWorkspaceInspector(),
 	}
 }
 
 func (*windowsPlatform) Family() Family                   { return FamilyWindows }
 func (p *windowsPlatform) SecureStore() SecureStore       { return p.secure }
-func (p *windowsPlatform) Processes() ProcessManager      { return p.all }
+func (p *windowsPlatform) Processes() ProcessManager      { return p.processes }
 func (p *windowsPlatform) IPC() LocalIPC                  { return p.all }
 func (p *windowsPlatform) Autostart() AutostartManager    { return p.all }
 func (p *windowsPlatform) Workspaces() WorkspaceInspector { return p.workspaces }

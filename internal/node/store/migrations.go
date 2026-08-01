@@ -96,6 +96,23 @@ var nodeMigrations = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 3,
+		name:    "codex_runtime_thread_ownership",
+		statements: []string{
+			`CREATE TABLE runtime_threads (
+				adapter TEXT NOT NULL CHECK (adapter = 'codex'),
+				thread_id TEXT PRIMARY KEY CHECK (length(thread_id) BETWEEN 1 AND 128),
+				workspace_id TEXT NOT NULL CHECK (length(workspace_id) BETWEEN 1 AND 128),
+				ownership TEXT NOT NULL CHECK (ownership IN ('created', 'resumed')),
+				state TEXT NOT NULL CHECK (state IN ('idle', 'starting', 'active', 'needs_reconcile')),
+				active_turn_id TEXT CHECK (active_turn_id IS NULL OR length(active_turn_id) BETWEEN 1 AND 128),
+				updated_at TEXT NOT NULL,
+				CHECK ((state = 'active' AND active_turn_id IS NOT NULL) OR state != 'active')
+			) STRICT`,
+			`CREATE INDEX runtime_threads_workspace ON runtime_threads(workspace_id, thread_id)`,
+		},
+	},
 }
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -156,6 +173,8 @@ func sqlLiteralInt(value int) string {
 		return "1"
 	case 2:
 		return "2"
+	case 3:
+		return "3"
 	default:
 		panic(errors.New("unsupported schema version"))
 	}

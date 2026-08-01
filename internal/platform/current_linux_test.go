@@ -4,5 +4,6 @@ package platform
 
 const (
 	expectedCurrentFamily      = FamilyLinux
+	expectedProcessAvailable   = false
 	expectedWorkspaceAvailable = false
 )

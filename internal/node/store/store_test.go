@@ -40,7 +40,7 @@ func TestOpenMigratesAndReopensSQLite(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
 		t.Fatalf("journal_mode = %q, %v", mode, err)
 	}
-	wantTables := []string{"identity", "outbox", "replay_messages", "replay_nonces", "schema_migrations", "signer_sequences", "trusted_clients", "workspaces"}
+	wantTables := []string{"identity", "outbox", "replay_messages", "replay_nonces", "runtime_threads", "schema_migrations", "signer_sequences", "trusted_clients", "workspaces"}
 	for _, table := range wantTables {
 		var count int
 		if err := store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count); err != nil || count != 1 {
@@ -80,7 +80,7 @@ func TestOpenRejectsInvalidFutureAndCorruptStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := future.db.Exec("INSERT INTO schema_migrations(version, name, applied_at) VALUES (3, 'future', ?)", timestamp(fixedNow)); err != nil {
+	if _, err := future.db.Exec("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, 'future', ?)", CurrentSchemaVersion+1, timestamp(fixedNow)); err != nil {
 		t.Fatal(err)
 	}
 	_ = future.Close()
@@ -92,7 +92,7 @@ func TestOpenRejectsInvalidFutureAndCorruptStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := futureUser.db.Exec("PRAGMA user_version = 3"); err != nil {
+	if _, err := futureUser.db.Exec("PRAGMA user_version = 4"); err != nil {
 		t.Fatal(err)
 	}
 	_ = futureUser.Close()
@@ -405,7 +405,7 @@ func TestWorkspaceMigrationUpgradesSchemaV1(t *testing.T) {
 	}
 	defer upgraded.Close()
 	var version int
-	if err := upgraded.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+	if err := upgraded.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != CurrentSchemaVersion {
 		t.Fatalf("upgraded user_version = %d, %v", version, err)
 	}
 	if records, err := upgraded.Workspaces(context.Background()); err != nil || len(records) != 0 {

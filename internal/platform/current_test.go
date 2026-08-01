@@ -20,6 +20,9 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 	if current.Workspaces().Available() != expectedWorkspaceAvailable {
 		t.Fatalf("Workspaces().Available() = %v, want %v", current.Workspaces().Available(), expectedWorkspaceAvailable)
 	}
+	if current.Processes().Available() != expectedProcessAvailable {
+		t.Fatalf("Processes().Available() = %v, want %v", current.Processes().Available(), expectedProcessAvailable)
+	}
 
 	const canary = "platform-sensitive-canary"
 	tests := []struct {
@@ -27,15 +30,6 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 		available bool
 		call      func() error
 	}{
-		{"process", current.Processes().Available(), func() error {
-			_, err := current.Processes().Start(context.Background(), ProcessSpec{
-				Executable: canary,
-				Args:       []string{canary},
-				Env:        []string{"SECRET=" + canary},
-				Directory:  canary,
-			})
-			return err
-		}},
 		{"ipc listen", current.IPC().Available(), func() error {
 			_, err := current.IPC().Listen(context.Background(), IPCName(canary))
 			return err
@@ -56,6 +50,21 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 			_, err := current.Autostart().Status(context.Background(), canary)
 			return err
 		}},
+	}
+	if !expectedProcessAvailable {
+		tests = append(tests, struct {
+			name      string
+			available bool
+			call      func() error
+		}{"process", current.Processes().Available(), func() error {
+			_, err := current.Processes().Start(context.Background(), ProcessSpec{
+				Executable: canary,
+				Args:       []string{canary},
+				Env:        []string{"SECRET=" + canary},
+				Directory:  canary,
+			})
+			return err
+		}})
 	}
 	if !expectedWorkspaceAvailable {
 		tests = append(tests, struct {
