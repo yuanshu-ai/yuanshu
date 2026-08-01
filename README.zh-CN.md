@@ -89,13 +89,14 @@ yuanshu node         在 Agent 所在机器运行，并连接 Server
 yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 ```
 
-这些命令是规划接口，当前 Pre-alpha 仓库尚不能直接运行。如果云服务器同时运行 Codex 或其他受支持 Agent，只需部署一个 Standalone，不需要再搭建第二套中转服务。Standalone 内部仍必须通过 Node 模块访问本机 Agent，Server 不能绕过本地策略和审批。不得把 Codex app-server 或其他 Agent 的内部接口直接暴露到公网。
+这些命令当前已提供无业务能力的工程占位入口。直接运行子命令会明确返回 `not implemented`；不会监听端口、启动 Agent 或创建本地数据。未来如果云服务器同时运行 Codex 或其他受支持 Agent，只需部署一个 Standalone，不需要再搭建第二套中转服务。Standalone 内部仍必须通过 Node 模块访问本机 Agent，Server 不能绕过本地策略和审批。不得把 Codex app-server 或其他 Agent 的内部接口直接暴露到公网。
 
 ## 项目状态
 
 - [x] 产品范围与架构基线
 - [x] 个人优先、一控多 Node 方向
 - [x] Codex 认证方式中立定位
+- [x] 可构建工作区、占位 CLI、Web 骨架与基础 CI
 - [ ] Codex app-server 技术验证
 - [ ] 跨语言协议和控制签名测试向量
 - [ ] Windows Yuanshu Node Alpha
@@ -107,6 +108,45 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [ ] 安全加固与首个公开预览版
 
 路线图会先确保一个开发者能够稳定地每天使用，再完成已经确定的 Linux 和 macOS 集成，之后扩展更多 AgentAdapter 或团队功能。
+
+## 本地开发
+
+AC-001 只建立可构建的工程骨架，不包含远程控制、网络监听、Agent 启动、认证或持久化能力。
+
+环境要求：
+
+- Go 1.26.5；
+- Node.js 24.18.1；
+- 通过 Corepack 使用 pnpm 11.18.0。
+
+在仓库根目录安装 Web 依赖：
+
+```shell
+corepack enable
+corepack install --global pnpm@11.18.0
+pnpm install --frozen-lockfile
+```
+
+运行本地验证：
+
+```shell
+go test ./...
+go vet ./...
+go build ./...
+pnpm --dir web test
+pnpm --dir web build
+```
+
+查看不会启动服务的占位 CLI：
+
+```shell
+go run ./cmd/yuanshu --help
+go run ./cmd/yuanshu server --help
+go run ./cmd/yuanshu node --help
+go run ./cmd/yuanshu standalone --help
+```
+
+仓库源文件统一使用 LF，以上命令面向 Windows、macOS 和 Linux。当前基础 CI 在 Windows 和 Linux 运行 Go 检查，在 Ubuntu 运行 Web 检查；更完整的发布矩阵由后续任务补充。
 
 ## 安全原则
 

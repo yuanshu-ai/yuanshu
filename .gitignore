@@ -1,1 +1,29 @@
+# Private design repository
 /docs/
+
+# Node, pnpm, Vite, and test output
+/node_modules/
+**/node_modules/
+/web/dist/
+/coverage/
+*.tsbuildinfo
+*.log
+pnpm-debug.log*
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Go build and test output
+/bin/
+/yuanshu
+/yuanshu.exe
+*.test
+*.out
+
+# Editor and operating-system metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

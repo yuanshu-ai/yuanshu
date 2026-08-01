@@ -89,13 +89,14 @@ yuanshu node         Local bridge connecting an Agent Runtime to a Server
 yuanshu standalone   Server + Web + local Node in one deployment
 ```
 
-These commands describe the planned interface and are not available in the current pre-alpha repository. On a cloud server that also runs Codex or another supported agent, one Standalone deployment is enough; it does not need a second relay service. Standalone still routes local Agent access through the Node module, so Server code cannot bypass local policy and approvals. Codex app-server and other agents' internal interfaces must never be exposed directly to the public internet.
+These commands are available as non-operational engineering placeholders. Running a bare command exits with an explicit `not implemented` error; it does not open a port, start an Agent, or create local data. On a cloud server that also runs Codex or another supported agent, the planned deployment needs only one Standalone process and no second relay service. Standalone will still route local Agent access through the Node module, so Server code cannot bypass local policy and approvals. Codex app-server and other agents' internal interfaces must never be exposed directly to the public internet.
 
 ## Project status
 
 - [x] Product scope and architecture baseline
 - [x] Personal-first, one-to-many-Node direction
 - [x] Authentication-neutral Codex positioning
+- [x] Buildable workspace, placeholder CLI, Web scaffold, and base CI
 - [ ] Codex app-server proof of concept
 - [ ] Cross-language protocol and signed-control test vectors
 - [ ] Windows Yuanshu Node alpha
@@ -107,6 +108,45 @@ These commands describe the planned interface and are not available in the curre
 - [ ] Security hardening and first public preview
 
 The roadmap establishes a reliable daily-use loop for one developer first, then completes the committed Linux and macOS integrations before expanding into more agent adapters or team features.
+
+## Development
+
+AC-001 establishes a buildable engineering scaffold only. It contains no remote-control, network-listening, Agent-starting, authentication, or persistence capability.
+
+Prerequisites:
+
+- Go 1.26.5;
+- Node.js 24.18.1;
+- pnpm 11.18.0 through Corepack.
+
+Install the Web dependencies from the repository root:
+
+```shell
+corepack enable
+corepack install --global pnpm@11.18.0
+pnpm install --frozen-lockfile
+```
+
+Run the local verification suite:
+
+```shell
+go test ./...
+go vet ./...
+go build ./...
+pnpm --dir web test
+pnpm --dir web build
+```
+
+Inspect the placeholder CLI without starting any service:
+
+```shell
+go run ./cmd/yuanshu --help
+go run ./cmd/yuanshu server --help
+go run ./cmd/yuanshu node --help
+go run ./cmd/yuanshu standalone --help
+```
+
+The repository uses LF source files and supports these commands on Windows, macOS, and Linux. The base CI currently runs Go checks on Windows and Linux and Web checks on Ubuntu; broader release matrices belong to later tasks.
 
 ## Security principles
 
