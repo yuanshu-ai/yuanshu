@@ -55,6 +55,8 @@ Windows, macOS, and Linux are all first-class product targets. The order is phas
 
 The protocol, transports, adapters, configuration model, and event journal will share one Go implementation. Platform-specific code is limited to secure storage, IPC, process lifecycle, autostart, path validation, and release signing. The project prefers pure-Go dependencies; introducing CGO requires an explicit cross-platform build and supply-chain review.
 
+The shared Platform contract is now established for all three target families. Its production build-tag implementations currently fail closed; stateful in-memory fakes cover secure storage, direct process lifecycle, logical local IPC, current-user autostart, and workspace facts. Real DPAPI, Keychain, Secret Service, Named Pipe, Unix socket, Job Object, LaunchAgent, and systemd integrations remain later platform tasks. Workspace inspection reports operating-system facts only—the Node policy layer makes every allow/deny decision.
+
 ## Architecture direction
 
 ```mermaid
@@ -102,6 +104,7 @@ These commands currently expose only the disposable, loopback-only M0 engineerin
 - [x] JCS + Ed25519 control encoding and cross-language test vectors
 - [x] Node-side signed control validation and atomic replay protection
 - [x] Transport contract and shared Relay/Standalone behavior tests
+- [x] Windows/macOS/Linux Platform contract, safe skeletons, and stateful fakes
 - [ ] Windows Yuanshu Node alpha
 - [ ] Linux Server and Standalone self-hosting preview
 - [ ] Self-hosted device and control-client pairing
@@ -134,6 +137,7 @@ Run the local verification suite:
 
 ```shell
 go test ./...
+go test ./internal/platform/... ./tests/contract/platform/...
 go vet ./...
 go build ./...
 pnpm --dir web test

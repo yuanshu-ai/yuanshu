@@ -55,6 +55,8 @@ Windows、macOS 和 Linux 都是确定支持的一等平台。为了控制首个
 
 协议、Transport、Adapter、配置模型和事件日志共用同一套 Go 实现。平台专属代码仅包含安全存储、IPC、进程生命周期、自动启动、路径校验和发布签名。项目优先使用纯 Go 依赖；引入 CGO 必须先完成跨平台构建和供应链评审。
 
+三目标平台共用的 Platform 合约现已建立。当前生产 build-tag 实现全部安全失败；状态化内存 fake 覆盖安全存储、直接进程生命周期、逻辑本地 IPC、当前用户自动启动和工作区事实。真实 DPAPI、Keychain、Secret Service、Named Pipe、Unix socket、Job Object、LaunchAgent 与 systemd 集成仍属于后续平台任务。工作区检查只报告操作系统事实，是否允许始终由 Node 策略层决定。
+
 ## 架构方向
 
 ```mermaid
@@ -102,6 +104,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] JCS + Ed25519 控制消息编码与跨语言测试向量
 - [x] Node 侧签名控制验证与原子防重放
 - [x] Transport 合约与 Relay/Standalone 共享行为测试
+- [x] Windows/macOS/Linux Platform 合约、安全骨架与状态化 fake
 - [ ] Windows Yuanshu Node Alpha
 - [ ] Linux Server 与 Standalone 自托管预览版
 - [ ] 自托管设备与控制端配对
@@ -134,6 +137,7 @@ pnpm install --frozen-lockfile
 
 ```shell
 go test ./...
+go test ./internal/platform/... ./tests/contract/platform/...
 go vet ./...
 go build ./...
 pnpm --dir web test
