@@ -179,6 +179,25 @@ func TestUnexpectedProcessExit(t *testing.T) {
 	_ = client.Close()
 }
 
+func TestCredentialCanaryDoesNotReachStderr(t *testing.T) {
+	t.Parallel()
+
+	client := startHelper(t, "credential-stderr", Options{})
+	select {
+	case <-client.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("credential stderr helper did not terminate")
+	}
+	stderr := client.Stderr()
+	if strings.Contains(stderr, probeCredentialCanary()) || strings.Contains(stderr, probeAWSCredentialCanary()) {
+		t.Fatal("credential canary reached the redacted stderr boundary")
+	}
+	if !strings.Contains(stderr, "<REDACTED_SECRET>") {
+		t.Fatal("redacted stderr did not contain the replacement marker")
+	}
+	_ = client.Close()
+}
+
 func TestCloseIsIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -220,6 +239,28 @@ func TestClassifyAuth(t *testing.T) {
 				t.Fatalf("ClassifyAuth() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestClassifyAuthType(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]AuthMode{
+		"":                    AuthNone,
+		"apiKey":              AuthAPIKey,
+		"apikey":              AuthAPIKey,
+		"chatgpt":             AuthChatGPT,
+		"chatgptAuthTokens":   AuthChatGPT,
+		"amazonBedrock":       AuthCustomProvider,
+		"bedrockApiKey":       AuthCustomProvider,
+		"agentIdentity":       AuthOther,
+		"personalAccessToken": AuthOther,
+		"futureMode":          AuthOther,
+	}
+	for input, want := range tests {
+		if got := ClassifyAuthType(input); got != want {
+			t.Fatalf("ClassifyAuthType() returned the wrong coarse authentication mode")
+		}
 	}
 }
 
@@ -274,6 +315,18 @@ func runHelper(mode string) int {
 		return 0
 	case "exit":
 		return 7
+	case "credential-stderr":
+		canary := probeCredentialCanary()
+		fmt.Fprintln(os.Stderr, strings.Join([]string{
+			"OPENAI_API_KEY=" + canary,
+			"Authorization: Bearer " + canary,
+			"Cookie: session=" + canary,
+			`auth.json={"access_token":"` + canary + `"}`,
+			"ANTHROPIC_API_KEY=" + canary,
+			"AWS_SECRET_ACCESS_KEY=" + canary,
+			"AWS_ACCESS_KEY_ID=" + probeAWSCredentialCanary(),
+		}, "\n"))
+		return 0
 	}
 
 	responsesNeeded := 0
@@ -328,4 +381,12 @@ func runHelper(mode string) int {
 		return 23
 	}
 	return 0
+}
+
+func probeCredentialCanary() string {
+	return strings.Join([]string{"yuanshu", "probe", "credential", "canary"}, "-")
+}
+
+func probeAWSCredentialCanary() string {
+	return "AKIA" + strings.Repeat("B", 12)
 }

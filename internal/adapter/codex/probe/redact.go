@@ -6,18 +6,19 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/yuanshu-ai/yuanshu/internal/security/credential"
 )
 
 var (
-	secretPattern = regexp.MustCompile(`(?i)(?:bearer\s+|sk-|sess-)[a-z0-9_\-]{4,}`)
-	emailPattern  = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
-	windowsPath   = regexp.MustCompile(`(?i)[A-Z]:\\[^\s"']+`)
-	unixPath      = regexp.MustCompile(`/(?:Users|home|tmp|var|etc)/[^\s"']+`)
+	emailPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
+	windowsPath  = regexp.MustCompile(`(?i)[A-Z]:\\[^\s"']+`)
+	unixPath     = regexp.MustCompile(`/(?:Users|home|tmp|var|etc)/[^\s"']+`)
 )
 
 // RedactText removes common credential, identity, and absolute-path shapes.
 func RedactText(value string) string {
-	value = secretPattern.ReplaceAllString(value, "<REDACTED_SECRET>")
+	value = credential.RedactText(value)
 	value = emailPattern.ReplaceAllString(value, "<REDACTED_EMAIL>")
 	value = windowsPath.ReplaceAllString(value, "<REDACTED_PATH>")
 	value = unixPath.ReplaceAllString(value, "<REDACTED_PATH>")

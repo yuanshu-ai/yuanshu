@@ -123,16 +123,22 @@ func ClassifyAuth(result json.RawMessage) (AuthMode, error) {
 		return "", fmt.Errorf("decode account type: %w", err)
 	}
 
-	switch account.Type {
-	case "apiKey":
-		return AuthAPIKey, nil
+	return ClassifyAuthType(account.Type), nil
+}
+
+// ClassifyAuthType maps account/read types and account/updated authMode values
+// to the deliberately coarse authentication state exposed by Yuanshu.
+func ClassifyAuthType(value string) AuthMode {
+	switch value {
+	case "apiKey", "apikey":
+		return AuthAPIKey
 	case "chatgpt", "chatgptAuthTokens":
-		return AuthChatGPT, nil
-	case "amazonBedrock":
-		return AuthCustomProvider, nil
+		return AuthChatGPT
+	case "amazonBedrock", "bedrockApiKey":
+		return AuthCustomProvider
 	case "":
-		return AuthNone, nil
+		return AuthNone
 	default:
-		return AuthOther, nil
+		return AuthOther
 	}
 }
