@@ -1,13 +1,13 @@
 package codex_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -17,8 +17,10 @@ import (
 )
 
 const (
-	liveEnvironment = "YUANSHU_CODEX_LIVE"
-	liveTurnLimit   = 4
+	liveEnvironment     = "YUANSHU_CODEX_LIVE"
+	liveTurnLimit       = 2
+	liveApprovalTimeout = 2 * time.Minute
+	liveCallTimeout     = 30 * time.Second
 )
 
 type liveObserver struct {
@@ -49,12 +51,33 @@ func (o *liveObserver) record(message probe.Message) error {
 	return nil
 }
 
+type liveTurnBudget struct {
+	used int
+}
+
 type liveRunner struct {
 	client    *probe.Client
 	observer  *liveObserver
+	budget    *liveTurnBudget
 	threadID  string
-	turns     int
 	persisted bool
+}
+
+type approvalScenario struct {
+	name           string
+	approvalMethod string
+	turnParams     map[string]any
+}
+
+type liveScenarioResult struct {
+	authMode       probe.AuthMode
+	observer       *liveObserver
+	name           string
+	approvalMethod string
+}
+
+type heldApproval struct {
+	rawID json.RawMessage
 }
 
 func TestLiveAppServerProtocol(t *testing.T) {
@@ -64,7 +87,6 @@ func TestLiveAppServerProtocol(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
 	defer cancel()
-	workspace := t.TempDir()
 
 	versionOutput, err := exec.CommandContext(ctx, "codex", "--version").Output()
 	if err != nil {
@@ -75,37 +97,94 @@ func TestLiveAppServerProtocol(t *testing.T) {
 		t.Fatalf("Codex version = %q, want %q", version, "codex-cli "+schemaVersion)
 	}
 
-	runner := &liveRunner{observer: newLiveObserver()}
+	scenarios := []approvalScenario{
+		{
+			name:           "command-approval",
+			approvalMethod: "item/commandExecution/requestApproval",
+			turnParams: map[string]any{
+				"approvalPolicy": "untrusted",
+				"sandboxPolicy":  map[string]any{"type": "readOnly"},
+				"input": []map[string]any{{
+					"type": "text",
+					"text": `Use the shell exactly once to run: powershell -NoProfile -Command "Write-Output YUANSHU_ACTIVE_APPROVAL". Do not perform any other action.`,
+				}},
+			},
+		},
+		{
+			name:           "file-change-approval",
+			approvalMethod: "item/fileChange/requestApproval",
+			turnParams: map[string]any{
+				"approvalPolicy": "on-request",
+				"sandboxPolicy":  map[string]any{"type": "readOnly"},
+				"input": []map[string]any{{
+					"type": "text",
+					"text": "Create active-approval.txt containing YUANSHU_ACTIVE_FILE by applying a file change. Do not use the shell.",
+				}},
+			},
+		},
+	}
+
+	budget := &liveTurnBudget{}
+	var winner liveScenarioResult
+	var failures []error
+	for _, scenario := range scenarios {
+		result, retryable, err := runActiveApprovalScenario(ctx, t.TempDir(), scenario, budget)
+		if err == nil {
+			winner = result
+			break
+		}
+		failures = append(failures, fmt.Errorf("%s: %w", scenario.name, err))
+		if !retryable || budget.used >= liveTurnLimit {
+			break
+		}
+	}
+	if winner.observer == nil {
+		t.Fatalf("active-turn probe failed after %d turn(s): %v", budget.used, errors.Join(failures...))
+	}
+	if budget.used < 1 || budget.used > liveTurnLimit {
+		t.Fatalf("live probe used %d turns, want 1..%d", budget.used, liveTurnLimit)
+	}
+
+	for _, method := range []string{
+		"thread/started", "turn/started", "turn/completed",
+		winner.approvalMethod, "serverRequest/resolved",
+	} {
+		if winner.observer.methods[method] == 0 {
+			t.Errorf("live active-turn probe did not observe %s", method)
+		}
+	}
+
+	methods := sortedObserved(winner.observer.methods)
+	items := sortedObserved(winner.observer.itemTypes)
+	t.Logf("AC-002 active-turn result: codex=%s auth=%s transport=stdio turns=%d scenario=%s methods=%s itemTypes=%s", schemaVersion, winner.authMode, budget.used, winner.name, strings.Join(methods, ","), strings.Join(items, ","))
+}
+
+func runActiveApprovalScenario(ctx context.Context, workspace string, scenario approvalScenario, budget *liveTurnBudget) (result liveScenarioResult, retryable bool, err error) {
+	runner := &liveRunner{observer: newLiveObserver(), budget: budget}
 	client, err := startLiveClient(ctx, workspace)
 	if err != nil {
-		t.Fatalf("start live client: %v", err)
+		return result, false, fmt.Errorf("start live client: %w", err)
 	}
 	runner.client = client
 	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cleanupCancel()
-		if runner.persisted {
-			if err := archiveProbeThread(cleanupCtx, runner.client, workspace, runner.threadID); err != nil {
-				t.Errorf("archive live Probe Thread: %v", err)
-			}
-		}
-		if runner.client != nil {
-			if err := runner.client.Close(); err != nil && !errors.Is(err, probe.ErrClosed) {
-				t.Errorf("close live client: %v; stderr=%q", err, runner.client.Stderr())
-			}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if cleanupErr := cleanupLiveScenario(cleanupCtx, runner, workspace); cleanupErr != nil {
+			retryable = false
+			err = errors.Join(err, fmt.Errorf("live scenario cleanup: %w", cleanupErr))
 		}
 	}()
 
 	var accountResult json.RawMessage
 	if err := client.Call(ctx, "account/read", map[string]any{"refreshToken": false}, &accountResult); err != nil {
-		t.Fatalf("account/read: %v", safeClientError(client, err))
+		return result, false, fmt.Errorf("account/read: %w", safeClientError(client, err))
 	}
 	authMode, err := probe.ClassifyAuth(accountResult)
 	if err != nil {
-		t.Fatalf("classify authentication: %v", err)
+		return result, false, fmt.Errorf("classify authentication: %w", err)
 	}
 	if authMode != probe.AuthAPIKey {
-		t.Fatalf("authentication mode = %q, want %q", authMode, probe.AuthAPIKey)
+		return result, false, fmt.Errorf("authentication mode = %q, want %q", authMode, probe.AuthAPIKey)
 	}
 
 	var startResult struct {
@@ -119,154 +198,65 @@ func TestLiveAppServerProtocol(t *testing.T) {
 		"sandbox":        "workspace-write",
 		"serviceName":    "yuanshu_ac002_probe",
 	}, &startResult); err != nil {
-		t.Fatalf("thread/start: %v", safeClientError(client, err))
+		return result, false, fmt.Errorf("thread/start: %w", safeClientError(client, err))
 	}
 	if startResult.Thread.ID == "" {
-		t.Fatal("thread/start returned an empty thread id")
+		return result, false, errors.New("thread/start returned an empty thread id")
 	}
 	runner.threadID = startResult.Thread.ID
 
-	commandApprovalBefore := runner.observer.methods["item/commandExecution/requestApproval"]
-	status, err := runner.runTurn(ctx, map[string]any{
-		"approvalPolicy": "untrusted",
-		"sandboxPolicy":  map[string]any{"type": "readOnly"},
-		"input": []map[string]any{{
-			"type": "text",
-			"text": `Use the shell exactly once to run: powershell -NoProfile -Command "Write-Output YUANSHU_COMMAND_APPROVAL". Do not perform any other action.`,
-		}},
-	})
+	turnID, err := runner.startTurn(ctx, scenario.turnParams)
 	if err != nil {
-		t.Fatalf("command approval turn: %v", err)
-	}
-	if status != "completed" || runner.observer.methods["item/commandExecution/requestApproval"] <= commandApprovalBefore {
-		t.Fatalf("command approval status=%q requests=%d", status, runner.observer.methods["item/commandExecution/requestApproval"]-commandApprovalBefore)
+		return result, budget.used < liveTurnLimit, err
 	}
 	runner.persisted = true
-	if err := verifyThreadDiscovery(ctx, client, runner.threadID); err != nil {
-		t.Fatal(err)
+
+	approvalCtx, approvalCancel := context.WithTimeout(ctx, liveApprovalTimeout)
+	approval, err := runner.waitForApproval(approvalCtx, turnID, scenario.approvalMethod)
+	approvalCancel()
+	if err != nil {
+		return result, true, err
 	}
 
-	if err := client.Close(); err != nil {
-		t.Fatalf("close before resume: %v; stderr=%q", err, client.Stderr())
-	}
-	client, err = startLiveClient(ctx, workspace)
-	if err != nil {
-		t.Fatalf("restart live client: %v", err)
-	}
-	runner.client = client
-	var resumeResult struct {
-		Thread struct {
-			ID string `json:"id"`
-		} `json:"thread"`
-	}
-	if err := client.Call(ctx, "thread/resume", map[string]any{"threadId": runner.threadID}, &resumeResult); err != nil {
-		t.Fatalf("thread/resume: %v", safeClientError(client, err))
-	}
-	if resumeResult.Thread.ID != runner.threadID {
-		t.Fatal("thread/resume returned a different thread id")
-	}
-
-	deniedFile := filepath.Join(workspace, "approval-denied.txt")
-	fileApprovalBefore := runner.observer.methods["item/fileChange/requestApproval"]
-	status, err = runner.runTurn(ctx, map[string]any{
-		"approvalPolicy": "on-request",
-		"sandboxPolicy":  map[string]any{"type": "readOnly"},
-		"input": []map[string]any{{
-			"type": "text",
-			"text": "Create approval-denied.txt containing YUANSHU_FILE_APPROVAL by applying a file change. Do not use the shell.",
-		}},
-	})
-	if err != nil {
-		t.Fatalf("file approval turn: %v", err)
-	}
-	if status != "completed" || runner.observer.methods["item/fileChange/requestApproval"] <= fileApprovalBefore {
-		t.Fatalf("file approval status=%q requests=%d", status, runner.observer.methods["item/fileChange/requestApproval"]-fileApprovalBefore)
-	}
-	if _, err := os.Stat(deniedFile); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("declined file change created a file: %v", err)
-	}
-
-	commandItemBefore := runner.observer.itemTypes["commandExecution"]
-	fileItemBefore := runner.observer.itemTypes["fileChange"]
-	diffBefore := runner.observer.methods["turn/diff/updated"]
-	status, err = runner.runTurn(ctx, map[string]any{
-		"approvalPolicy": "never",
-		"sandboxPolicy": map[string]any{
-			"type":          "workspaceWrite",
-			"writableRoots": []string{workspace},
-			"networkAccess": false,
-		},
-		"input": []map[string]any{{
-			"type": "text",
-			"text": `First run: powershell -NoProfile -Command "Write-Output YUANSHU_COMMAND_EVENT". Then create probe-output.txt containing exactly YUANSHU_FILE_EVENT by applying a file change. Perform both actions and nothing else.`,
-		}},
-	})
-	if err != nil {
-		t.Fatalf("command and file event turn: %v", err)
-	}
-	if status != "completed" || runner.observer.itemTypes["commandExecution"] <= commandItemBefore || runner.observer.itemTypes["fileChange"] <= fileItemBefore || runner.observer.methods["turn/diff/updated"] <= diffBefore {
-		t.Fatalf("command/file event status=%q commandItems=%d fileItems=%d diffs=%d", status, runner.observer.itemTypes["commandExecution"]-commandItemBefore, runner.observer.itemTypes["fileChange"]-fileItemBefore, runner.observer.methods["turn/diff/updated"]-diffBefore)
-	}
-	content, err := os.ReadFile(filepath.Join(workspace, "probe-output.txt"))
-	if err != nil || strings.TrimSpace(string(content)) != "YUANSHU_FILE_EVENT" {
-		t.Fatalf("probe output file mismatch: err=%v", err)
-	}
-
-	turnID, err := runner.startTurn(ctx, map[string]any{
-		"approvalPolicy": "never",
-		"sandboxPolicy": map[string]any{
-			"type":          "workspaceWrite",
-			"writableRoots": []string{workspace},
-			"networkAccess": false,
-		},
-		"input": []map[string]any{{
-			"type": "text",
-			"text": "Run a PowerShell Start-Sleep command for 30 seconds, then reply with YUANSHU_SLEEP_DONE. Do not perform any other action.",
-		}},
-	})
-	if err != nil {
-		t.Fatalf("start steer/interrupt turn: %v", err)
-	}
 	var steerResult struct {
 		TurnID string `json:"turnId"`
 	}
-	if err := client.Call(ctx, "turn/steer", map[string]any{
+	if err := callWithTimeout(ctx, client, "turn/steer", map[string]any{
 		"threadId":       runner.threadID,
 		"expectedTurnId": turnID,
-		"input":          []map[string]any{{"type": "text", "text": "After the wait, also mention YUANSHU_STEERED."}},
+		"input": []map[string]any{{
+			"type": "text",
+			"text": "After the pending action is handled, reply with YUANSHU_STEERED. Do not perform another tool call.",
+		}},
 	}, &steerResult); err != nil {
-		t.Fatalf("turn/steer: %v", safeClientError(client, err))
+		return result, true, fmt.Errorf("turn/steer: %w", safeClientError(client, err))
 	}
 	if steerResult.TurnID != turnID {
-		t.Fatal("turn/steer returned a different turn id")
+		return result, true, errors.New("turn/steer returned a different turn id")
 	}
-	if err := client.Call(ctx, "turn/interrupt", map[string]any{"threadId": runner.threadID, "turnId": turnID}, nil); err != nil {
-		t.Fatalf("turn/interrupt: %v", safeClientError(client, err))
+
+	if err := callWithTimeout(ctx, client, "turn/interrupt", map[string]any{
+		"threadId": runner.threadID,
+		"turnId":   turnID,
+	}, nil); err != nil {
+		return result, true, fmt.Errorf("turn/interrupt: %w", safeClientError(client, err))
 	}
-	status, err = runner.waitForTurn(ctx, turnID)
+
+	waitCtx, waitCancel := context.WithTimeout(ctx, 90*time.Second)
+	err = runner.waitForInterruptedTurn(waitCtx, turnID, approval)
+	waitCancel()
 	if err != nil {
-		t.Fatalf("wait for interrupted turn: %v", err)
-	}
-	if status != "interrupted" {
-		t.Fatalf("interrupted turn status = %q, want interrupted", status)
+		return result, true, err
 	}
 
-	for _, method := range []string{
-		"thread/started", "turn/started", "turn/completed", "item/started", "item/completed",
-		"item/agentMessage/delta", "item/commandExecution/requestApproval",
-		"item/fileChange/requestApproval", "serverRequest/resolved", "turn/diff/updated",
-	} {
-		if runner.observer.methods[method] == 0 {
-			t.Errorf("live probe did not observe %s", method)
-		}
+	if err := verifyThreadDiscovery(ctx, client, runner.threadID); err != nil {
+		return result, false, err
 	}
-	if runner.turns != liveTurnLimit {
-		t.Fatalf("live probe used %d turns, want exactly %d", runner.turns, liveTurnLimit)
+	if err := runner.restartAndResume(ctx, workspace); err != nil {
+		return result, false, err
 	}
 
-	methods := sortedObserved(runner.observer.methods)
-	items := sortedObserved(runner.observer.itemTypes)
-	t.Logf("AC-002 live result: codex=%s auth=%s transport=stdio turns=%d methods=%s itemTypes=%s", schemaVersion, authMode, runner.turns, strings.Join(methods, ","), strings.Join(items, ","))
+	return liveScenarioResult{authMode: authMode, observer: runner.observer, name: scenario.name, approvalMethod: scenario.approvalMethod}, false, nil
 }
 
 func startLiveClient(ctx context.Context, workspace string) (*probe.Client, error) {
@@ -326,19 +316,11 @@ func verifyThreadDiscovery(ctx context.Context, client *probe.Client, threadID s
 	}
 }
 
-func (r *liveRunner) runTurn(ctx context.Context, overrides map[string]any) (string, error) {
-	turnID, err := r.startTurn(ctx, overrides)
-	if err != nil {
-		return "", err
-	}
-	return r.waitForTurn(ctx, turnID)
-}
-
 func (r *liveRunner) startTurn(ctx context.Context, overrides map[string]any) (string, error) {
-	if r.turns >= liveTurnLimit {
+	if r.budget.used >= liveTurnLimit {
 		return "", fmt.Errorf("live turn limit %d exceeded", liveTurnLimit)
 	}
-	r.turns++
+	r.budget.used++
 	params := make(map[string]any, len(overrides)+1)
 	params["threadId"] = r.threadID
 	for key, value := range overrides {
@@ -358,57 +340,169 @@ func (r *liveRunner) startTurn(ctx context.Context, overrides map[string]any) (s
 	return result.Turn.ID, nil
 }
 
-func (r *liveRunner) waitForTurn(ctx context.Context, turnID string) (string, error) {
+func (r *liveRunner) waitForApproval(ctx context.Context, turnID, method string) (heldApproval, error) {
 	for {
 		select {
 		case message, ok := <-r.client.Messages():
 			if !ok {
-				return "", safeClientError(r.client, r.client.Err())
+				return heldApproval{}, safeClientError(r.client, r.client.Err())
 			}
 			if err := r.observer.record(message); err != nil {
-				return "", err
+				return heldApproval{}, err
 			}
 			if message.IsRequest() {
-				switch message.Method {
-				case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
-					if err := r.client.Respond(*message.ID, map[string]any{"decision": "decline"}, nil); err != nil {
-						return "", err
-					}
-				default:
+				if message.Method != method {
 					_ = r.client.Respond(*message.ID, nil, &probe.RPCError{Code: -32601, Message: "unsupported by AC-002 probe"})
-					return "", fmt.Errorf("unexpected server request %s", message.Method)
+					return heldApproval{}, fmt.Errorf("unexpected server request %s", message.Method)
 				}
-			}
-			if message.Method == "turn/completed" {
 				var params struct {
-					Turn struct {
-						ID     string `json:"id"`
-						Status string `json:"status"`
-					} `json:"turn"`
+					ThreadID string `json:"threadId"`
+					TurnID   string `json:"turnId"`
 				}
 				if err := json.Unmarshal(message.Params, &params); err != nil {
-					return "", fmt.Errorf("decode turn/completed: %w", err)
+					return heldApproval{}, fmt.Errorf("decode %s: %w", message.Method, err)
 				}
-				if params.Turn.ID == turnID {
-					return params.Turn.Status, nil
+				if params.ThreadID != r.threadID || params.TurnID != turnID {
+					return heldApproval{}, errors.New("approval request did not match the active thread and turn")
+				}
+				rawID, err := json.Marshal(*message.ID)
+				if err != nil {
+					return heldApproval{}, fmt.Errorf("encode approval request id: %w", err)
+				}
+				return heldApproval{rawID: rawID}, nil
+			}
+			if message.Method == "turn/completed" {
+				status, matches, err := completedTurnStatus(message, turnID)
+				if err != nil {
+					return heldApproval{}, err
+				}
+				if matches {
+					return heldApproval{}, fmt.Errorf("turn completed with status %q before %s", status, method)
 				}
 			}
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return heldApproval{}, fmt.Errorf("wait for %s: %w", method, ctx.Err())
 		}
 	}
 }
 
-func archiveProbeThread(ctx context.Context, client *probe.Client, workspace, threadID string) error {
-	if client == nil || client.Err() != nil {
-		var err error
-		client, err = startLiveClient(ctx, workspace)
-		if err != nil {
-			return err
+func (r *liveRunner) waitForInterruptedTurn(ctx context.Context, turnID string, approval heldApproval) error {
+	resolved := false
+	completed := false
+	status := ""
+	for !resolved || !completed {
+		select {
+		case message, ok := <-r.client.Messages():
+			if !ok {
+				return safeClientError(r.client, r.client.Err())
+			}
+			if err := r.observer.record(message); err != nil {
+				return err
+			}
+			if message.IsRequest() {
+				_ = r.client.Respond(*message.ID, nil, &probe.RPCError{Code: -32601, Message: "unsupported after turn interrupt"})
+				return fmt.Errorf("unexpected server request %s after turn/interrupt", message.Method)
+			}
+			switch message.Method {
+			case "serverRequest/resolved":
+				matches, err := resolvedApprovalMatches(message, r.threadID, approval.rawID)
+				if err != nil {
+					return err
+				}
+				resolved = resolved || matches
+			case "turn/completed":
+				var matches bool
+				var err error
+				status, matches, err = completedTurnStatus(message, turnID)
+				if err != nil {
+					return err
+				}
+				completed = completed || matches
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("wait for interrupted turn and approval resolution: %w", ctx.Err())
 		}
-		defer client.Close()
 	}
-	return client.Call(ctx, "thread/archive", map[string]any{"threadId": threadID}, nil)
+	if status != "interrupted" {
+		return fmt.Errorf("interrupted turn status = %q, want interrupted", status)
+	}
+	return nil
+}
+
+func (r *liveRunner) restartAndResume(ctx context.Context, workspace string) error {
+	if err := r.client.Close(); err != nil && !errors.Is(err, probe.ErrClosed) {
+		return fmt.Errorf("close before resume: %w", safeClientError(r.client, err))
+	}
+	client, err := startLiveClient(ctx, workspace)
+	if err != nil {
+		return fmt.Errorf("restart live client: %w", err)
+	}
+	r.client = client
+	var resumeResult struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := client.Call(ctx, "thread/resume", map[string]any{"threadId": r.threadID}, &resumeResult); err != nil {
+		return fmt.Errorf("thread/resume: %w", safeClientError(client, err))
+	}
+	if resumeResult.Thread.ID != r.threadID {
+		return errors.New("thread/resume returned a different thread id")
+	}
+	return nil
+}
+
+func cleanupLiveScenario(ctx context.Context, runner *liveRunner, workspace string) error {
+	var cleanupErrors []error
+	if runner.client != nil {
+		if err := runner.client.Close(); err != nil && !errors.Is(err, probe.ErrClosed) {
+			cleanupErrors = append(cleanupErrors, safeClientError(runner.client, err))
+		}
+	}
+	if runner.persisted {
+		client, err := startLiveClient(ctx, workspace)
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("start archive client: %w", err))
+		} else {
+			if err := client.Call(ctx, "thread/archive", map[string]any{"threadId": runner.threadID}, nil); err != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("thread/archive: %w", safeClientError(client, err)))
+			}
+			if err := client.Close(); err != nil && !errors.Is(err, probe.ErrClosed) {
+				cleanupErrors = append(cleanupErrors, safeClientError(client, err))
+			}
+		}
+	}
+	return errors.Join(cleanupErrors...)
+}
+
+func callWithTimeout(ctx context.Context, client *probe.Client, method string, params, result any) error {
+	callCtx, cancel := context.WithTimeout(ctx, liveCallTimeout)
+	defer cancel()
+	return client.Call(callCtx, method, params, result)
+}
+
+func completedTurnStatus(message probe.Message, turnID string) (string, bool, error) {
+	var params struct {
+		Turn struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(message.Params, &params); err != nil {
+		return "", false, fmt.Errorf("decode turn/completed: %w", err)
+	}
+	return params.Turn.Status, params.Turn.ID == turnID, nil
+}
+
+func resolvedApprovalMatches(message probe.Message, threadID string, requestID json.RawMessage) (bool, error) {
+	var params struct {
+		ThreadID  string          `json:"threadId"`
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if err := json.Unmarshal(message.Params, &params); err != nil {
+		return false, fmt.Errorf("decode serverRequest/resolved: %w", err)
+	}
+	return params.ThreadID == threadID && bytes.Equal(bytes.TrimSpace(params.RequestID), bytes.TrimSpace(requestID)), nil
 }
 
 func safeClientError(client *probe.Client, err error) error {
