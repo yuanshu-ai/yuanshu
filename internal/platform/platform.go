@@ -107,6 +107,8 @@ type AutostartManager interface {
 type WorkspaceFacts struct {
 	CanonicalPath          string
 	FilesystemRoot         string
+	FileIdentity           string
+	IsDirectory            bool
 	IsFilesystemRoot       bool
 	IsHome                 bool
 	IsSystem               bool

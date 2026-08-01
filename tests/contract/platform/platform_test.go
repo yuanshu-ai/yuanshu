@@ -321,6 +321,8 @@ func TestWorkspaceInspectorReportsFactsWithoutPolicy(t *testing.T) {
 	expected := platformpkg.WorkspaceFacts{
 		CanonicalPath:          "synthetic-canonical-path",
 		FilesystemRoot:         "synthetic-root",
+		FileIdentity:           "synthetic-file-identity",
+		IsDirectory:            true,
 		IsFilesystemRoot:       true,
 		IsHome:                 true,
 		IsSystem:               true,
@@ -455,7 +457,7 @@ func TestFakeCapabilitiesAreConcurrent(t *testing.T) {
 				t.Errorf("Status: %v", err)
 			}
 
-			facts := platformpkg.WorkspaceFacts{CanonicalPath: id, FilesystemRoot: "synthetic-root"}
+			facts := platformpkg.WorkspaceFacts{CanonicalPath: id, FilesystemRoot: "synthetic-root", FileIdentity: id, IsDirectory: true}
 			if err := workspaces.Register(id, facts); err != nil {
 				t.Errorf("Register: %v", err)
 			}

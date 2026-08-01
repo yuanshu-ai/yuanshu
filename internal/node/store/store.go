@@ -14,7 +14,7 @@ import (
 	_ "github.com/ncruces/go-sqlite3/embed"
 )
 
-const CurrentSchemaVersion = 1
+const CurrentSchemaVersion = 2
 
 type Options struct {
 	Clock func() time.Time

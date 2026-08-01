@@ -40,7 +40,7 @@ func TestOpenMigratesAndReopensSQLite(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
 		t.Fatalf("journal_mode = %q, %v", mode, err)
 	}
-	wantTables := []string{"identity", "outbox", "replay_messages", "replay_nonces", "schema_migrations", "signer_sequences", "trusted_clients"}
+	wantTables := []string{"identity", "outbox", "replay_messages", "replay_nonces", "schema_migrations", "signer_sequences", "trusted_clients", "workspaces"}
 	for _, table := range wantTables {
 		var count int
 		if err := store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count); err != nil || count != 1 {
@@ -80,7 +80,7 @@ func TestOpenRejectsInvalidFutureAndCorruptStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := future.db.Exec("INSERT INTO schema_migrations(version, name, applied_at) VALUES (2, 'future', ?)", timestamp(fixedNow)); err != nil {
+	if _, err := future.db.Exec("INSERT INTO schema_migrations(version, name, applied_at) VALUES (3, 'future', ?)", timestamp(fixedNow)); err != nil {
 		t.Fatal(err)
 	}
 	_ = future.Close()
@@ -92,7 +92,7 @@ func TestOpenRejectsInvalidFutureAndCorruptStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := futureUser.db.Exec("PRAGMA user_version = 2"); err != nil {
+	if _, err := futureUser.db.Exec("PRAGMA user_version = 3"); err != nil {
 		t.Fatal(err)
 	}
 	_ = futureUser.Close()
@@ -340,6 +340,93 @@ func TestStoreHonorsCanceledContext(t *testing.T) {
 	}
 	if _, err := Open(ctx, filepath.Join(t.TempDir(), "canceled.db"), Options{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Open() error = %v", err)
+	}
+}
+
+func TestWorkspaceRecordsReplacePersistAndRemainAtomic(t *testing.T) {
+	store, path := openTestStore(t)
+	records := []WorkspaceRecord{
+		{ID: "alpha", DisplayName: "Alpha", CanonicalPath: `D:\\code\\alpha`, FilesystemRoot: `D:\\`, FileIdentity: "volume:file-alpha", Adapter: "codex", PermissionProfile: workspaceWorkspaceWrite, AllowNetwork: true},
+		{ID: "beta", DisplayName: "Beta", CanonicalPath: `D:\\code\\beta`, FilesystemRoot: `D:\\`, FileIdentity: "volume:file-beta", Adapter: "codex", PermissionProfile: workspaceReadOnly},
+	}
+	if err := store.ReplaceWorkspaces(context.Background(), records); err != nil {
+		t.Fatal(err)
+	}
+	records[0].DisplayName = "mutated"
+	got, err := store.Workspace(context.Background(), "alpha")
+	if err != nil || got.DisplayName != "Alpha" || !got.AllowNetwork {
+		t.Fatalf("Workspace() = %+v, %v", got, err)
+	}
+	listed, err := store.Workspaces(context.Background())
+	if err != nil || len(listed) != 2 || listed[0].ID != "alpha" || listed[1].ID != "beta" {
+		t.Fatalf("Workspaces() = %+v, %v", listed, err)
+	}
+	if err := store.ReplaceWorkspaces(context.Background(), []WorkspaceRecord{{ID: "invalid"}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid replace error = %v", err)
+	}
+	listed, err = store.Workspaces(context.Background())
+	if err != nil || len(listed) != 2 {
+		t.Fatal("invalid replacement changed existing workspaces")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(context.Background(), path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	got, err = reopened.Workspace(context.Background(), "beta")
+	if err != nil || got.PermissionProfile != workspaceReadOnly {
+		t.Fatalf("reopened Workspace() = %+v, %v", got, err)
+	}
+	if _, err := reopened.Workspace(context.Background(), "unknown"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown workspace error = %v", err)
+	}
+}
+
+func TestWorkspaceMigrationUpgradesSchemaV1(t *testing.T) {
+	original := nodeMigrations
+	nodeMigrations = append([]migration(nil), original[:1]...)
+	path := filepath.Join(t.TempDir(), "node-v1.db")
+	versionOne, err := Open(context.Background(), path, Options{})
+	if err != nil {
+		nodeMigrations = original
+		t.Fatal(err)
+	}
+	if err := versionOne.Close(); err != nil {
+		nodeMigrations = original
+		t.Fatal(err)
+	}
+	nodeMigrations = original
+	upgraded, err := Open(context.Background(), path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var version int
+	if err := upgraded.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+		t.Fatalf("upgraded user_version = %d, %v", version, err)
+	}
+	if records, err := upgraded.Workspaces(context.Background()); err != nil || len(records) != 0 {
+		t.Fatalf("upgraded Workspaces() = %+v, %v", records, err)
+	}
+}
+
+func TestWorkspaceStoreCancellationAndSanitizedErrors(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := store.ReplaceWorkspaces(ctx, []WorkspaceRecord{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ReplaceWorkspaces error = %v", err)
+	}
+	if _, err := store.Workspaces(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Workspaces error = %v", err)
+	}
+	const canary = "workspace-storage-sensitive-canary"
+	err := store.ReplaceWorkspaces(context.Background(), []WorkspaceRecord{{ID: canary}})
+	if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), canary) {
+		t.Fatalf("unsafe workspace error = %v", err)
 	}
 }
 

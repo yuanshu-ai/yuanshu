@@ -2,4 +2,7 @@
 
 package platform
 
-const expectedCurrentFamily = FamilyLinux
+const (
+	expectedCurrentFamily      = FamilyLinux
+	expectedWorkspaceAvailable = false
+)

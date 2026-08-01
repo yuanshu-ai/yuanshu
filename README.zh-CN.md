@@ -55,7 +55,7 @@ Windows、macOS 和 Linux 都是确定支持的一等平台。为了控制首个
 
 协议、Transport、Adapter、配置模型和事件日志共用同一套 Go 实现。平台专属代码仅包含安全存储、IPC、进程生命周期、自动启动、路径校验和发布签名。项目优先使用纯 Go 依赖；引入 CGO 必须先完成跨平台构建和供应链评审。
 
-三目标平台共用的 Platform 合约现已建立。当前生产 build-tag 实现全部安全失败；状态化内存 fake 覆盖安全存储、直接进程生命周期、逻辑本地 IPC、当前用户自动启动和工作区事实。真实 DPAPI、Keychain、Secret Service、Named Pipe、Unix socket、Job Object、LaunchAgent 与 systemd 集成仍属于后续平台任务。工作区检查只报告操作系统事实，是否允许始终由 Node 策略层决定。
+三目标平台共用的 Platform 合约现已建立。Windows 已提供当前用户 DPAPI 安全存储和基于目录句柄的工作区检查；其他尚未实现的生产能力继续安全失败。状态化内存 fake 覆盖安全存储、直接进程生命周期、逻辑本地 IPC、当前用户自动启动和工作区事实。Keychain、Secret Service、Named Pipe、Unix socket、Job Object、LaunchAgent 与 systemd 集成仍属于后续平台任务。工作区检查只报告操作系统事实，是否允许始终由 Node 策略层决定。
 
 ## 架构方向
 
@@ -105,6 +105,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] Node 侧签名控制验证与原子防重放
 - [x] Transport 合约与 Relay/Standalone 共享行为测试
 - [x] Windows/macOS/Linux Platform 合约、安全骨架与状态化 fake
+- [x] Windows DPAPI 身份存储与本地工作区策略边界
 - [ ] Windows Yuanshu Node Alpha
 - [ ] Linux Server 与 Standalone 自托管预览版
 - [ ] 自托管设备与控制端配对
@@ -139,6 +140,7 @@ pnpm install --frozen-lockfile
 go test ./...
 go test ./internal/platform/... ./tests/contract/platform/...
 go test ./internal/config/... ./tests/contract/config/...
+go test ./internal/node/... ./tests/contract/node/...
 go vet ./...
 go build ./...
 pnpm --dir web test
@@ -159,7 +161,7 @@ pnpm protocol:test
 
 版本化 Node 配置合约使用严格 TOML，由 `schemas/config/v1/node-config.schema.json` 定义。当前只接受 `relay`、`standalone` 和 Codex `stdio`。设备、Relay 与代理凭据只能表示为不透明 SecretRef；配置文件不会包含凭据字节，安全存储不可用时也绝不降级为明文。
 
-配置包支持原子替换、最近有效的 `.bak` 备份、显式恢复状态和脱敏 SecretRef 健康检查。目前尚未接入 CLI 或 Runtime；默认操作系统路径和设置界面属于后续任务。
+配置包支持原子替换、最近有效的 `.bak` 备份、显式恢复状态和脱敏 SecretRef 健康检查。Windows 上的配置工作区现在可以协调到 Node 本地 SQLite 策略库；远程调用方只使用不透明 workspace ID，canonical path、稳定文件身份、reparse point 检查及读写/网络权限上限始终留在本机。Runtime 接入、默认操作系统路径和设置界面属于后续任务。
 
 查看不会启动服务的 CLI 帮助：
 

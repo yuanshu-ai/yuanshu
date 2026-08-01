@@ -17,6 +17,9 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 	if current.SecureStore().Available() != wantSecureStore {
 		t.Fatalf("SecureStore().Available() = %v, want %v", current.SecureStore().Available(), wantSecureStore)
 	}
+	if current.Workspaces().Available() != expectedWorkspaceAvailable {
+		t.Fatalf("Workspaces().Available() = %v, want %v", current.Workspaces().Available(), expectedWorkspaceAvailable)
+	}
 
 	const canary = "platform-sensitive-canary"
 	tests := []struct {
@@ -53,10 +56,16 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 			_, err := current.Autostart().Status(context.Background(), canary)
 			return err
 		}},
-		{"workspace", current.Workspaces().Available(), func() error {
+	}
+	if !expectedWorkspaceAvailable {
+		tests = append(tests, struct {
+			name      string
+			available bool
+			call      func() error
+		}{"workspace", current.Workspaces().Available(), func() error {
 			_, err := current.Workspaces().Inspect(context.Background(), canary)
 			return err
-		}},
+		}})
 	}
 
 	for _, test := range tests {

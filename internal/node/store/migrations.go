@@ -13,11 +13,12 @@ type migration struct {
 	statements []string
 }
 
-var nodeMigrations = []migration{{
-	version: 1,
-	name:    "node_identity_security_and_outbox",
-	statements: []string{
-		`CREATE TABLE identity (
+var nodeMigrations = []migration{
+	{
+		version: 1,
+		name:    "node_identity_security_and_outbox",
+		statements: []string{
+			`CREATE TABLE identity (
 			singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
 			algorithm TEXT NOT NULL CHECK (algorithm = 'ed25519'),
 			public_key BLOB NOT NULL CHECK (length(public_key) = 32),
@@ -28,7 +29,7 @@ var nodeMigrations = []migration{{
 			updated_at TEXT NOT NULL,
 			CHECK ((owner_id IS NULL AND node_id IS NULL) OR (owner_id IS NOT NULL AND node_id IS NOT NULL))
 		) STRICT`,
-		`CREATE TABLE trusted_clients (
+			`CREATE TABLE trusted_clients (
 			owner_id TEXT NOT NULL,
 			node_id TEXT NOT NULL,
 			client_id TEXT NOT NULL,
@@ -39,14 +40,14 @@ var nodeMigrations = []migration{{
 			revoked_at TEXT,
 			PRIMARY KEY (owner_id, node_id, client_id, key_id)
 		) STRICT`,
-		`CREATE TABLE replay_messages (
+			`CREATE TABLE replay_messages (
 			owner_id TEXT NOT NULL,
 			node_id TEXT NOT NULL,
 			message_id TEXT NOT NULL,
 			accepted_at TEXT NOT NULL,
 			PRIMARY KEY (owner_id, node_id, message_id)
 		) STRICT`,
-		`CREATE TABLE replay_nonces (
+			`CREATE TABLE replay_nonces (
 			owner_id TEXT NOT NULL,
 			node_id TEXT NOT NULL,
 			client_id TEXT NOT NULL,
@@ -55,7 +56,7 @@ var nodeMigrations = []migration{{
 			retain_until INTEGER NOT NULL,
 			PRIMARY KEY (owner_id, node_id, client_id, key_id, nonce)
 		) STRICT`,
-		`CREATE TABLE signer_sequences (
+			`CREATE TABLE signer_sequences (
 			owner_id TEXT NOT NULL,
 			node_id TEXT NOT NULL,
 			client_id TEXT NOT NULL,
@@ -64,7 +65,7 @@ var nodeMigrations = []migration{{
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY (owner_id, node_id, client_id, key_id)
 		) STRICT`,
-		`CREATE TABLE outbox (
+			`CREATE TABLE outbox (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			message_id TEXT NOT NULL UNIQUE CHECK (length(message_id) BETWEEN 1 AND 128),
 			stream_id TEXT NOT NULL CHECK (length(stream_id) BETWEEN 1 AND 128),
@@ -74,10 +75,28 @@ var nodeMigrations = []migration{{
 			acknowledged_at TEXT,
 			UNIQUE (stream_id, sequence)
 		) STRICT`,
-		`CREATE INDEX outbox_pending_order ON outbox(acknowledged_at, id)`,
-		`CREATE INDEX replay_nonce_expiry ON replay_nonces(retain_until)`,
+			`CREATE INDEX outbox_pending_order ON outbox(acknowledged_at, id)`,
+			`CREATE INDEX replay_nonce_expiry ON replay_nonces(retain_until)`,
+		},
 	},
-}}
+	{
+		version: 2,
+		name:    "workspace_policy",
+		statements: []string{
+			`CREATE TABLE workspaces (
+				id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+				display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 128),
+				canonical_path TEXT NOT NULL CHECK (length(canonical_path) BETWEEN 1 AND 32767),
+				filesystem_root TEXT NOT NULL CHECK (length(filesystem_root) BETWEEN 1 AND 32767),
+				file_identity TEXT NOT NULL UNIQUE CHECK (length(file_identity) BETWEEN 1 AND 256),
+				adapter TEXT NOT NULL CHECK (adapter = 'codex'),
+				permission_profile TEXT NOT NULL CHECK (permission_profile IN ('read-only', 'workspace-write')),
+				allow_network INTEGER NOT NULL CHECK (allow_network IN (0, 1)),
+				updated_at TEXT NOT NULL
+			) STRICT`,
+		},
+	},
+}
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
 	var userVersion int
@@ -132,8 +151,12 @@ func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
 }
 
 func sqlLiteralInt(value int) string {
-	if value == 1 {
+	switch value {
+	case 1:
 		return "1"
+	case 2:
+		return "2"
+	default:
+		panic(errors.New("unsupported schema version"))
 	}
-	panic(errors.New("unsupported schema version"))
 }

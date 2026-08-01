@@ -2,4 +2,7 @@
 
 package platform
 
-const expectedCurrentFamily = FamilyWindows
+const (
+	expectedCurrentFamily      = FamilyWindows
+	expectedWorkspaceAvailable = true
+)

@@ -5,12 +5,17 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/yuanshu-ai/yuanshu/internal/config"
 	"github.com/yuanshu-ai/yuanshu/internal/node/identity"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
+	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
+	"github.com/yuanshu-ai/yuanshu/internal/platform"
 	platformfake "github.com/yuanshu-ai/yuanshu/internal/platform/fake"
 	v1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
 )
@@ -78,5 +83,69 @@ func TestIdentitySecurityAndOutboxSurviveRestart(t *testing.T) {
 	pending, err := reopened.Pending(ctx, 10)
 	if err != nil || len(pending) != 1 || !bytes.Equal(pending[0].Frame, frame) {
 		t.Fatalf("reloaded outbox = %#v, %v", pending, err)
+	}
+}
+
+func TestWorkspacePolicyMapsOpaqueIDAndSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "node.db")
+	workspacePath := filepath.Join(t.TempDir(), "local-sensitive-workspace")
+	inspector := platformfake.NewWorkspaceInspector()
+	facts := platform.WorkspaceFacts{
+		CanonicalPath:  workspacePath,
+		FilesystemRoot: filepath.VolumeName(workspacePath) + string(filepath.Separator),
+		FileIdentity:   "synthetic-workspace-identity",
+		IsDirectory:    true,
+	}
+	if err := inspector.Register(workspacePath, facts); err != nil {
+		t.Fatal(err)
+	}
+	local, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := workspace.NewManager(inspector, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured := config.WorkspaceConfig{
+		ID: "workspace-1", DisplayName: "Synthetic Workspace", Path: workspacePath,
+		AllowedAdapters: []string{"codex"}, DefaultAdapter: "codex",
+		PermissionProfile: config.PermissionWorkspaceWrite,
+	}
+	if err := manager.Reconcile(ctx, []config.WorkspaceConfig{configured}); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := manager.List(ctx)
+	if err != nil || len(listed) != 1 || listed[0].ID != "workspace-1" {
+		t.Fatalf("List() = %+v, %v", listed, err)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", listed), workspacePath) {
+		t.Fatal("workspace listing exposed the local path")
+	}
+	if err := local.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	restarted, err := workspace.NewManager(inspector, reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := restarted.Resolve(ctx, "workspace-1")
+	if err != nil || resolved.CanonicalPath != workspacePath || resolved.PermissionProfile != config.PermissionWorkspaceWrite {
+		t.Fatalf("Resolve() = %+v, %v", resolved, err)
+	}
+	replacement := facts
+	replacement.FileIdentity = "replacement-identity"
+	if err := inspector.Register(workspacePath, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Resolve(ctx, "workspace-1"); !errors.Is(err, workspace.ErrStale) {
+		t.Fatalf("replacement Resolve error = %v", err)
 	}
 }

@@ -2,4 +2,7 @@
 
 package platform
 
-const expectedCurrentFamily = FamilyDarwin
+const (
+	expectedCurrentFamily      = FamilyDarwin
+	expectedWorkspaceAvailable = false
+)
