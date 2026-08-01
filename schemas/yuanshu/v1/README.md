@@ -14,4 +14,6 @@ pnpm protocol:test
 
 ADR-013 fixes control signing to `Ed25519(UTF8("yuanshu-control-v1\\0") || RFC8785-JCS(controlWithoutSignature))`. Signatures are unpadded Base64url. Approval operation digests use SHA-256 over the separately domain-separated stable approval binding. Shared public test vectors live in `fixtures/signing-vectors.json`.
 
-This package only defines deterministic encoding and digest helpers. Trust lookup, signature verification, TTL, nonce, sequence, replay, revocation, and key storage belong to later protocol-security tasks.
+The Go package also embeds this Schema and exposes the Node-side control validator. It rejects malformed I-JSON and duplicate keys before Schema validation, binds the expected owner and Node, enforces the two-minute TTL and 30-second clock skew, resolves the signer on every message, verifies Ed25519, and atomically records message ID, nonce, and per-key sequence replay state.
+
+The included in-memory trust and replay stores are concurrency-safe reference implementations. Persistent replay state, secure key storage, pairing, dispatch, and approval-state digest comparison belong to later tasks.

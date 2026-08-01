@@ -13,7 +13,7 @@
     "streamId": "stream_1",
     "sequence": 1,
     "correlationId": "request_1",
-    "nonce": "nonce_0123456789abcdef",
+    "nonce": "AAECAwQFBgcICQoLDA0ODw",
     "signer": { "clientId": "client_1", "keyId": "key_1" },
     "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
   },

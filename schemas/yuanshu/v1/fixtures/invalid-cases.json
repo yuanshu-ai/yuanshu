@@ -18,6 +18,9 @@
     { "name": "padded operation digest", "source": "control", "type": "approval.resolve", "payloadSet": { "operationDigest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" } },
     { "name": "short Ed25519 signature", "source": "control", "type": "turn.start", "set": { "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } },
     { "name": "padded Ed25519 signature", "source": "control", "type": "turn.start", "set": { "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" } },
-    { "name": "non-base64url signature", "source": "control", "type": "turn.start", "set": { "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+" } }
+    { "name": "non-base64url signature", "source": "control", "type": "turn.start", "set": { "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+" } },
+    { "name": "short nonce", "source": "control", "type": "turn.start", "set": { "nonce": "short" } },
+    { "name": "padded nonce", "source": "control", "type": "turn.start", "set": { "nonce": "AAECAwQFBgcICQoLDA0ODw==" } },
+    { "name": "non-base64url nonce", "source": "control", "type": "turn.start", "set": { "nonce": "AAECAwQFBgcICQoLDA0OD+" } }
   ]
 }
