@@ -1,8 +1,0 @@
-./catalog.generated.go
-./compatibility.go
-./schema.generated.go
-./signing.go
-./stores.go
-./strictjson.go
-./types.generated.go
-./validator.go

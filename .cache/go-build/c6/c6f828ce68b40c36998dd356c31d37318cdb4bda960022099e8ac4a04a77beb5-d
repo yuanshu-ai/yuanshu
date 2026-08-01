@@ -1,6 +1,0 @@
-./autostart.go
-./fake.go
-./ipc.go
-./process.go
-./secure_store.go
-./workspace.go

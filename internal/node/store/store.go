@@ -28,8 +28,11 @@ type Store struct {
 }
 
 func Open(ctx context.Context, path string, options Options) (*Store, error) {
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if path == "" || !filepath.IsAbs(path) {
 		return nil, ErrInvalid
@@ -59,7 +62,7 @@ func Open(ctx context.Context, path string, options Options) (*Store, error) {
 		return nil, errors.New("node store file could not be prepared")
 	}
 
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite3", sqliteDSN(path))
 	if err != nil {
 		return nil, ErrCorrupt
 	}
@@ -74,6 +77,10 @@ func Open(ctx context.Context, path string, options Options) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func sqliteDSN(path string) string {
+	return filepath.ToSlash(path)
 }
 
 func (s *Store) initialize(ctx context.Context) error {
@@ -139,4 +146,11 @@ func timestamp(value time.Time) string {
 
 func internal(operation string) error {
 	return fmt.Errorf("node store %s failed", operation)
+}
+
+func requireContext(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	return ctx.Err()
 }

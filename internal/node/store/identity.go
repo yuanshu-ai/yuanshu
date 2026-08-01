@@ -20,6 +20,9 @@ type IdentityRecord struct {
 type IdentityFactory func(context.Context) (record IdentityRecord, rollback func(), err error)
 
 func (s *Store) Identity(ctx context.Context) (IdentityRecord, error) {
+	if err := requireContext(ctx); err != nil {
+		return IdentityRecord{}, err
+	}
 	db, err := s.database()
 	if err != nil {
 		return IdentityRecord{}, err
@@ -36,6 +39,9 @@ func (s *Store) Identity(ctx context.Context) (IdentityRecord, error) {
 }
 
 func (s *Store) LoadOrCreateIdentity(ctx context.Context, factory IdentityFactory) (IdentityRecord, bool, error) {
+	if err := requireContext(ctx); err != nil {
+		return IdentityRecord{}, false, err
+	}
 	if factory == nil {
 		return IdentityRecord{}, false, ErrInvalid
 	}
@@ -101,6 +107,9 @@ func (s *Store) LoadOrCreateIdentity(ctx context.Context, factory IdentityFactor
 }
 
 func (s *Store) BindIdentity(ctx context.Context, ownerID, nodeID string) error {
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
 	if ownerID == "" || nodeID == "" || len(ownerID) > 128 || len(nodeID) > 128 {
 		return ErrInvalid
 	}

@@ -6,6 +6,8 @@
 **/node_modules/
 /web/dist/
 /coverage/
+/.cache/
+/.tmp/
 *.tsbuildinfo
 *.log
 pnpm-debug.log*

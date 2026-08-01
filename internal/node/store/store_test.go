@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"database/sql"
@@ -86,6 +87,18 @@ func TestOpenRejectsInvalidFutureAndCorruptStores(t *testing.T) {
 	if _, err := Open(context.Background(), futurePath, Options{}); !errors.Is(err, ErrFutureSchema) {
 		t.Fatalf("future schema error = %v", err)
 	}
+	futureUserPath := filepath.Join(dir, "future-user-version.db")
+	futureUser, err := Open(context.Background(), futureUserPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := futureUser.db.Exec("PRAGMA user_version = 2"); err != nil {
+		t.Fatal(err)
+	}
+	_ = futureUser.Close()
+	if _, err := Open(context.Background(), futureUserPath, Options{}); !errors.Is(err, ErrFutureSchema) {
+		t.Fatalf("future user_version error = %v", err)
+	}
 
 	corruptPath := filepath.Join(dir, "corrupt.db")
 	if err := os.WriteFile(corruptPath, []byte("sqlite-corruption-canary"), 0o600); err != nil {
@@ -97,7 +110,7 @@ func TestOpenRejectsInvalidFutureAndCorruptStores(t *testing.T) {
 }
 
 func TestMigrationFailureRollsBack(t *testing.T) {
-	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "rollback.db"))
+	db, err := sql.Open("sqlite3", sqliteDSN(filepath.Join(t.TempDir(), "rollback.db")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +233,40 @@ func TestReplayStoreIsAtomicAndPersistent(t *testing.T) {
 	}
 }
 
+func TestReplayStoreIsAtomicAcrossStoreInstances(t *testing.T) {
+	first, path := openTestStore(t)
+	second, err := Open(context.Background(), path, Options{Clock: func() time.Time { return fixedNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	record := v1.ReplayRecord{OwnerID: "owner", NodeID: "node", ClientID: "client", KeyID: "key", MessageID: "cross-process", Nonce: "cross-process-nonce", Sequence: 1, NonceRetainTo: fixedNow.Add(time.Minute)}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, candidate := range []*Store{first, second} {
+		go func(local *Store) {
+			<-start
+			results <- local.CheckAndRecord(context.Background(), record)
+		}(candidate)
+	}
+	close(start)
+	var accepted, replayed int
+	for range 2 {
+		err := <-results
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, v1.ErrReplayDetected):
+			replayed++
+		default:
+			t.Fatalf("CheckAndRecord() error = %v", err)
+		}
+	}
+	if accepted != 1 || replayed != 1 {
+		t.Fatalf("accepted = %d, replayed = %d", accepted, replayed)
+	}
+}
+
 func TestOutboxIsBoundedOrderedAndIdempotent(t *testing.T) {
 	store, _ := openTestStore(t)
 	firstFrame := []byte(` {"signed":"bytes"} `)
@@ -278,6 +325,50 @@ func TestStoreErrorsDoNotExposeCanaries(t *testing.T) {
 	}
 	if _, err := store.Pending(context.Background(), 1); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed store error = %v", err)
+	}
+}
+
+func TestStoreHonorsCanceledContext(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.Pending(ctx, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Pending() error = %v", err)
+	}
+	if err := store.CheckAndRecord(ctx, v1.ReplayRecord{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CheckAndRecord() error = %v", err)
+	}
+	if _, err := Open(ctx, filepath.Join(t.TempDir(), "canceled.db"), Options{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Open() error = %v", err)
+	}
+}
+
+func TestIdentityFactoryRollbackAndBinding(t *testing.T) {
+	store, _ := openTestStore(t)
+	rollbackCalled := false
+	_, _, err := store.LoadOrCreateIdentity(context.Background(), func(context.Context) (IdentityRecord, func(), error) {
+		return IdentityRecord{Algorithm: "ed25519", PublicKey: make([]byte, 31), PrivateKeyRef: "ref", CreatedAt: fixedNow, UpdatedAt: fixedNow}, func() { rollbackCalled = true }, nil
+	})
+	if !errors.Is(err, ErrInvalid) || !rollbackCalled {
+		t.Fatalf("invalid factory = %v, rollback = %v", err, rollbackCalled)
+	}
+	public := bytesOf(3, ed25519.PublicKeySize)
+	record, created, err := store.LoadOrCreateIdentity(context.Background(), func(context.Context) (IdentityRecord, func(), error) {
+		return IdentityRecord{Algorithm: "ed25519", PublicKey: public, PrivateKeyRef: "identity/ref", CreatedAt: fixedNow, UpdatedAt: fixedNow}, nil, nil
+	})
+	if err != nil || !created || !bytes.Equal(record.PublicKey, public) {
+		t.Fatalf("LoadOrCreateIdentity() = %#v, %v, %v", record, created, err)
+	}
+	public[0] ^= 0xff
+	loaded, err := store.Identity(context.Background())
+	if err != nil || loaded.PublicKey[0] == public[0] {
+		t.Fatal("identity storage did not isolate public key bytes")
+	}
+	if err := store.BindIdentity(context.Background(), "owner", "node"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindIdentity(context.Background(), "other", "other"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("rebind error = %v", err)
 	}
 }
 

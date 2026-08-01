@@ -80,6 +80,13 @@ var nodeMigrations = []migration{{
 }}
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
+	var userVersion int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&userVersion); err != nil {
+		return ErrCorrupt
+	}
+	if userVersion > CurrentSchemaVersion {
+		return ErrFutureSchema
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return internal("migration")
@@ -98,6 +105,9 @@ func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
 	}
 	if current > CurrentSchemaVersion {
 		return ErrFutureSchema
+	}
+	if userVersion != 0 && userVersion != current {
+		return ErrCorrupt
 	}
 	for _, item := range nodeMigrations {
 		if item.version <= current {

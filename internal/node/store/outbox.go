@@ -20,6 +20,9 @@ type OutboxRecord struct {
 }
 
 func (s *Store) Enqueue(ctx context.Context, record OutboxRecord) error {
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
 	if !validOutbox(record) {
 		return ErrInvalid
 	}
@@ -50,6 +53,9 @@ func (s *Store) Enqueue(ctx context.Context, record OutboxRecord) error {
 }
 
 func (s *Store) Pending(ctx context.Context, limit int) ([]OutboxRecord, error) {
+	if err := requireContext(ctx); err != nil {
+		return nil, err
+	}
 	if limit < 1 || limit > 1000 {
 		return nil, ErrInvalid
 	}
@@ -84,6 +90,9 @@ func (s *Store) Pending(ctx context.Context, limit int) ([]OutboxRecord, error) 
 }
 
 func (s *Store) Acknowledge(ctx context.Context, messageID string) error {
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
 	if messageID == "" || len(messageID) > 128 {
 		return ErrInvalid
 	}
@@ -106,6 +115,9 @@ func (s *Store) Acknowledge(ctx context.Context, messageID string) error {
 }
 
 func (s *Store) OutboxRecord(ctx context.Context, messageID string) (OutboxRecord, error) {
+	if err := requireContext(ctx); err != nil {
+		return OutboxRecord{}, err
+	}
 	if messageID == "" || len(messageID) > 128 {
 		return OutboxRecord{}, ErrInvalid
 	}

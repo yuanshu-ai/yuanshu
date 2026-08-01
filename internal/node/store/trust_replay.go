@@ -16,6 +16,9 @@ var (
 )
 
 func (s *Store) PutTrustedKey(ctx context.Context, ref v1.KeyRef, key v1.TrustedKey) error {
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
 	if !validKeyRef(ref) || len(key.PublicKey) != ed25519.PublicKeySize || (key.Status != v1.TrustStatusActive && key.Status != v1.TrustStatusRevoked) {
 		return ErrInvalid
 	}
@@ -40,6 +43,9 @@ func (s *Store) PutTrustedKey(ctx context.Context, ref v1.KeyRef, key v1.Trusted
 }
 
 func (s *Store) RevokeTrustedKey(ctx context.Context, ref v1.KeyRef) error {
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
 	if !validKeyRef(ref) {
 		return ErrInvalid
 	}
@@ -61,6 +67,9 @@ func (s *Store) RevokeTrustedKey(ctx context.Context, ref v1.KeyRef) error {
 }
 
 func (s *Store) LookupControlKey(ctx context.Context, ref v1.KeyRef) (v1.TrustedKey, error) {
+	if err := requireContext(ctx); err != nil {
+		return v1.TrustedKey{}, err
+	}
 	if !validKeyRef(ref) {
 		return v1.TrustedKey{}, ErrInvalid
 	}
@@ -83,6 +92,9 @@ func (s *Store) LookupControlKey(ctx context.Context, ref v1.KeyRef) (v1.Trusted
 }
 
 func (s *Store) CheckAndRecord(ctx context.Context, record v1.ReplayRecord) error {
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
 	if !validReplayRecord(record) {
 		return ErrInvalid
 	}
@@ -90,7 +102,7 @@ func (s *Store) CheckAndRecord(ctx context.Context, record v1.ReplayRecord) erro
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return internal("replay transaction")
 	}
@@ -136,6 +148,9 @@ func (s *Store) CheckAndRecord(ctx context.Context, record v1.ReplayRecord) erro
 }
 
 func (s *Store) PruneExpiredNonces(ctx context.Context, before time.Time) (int64, error) {
+	if err := requireContext(ctx); err != nil {
+		return 0, err
+	}
 	db, err := s.database()
 	if err != nil {
 		return 0, err
