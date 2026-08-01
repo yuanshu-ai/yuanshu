@@ -89,7 +89,7 @@ yuanshu node         在 Agent 所在机器运行，并连接 Server
 yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 ```
 
-这些命令当前已提供无业务能力的工程占位入口。直接运行子命令会明确返回 `not implemented`；不会监听端口、启动 Agent 或创建本地数据。未来如果云服务器同时运行 Codex 或其他受支持 Agent，只需部署一个 Standalone，不需要再搭建第二套中转服务。Standalone 内部仍必须通过 Node 模块访问本机 Agent，Server 不能绕过本地策略和审批。不得把 Codex app-server 或其他 Agent 的内部接口直接暴露到公网。
+这些命令目前只在完整提供 `YUANSHU_POC_*` 配置时启用一次性的、仅 loopback 可用的 M0 工程 PoC；缺少配置会安全失败。它不是个人 MVP、生产部署或稳定协议。未来如果云服务器同时运行 Codex 或其他受支持 Agent，只需部署一个 Standalone，不需要再搭建第二套中转服务。Standalone 内部仍必须通过 Node 模块访问本机 Agent，Server 不能绕过本地策略和审批。不得把 Codex app-server 或其他 Agent 的内部接口直接暴露到公网。
 
 ## 项目状态
 
@@ -97,7 +97,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] 个人优先、一控多 Node 方向
 - [x] Codex 认证方式中立定位
 - [x] 可构建工作区、占位 CLI、Web 骨架与基础 CI
-- [ ] Codex app-server 技术验证
+- [x] M0 Codex app-server 与最小纵向链路技术验证
 - [ ] 跨语言协议和控制签名测试向量
 - [ ] Windows Yuanshu Node Alpha
 - [ ] Linux Server 与 Standalone 自托管预览版
@@ -111,7 +111,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 
 ## 本地开发
 
-AC-001 只建立可构建的工程骨架，不包含远程控制、网络监听、Agent 启动、认证或持久化能力。
+仓库现在包含临时的 `m0-poc-1` Gate G0 实现，只用于本地工程验证；正式配对、控制签名、持久化、生产证书和稳定 Adapter API 均未实现。
 
 环境要求：
 
@@ -137,7 +137,7 @@ pnpm --dir web test
 pnpm --dir web build
 ```
 
-查看不会启动服务的占位 CLI：
+查看不会启动服务的 CLI 帮助：
 
 ```shell
 go run ./cmd/yuanshu --help
@@ -147,6 +147,21 @@ go run ./cmd/yuanshu standalone --help
 ```
 
 仓库源文件统一使用 LF，以上命令面向 Windows、macOS 和 Linux。当前基础 CI 在 Windows 和 Linux 运行 Go 检查，在 Ubuntu 运行 Web 检查；更完整的发布矩阵由后续任务补充。
+
+### M0 PoC（仅开发验证）
+
+PoC 的 `server`、`node`、`standalone` 只接受显式临时配置：
+
+```text
+YUANSHU_POC_LISTEN=127.0.0.1:7443
+YUANSHU_POC_TLS_CERT=<localhost 证书 PEM>
+YUANSHU_POC_TLS_KEY=<localhost 私钥 PEM>
+YUANSHU_POC_NODE_TOKEN=<至少 32 个随机字节>
+YUANSHU_POC_SERVER_URL=wss://localhost:7443
+YUANSHU_POC_WORKSPACE=<已存在、非根目录的临时工作区>
+```
+
+`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` 仅用于有界测试。Server 会拒绝 wildcard、LAN 和公网监听地址。不得复用 PoC Token 或开发证书，也不得把当前构建暴露到 loopback 以外。
 
 ## 安全原则
 

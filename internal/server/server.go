@@ -4,13 +4,35 @@ package server
 import (
 	"context"
 	"errors"
+	"net/http"
+	"time"
+
+	"github.com/yuanshu-ai/yuanshu/internal/poc/config"
+	"github.com/yuanshu-ai/yuanshu/internal/poc/relay"
 )
 
-// ErrNotImplemented makes the pre-alpha placeholder explicit.
-var ErrNotImplemented = errors.New("server is not implemented")
+var ErrNotImplemented = errors.New("server PoC configuration is not available")
 
-// Run will compose the Web, control plane, and relay in a later task.
-// It deliberately returns before opening ports or starting services.
-func Run(context.Context) error {
-	return ErrNotImplemented
+// Run starts the explicitly configured, loopback-only M0 PoC Server.
+func Run(ctx context.Context) error {
+	cfg, err := config.ServerFromEnv()
+	if err != nil {
+		return errors.Join(ErrNotImplemented, err)
+	}
+	hub, err := relay.New(cfg.NodeToken)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Addr: cfg.Listen, Handler: hub.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+	err = srv.ListenAndServeTLS(cfg.Cert, cfg.Key)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Yuanshu M0 PoC</title>
+  <style>
+    :root{font:15px/1.45 system-ui,sans-serif;color:#17211b;background:#eef2ed}body{margin:0}main{max-width:42rem;margin:auto;padding:1rem}h1{font-size:1.35rem}.card{background:#fff;border:1px solid #cad3cc;border-radius:12px;padding:1rem;margin:.75rem 0}label{display:block;font-weight:650;margin-bottom:.4rem}textarea{box-sizing:border-box;width:100%;min-height:7rem;padding:.65rem}button{padding:.65rem .9rem;margin:.25rem .25rem .25rem 0}.status{display:grid;grid-template-columns:repeat(2,1fr);gap:.4rem}.events{white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto}.approval{border-left:4px solid #b46a00;padding-left:.7rem}.warn{color:#8a3600}
+  </style>
+</head>
+<body><main>
+  <h1>Yuanshu · 远枢 <small>M0 PoC</small></h1>
+  <section class="card status"><span>Node: <b id="node">offline</b></span><span>Task: <b id="task">idle</b></span><span>Sequence: <b id="seq">0</b></span><span>History: <b id="gap">complete</b></span></section>
+  <section class="card"><label for="prompt">Synthetic task</label><textarea id="prompt">Create the requested synthetic file and wait for approval.</textarea><button id="start">Start</button><button id="disconnect">Disconnect</button><button id="reconnect">Reconnect</button></section>
+  <section id="approvals" class="card"><b>Approvals</b></section>
+  <section class="card"><b>Events</b><div id="events" class="events"></div></section>
+</main><script src="/poc/app.js"></script></body></html>

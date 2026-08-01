@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"os"
+	"os/signal"
 
 	"github.com/yuanshu-ai/yuanshu/internal/cli"
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	os.Exit(cli.Run(
-		context.Background(),
+		ctx,
 		os.Args[1:],
 		os.Stdout,
 		os.Stderr,

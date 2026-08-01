@@ -89,7 +89,7 @@ yuanshu node         Local bridge connecting an Agent Runtime to a Server
 yuanshu standalone   Server + Web + local Node in one deployment
 ```
 
-These commands are available as non-operational engineering placeholders. Running a bare command exits with an explicit `not implemented` error; it does not open a port, start an Agent, or create local data. On a cloud server that also runs Codex or another supported agent, the planned deployment needs only one Standalone process and no second relay service. Standalone will still route local Agent access through the Node module, so Server code cannot bypass local policy and approvals. Codex app-server and other agents' internal interfaces must never be exposed directly to the public internet.
+These commands currently expose only the disposable, loopback-only M0 engineering PoC when every required `YUANSHU_POC_*` setting is supplied. Without explicit configuration they fail closed. This is not the personal MVP, a production deployment, or a stable protocol. On a cloud server that also runs Codex or another supported agent, the planned deployment needs only one Standalone process and no second relay service. Standalone still routes local Agent access through the Node module, so Server code cannot bypass local policy and approvals. Codex app-server and other agents' internal interfaces must never be exposed directly to the public internet.
 
 ## Project status
 
@@ -97,7 +97,7 @@ These commands are available as non-operational engineering placeholders. Runnin
 - [x] Personal-first, one-to-many-Node direction
 - [x] Authentication-neutral Codex positioning
 - [x] Buildable workspace, placeholder CLI, Web scaffold, and base CI
-- [ ] Codex app-server proof of concept
+- [x] M0 Codex app-server and minimal vertical proof of concept
 - [ ] Cross-language protocol and signed-control test vectors
 - [ ] Windows Yuanshu Node alpha
 - [ ] Linux Server and Standalone self-hosting preview
@@ -111,7 +111,7 @@ The roadmap establishes a reliable daily-use loop for one developer first, then 
 
 ## Development
 
-AC-001 establishes a buildable engineering scaffold only. It contains no remote-control, network-listening, Agent-starting, authentication, or persistence capability.
+The repository now contains the temporary `m0-poc-1` Gate G0 implementation. It is for local engineering validation only and intentionally omits formal pairing, signed controls, persistence, production certificates, and the stable Adapter API.
 
 Prerequisites:
 
@@ -137,7 +137,7 @@ pnpm --dir web test
 pnpm --dir web build
 ```
 
-Inspect the placeholder CLI without starting any service:
+Inspect the CLI without starting any service:
 
 ```shell
 go run ./cmd/yuanshu --help
@@ -147,6 +147,21 @@ go run ./cmd/yuanshu standalone --help
 ```
 
 The repository uses LF source files and supports these commands on Windows, macOS, and Linux. The base CI currently runs Go checks on Windows and Linux and Web checks on Ubuntu; broader release matrices belong to later tasks.
+
+### M0 PoC (developers only)
+
+The PoC supports `server`, `node`, and `standalone` only with explicit temporary configuration:
+
+```text
+YUANSHU_POC_LISTEN=127.0.0.1:7443
+YUANSHU_POC_TLS_CERT=<localhost certificate PEM>
+YUANSHU_POC_TLS_KEY=<localhost private key PEM>
+YUANSHU_POC_NODE_TOKEN=<at least 32 random bytes>
+YUANSHU_POC_SERVER_URL=wss://localhost:7443
+YUANSHU_POC_WORKSPACE=<existing non-root disposable directory>
+```
+
+`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` is reserved for bounded test runs. The Server rejects wildcard, LAN, and public listen addresses. Do not reuse the PoC token or development certificate, and do not expose this build outside loopback.
 
 ## Security principles
 

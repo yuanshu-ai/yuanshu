@@ -119,7 +119,7 @@ func TestRunnerErrorIsReported(t *testing.T) {
 	}
 }
 
-func TestDefaultRunnersAreNonOperationalPlaceholders(t *testing.T) {
+func TestDefaultRunnersFailSafelyWithoutPOCConfiguration(t *testing.T) {
 	t.Parallel()
 
 	for _, command := range []string{"server", "node", "standalone"} {
@@ -129,8 +129,8 @@ func TestDefaultRunnersAreNonOperationalPlaceholders(t *testing.T) {
 		if exitCode != 1 {
 			t.Fatalf("Run(%q) exit code = %d, want 1", command, exitCode)
 		}
-		if !strings.Contains(stderr.String(), "not implemented") {
-			t.Fatalf("Run(%q) stderr = %q, want not implemented", command, stderr.String())
+		if !strings.Contains(stderr.String(), "PoC configuration is not available") {
+			t.Fatalf("Run(%q) stderr = %q, want safe configuration failure", command, stderr.String())
 		}
 	}
 }

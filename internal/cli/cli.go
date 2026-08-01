@@ -17,7 +17,7 @@ Commands:
   node         Run the local Node bridge
   standalone   Run Server, Web, and the local Node together
 
-This pre-alpha build does not provide remote control capabilities.
+The temporary M0 PoC requires explicit YUANSHU_POC_* environment configuration.
 `
 
 var commandDescriptions = map[string]string{
@@ -64,7 +64,7 @@ func Run(
 	}
 
 	if len(args) == 2 && isHelp(args[1]) {
-		fmt.Fprintf(stdout, "Usage: yuanshu %s\n\n%s.\n\nThis pre-alpha command is not implemented.\n", command, description)
+		fmt.Fprintf(stdout, "Usage: yuanshu %s\n\n%s.\n\nThis temporary M0 PoC requires explicit YUANSHU_POC_* environment configuration.\n", command, description)
 		return 0
 	}
 
