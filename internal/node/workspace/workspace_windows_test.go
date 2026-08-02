@@ -40,6 +40,10 @@ func TestWindowsManagerRealPathLifecycle(t *testing.T) {
 	if err := manager.Reconcile(context.Background(), []config.WorkspaceConfig{configured}); err != nil {
 		t.Fatal(err)
 	}
+	registered, err := manager.Resolve(context.Background(), "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
 	existing := filepath.Join(root, "existing.txt")
 	if err := os.WriteFile(existing, []byte("synthetic"), 0o600); err != nil {
 		t.Fatal(err)
@@ -49,7 +53,7 @@ func TestWindowsManagerRealPathLifecycle(t *testing.T) {
 		t.Fatalf("existing ResolvePath = %+v, %v", resolved, err)
 	}
 	created, err := manager.ResolvePath(context.Background(), "windows", "new/deep.txt", PathWrite)
-	if err != nil || created.Exists || created.Path != filepath.Join(root, "new", "deep.txt") {
+	if err != nil || created.Exists || created.Path != filepath.Join(registered.CanonicalPath, "new", "deep.txt") {
 		t.Fatalf("create ResolvePath = %+v, %v", created, err)
 	}
 
