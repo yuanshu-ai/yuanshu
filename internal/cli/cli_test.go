@@ -49,7 +49,7 @@ func TestHelpDoesNotInvokeRunners(t *testing.T) {
 func TestMissingAndUnknownCommandsExitWithUsageError(t *testing.T) {
 	t.Parallel()
 
-	for _, args := range [][]string{nil, {"unknown"}, {"standalone", "unexpected"}} {
+	for _, args := range [][]string{nil, {"unknown"}} {
 		args := args
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			t.Parallel()
@@ -144,10 +144,10 @@ func TestDefaultServerRequiresExplicitDataDirectory(t *testing.T) {
 	}
 }
 
-func TestDefaultStandaloneFailsSafelyWithoutPOCConfiguration(t *testing.T) {
+func TestDefaultStandaloneRequiresExplicitPaths(t *testing.T) {
 	stderr := new(bytes.Buffer)
 	exitCode := Run(context.Background(), []string{"standalone"}, new(bytes.Buffer), stderr, DefaultRunners())
-	if exitCode != 1 || !strings.Contains(stderr.String(), "PoC configuration is not available") {
+	if exitCode != 2 || !strings.Contains(stderr.String(), "--data-dir") || !strings.Contains(stderr.String(), "--config") {
 		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
 	}
 }

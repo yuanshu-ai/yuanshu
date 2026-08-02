@@ -92,7 +92,7 @@ yuanshu node         在 Agent 所在机器运行，并连接 Server
 yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 ```
 
-`yuanshu node` 是正式的 Windows 当前用户会话 Alpha 入口：加载版本化本地配置、管理 Codex 子进程、提供当前用户专属管理管道和原生托盘。`yuanshu server` 现在会在显式 loopback 地址启动正式的最小元数据与 bootstrap 服务；`standalone` 仍是一次性的 M0 工程 PoC。不得把 Codex app-server 或其他 Agent 的内部接口直接暴露到公网。
+`yuanshu node` 是正式的 Windows 当前用户会话 Alpha 入口：加载版本化本地配置、管理 Codex 子进程、提供当前用户专属管理管道和原生托盘。`yuanshu server` 提供正式元数据、配对和实时路由；`yuanshu standalone` 现在通过进程内 `StandaloneTransport` 组装该 Server 与本机 Node，Server 不导入或调用 Agent Runtime。不得把 Codex app-server 或其他 Agent 的内部接口直接暴露到公网。
 
 ## 项目状态
 
@@ -105,6 +105,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] JCS + Ed25519 控制消息编码与跨语言测试向量
 - [x] Node 侧签名控制验证与原子防重放
 - [x] Transport 合约与 Relay/Standalone 共享行为测试
+- [x] 复用同一签名 Node 控制会话的正式 Standalone 组装
 - [x] Windows/macOS/Linux Platform 合约、安全骨架与状态化 fake
 - [x] Windows DPAPI 身份存储与本地工作区策略边界
 - [x] Node 管理的 Codex stdio Runtime、正式 Adapter 合约与 Thread/Turn 所有权
@@ -192,11 +193,21 @@ yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
 
 正式实时Handler强制TLS，使用Node连接凭据和Ed25519 challenge认证，并且不重新编码地路由Protocol v1原始帧。当前CLI仍启动loopback HTTP，因此两个WebSocket端点会返回 `tls_required`；证书参数和公网部署继续属于AC-306。Server 已提供 `/pair` 最小移动配对页，但真实手机访问仍须等待受信TLS与非loopback部署。不要通过反向代理或其他方式将loopback监听器暴露到本机以外。
 
+### 正式 Standalone 组装
+
+Standalone 要求版本化 Node 配置使用 `transport.mode = "standalone"`，并显式提供绝对路径。它在所选数据目录下分别保存 `server/server.db` 与 `node/node.db`，把本机 Node 领取到未初始化的本地 Server，并让原始签名 Protocol v1 帧经过与 Relay 模式相同的 Node 验证器和分派器：
+
+```powershell
+yuanshu standalone --data-dir C:\path\to\yuanshu-standalone --config C:\path\to\config.toml --listen 127.0.0.1:7444
+```
+
+当前命令仍只监听 loopback。Linux 进程/安全存储包装、受信 TLS、公开监听和产品容器明确留给 AC-306。
+
 仓库源文件统一使用 LF，以上命令面向 Windows、macOS 和 Linux。CI 在 Ubuntu 24.04 x64、Windows Server 2025 x64和 macOS 15 arm64原生运行 Go 门禁，并执行 Web/Protocol检查、固定容器中的 Linux race、依赖与 Secret扫描和 SPDX SBOM生成。成功的工作流会保留7天的 Windows amd64、Linux amd64和 Darwin arm64未签名构建工件；它们只是工程工件，不是可安装 Release，正式签名与产品容器镜像属于后续里程碑。
 
 ### M0 PoC（仅开发验证）
 
-隔离的内部 PoC 测试链路和 `standalone` PoC 使用以下显式临时配置：
+隔离的内部 M0 PoC 测试链路使用以下显式临时配置：
 
 ```text
 YUANSHU_POC_LISTEN=127.0.0.1:7443
@@ -207,7 +218,7 @@ YUANSHU_POC_SERVER_URL=wss://localhost:7443
 YUANSHU_POC_WORKSPACE=<已存在、非根目录的临时工作区>
 ```
 
-`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` 仅用于有界测试。这些变量不配置正式的 `yuanshu server` 或 `yuanshu node` 命令。不得复用 PoC Token 或开发证书，也不得把 PoC 暴露到 loopback 以外。
+`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` 仅用于有界测试。这些变量不配置正式的 `yuanshu server`、`yuanshu node` 或 `yuanshu standalone` 命令。不得复用 PoC Token 或开发证书，也不得把 PoC 暴露到 loopback 以外。
 
 ### Windows Node Alpha
 

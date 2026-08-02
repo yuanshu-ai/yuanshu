@@ -1,0 +1,217 @@
+package node
+
+import (
+	"context"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/yuanshu-ai/yuanshu/internal/adapter"
+	"github.com/yuanshu-ai/yuanshu/internal/node/eventlog"
+	"github.com/yuanshu-ai/yuanshu/internal/node/store"
+	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	"github.com/yuanshu-ai/yuanshu/internal/transport"
+)
+
+var controlSessionNow = time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+
+func TestControlSessionValidatesDispatchesAndReturnsDurableEvents(t *testing.T) {
+	serverSide, session, runtime, private := newControlSessionHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- session.Run(ctx) }()
+
+	raw := signedSessionControl(t, private, protocol.ControlDeviceSync, 1, map[string]any{}, nil, nil, nil, nil)
+	if err := serverSide.Send(ctx, transport.NewFrame(raw)); err != nil {
+		t.Fatal(err)
+	}
+	first := receiveSessionEvent(t, serverSide)
+	second := receiveSessionEvent(t, serverSide)
+	if first.Type != string(protocol.EventDeviceStatus) || first.Payload["runtime"] != "ready" {
+		t.Fatalf("device event = %#v", first)
+	}
+	if second.Type != string(protocol.EventControlResult) || second.CorrelationID != "message-1" || second.Payload["status"] != string(protocol.ControlResultConfirmed) {
+		t.Fatalf("control result = %#v", second)
+	}
+	if runtime.calls != 0 {
+		t.Fatalf("runtime calls = %d", runtime.calls)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+}
+
+func TestControlSessionThreadStartUsesAdapterBoundary(t *testing.T) {
+	serverSide, session, runtime, private := newControlSessionHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- session.Run(ctx) }()
+	workspace := "workspace"
+	raw := signedSessionControl(t, private, protocol.ControlThreadStart, 1, map[string]any{"input": "synthetic input"}, &workspace, nil, nil, nil)
+	if err := serverSide.Send(ctx, transport.NewFrame(raw)); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []protocol.EventType{protocol.EventThreadStarted, protocol.EventTurnStarted, protocol.EventControlResult} {
+		message := receiveSessionEvent(t, serverSide)
+		if message.Type != string(want) {
+			t.Fatalf("event = %q, want %q", message.Type, want)
+		}
+	}
+	if runtime.calls != 2 || runtime.lastInput != "synthetic input" {
+		t.Fatalf("runtime calls/input = %d/%q", runtime.calls, runtime.lastInput)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+}
+
+func TestControlSessionRejectsTamperedControlBeforeDispatch(t *testing.T) {
+	serverSide, session, runtime, private := newControlSessionHarness(t)
+	raw := signedSessionControl(t, private, protocol.ControlDeviceSync, 1, map[string]any{}, nil, nil, nil, nil)
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	document["ownerId"] = "other-owner"
+	raw, _ = json.Marshal(document)
+	done := make(chan error, 1)
+	go func() { done <- session.Run(context.Background()) }()
+	if err := serverSide.Send(context.Background(), transport.NewFrame(raw)); err != nil {
+		t.Fatal(err)
+	}
+	err := <-done
+	var validation *protocol.ValidationError
+	if !errors.As(err, &validation) || validation.Code != protocol.ErrorForbidden {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if runtime.calls != 0 {
+		t.Fatalf("tampered control reached runtime: %d calls", runtime.calls)
+	}
+}
+
+func newControlSessionHarness(t *testing.T) (transport.Transport, *ControlSession, *controlRuntime, ed25519.PrivateKey) {
+	t.Helper()
+	local, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "node.db"), store.Options{Clock: func() time.Time { return controlSessionNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = local.Close() })
+	public, private, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := protocol.KeyRef{OwnerID: "owner", NodeID: "node", ClientID: "client", KeyID: "key"}
+	if err := local.PutTrustedKey(context.Background(), ref, protocol.TrustedKey{PublicKey: public, Status: protocol.TrustStatusActive}); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := eventlog.NewManager(local, eventlog.Options{OwnerID: "owner", NodeID: "node", MaxAge: time.Hour, MaxBytes: 16 << 20, Clock: func() time.Time { return controlSessionNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator, err := protocol.NewValidator(protocol.Options{TrustStore: local, ReplayStore: local, Now: func() time.Time { return controlSessionNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverSide, nodeSide, err := transport.NewStandalonePair(transport.StandaloneOptions{QueueCapacity: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = serverSide.Close(); _ = nodeSide.Close() })
+	runtime := &controlRuntime{events: make(chan adapter.AgentEvent, 8)}
+	session, err := NewControlSession(ControlSessionOptions{
+		Transport: nodeSide, Validator: validator, Target: protocol.Target{OwnerID: "owner", NodeID: "node"}, Events: manager, Store: local, Runtime: runtime, DeviceName: "Synthetic Node",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return serverSide, session, runtime, private
+}
+
+func signedSessionControl(t *testing.T, private ed25519.PrivateKey, kind protocol.ControlType, sequence int64, payload map[string]any, workspace, thread, turn, item *string) []byte {
+	t.Helper()
+	expires := controlSessionNow.Add(time.Minute).Format(time.RFC3339Nano)
+	nonce := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef"))
+	message := protocol.YuanshuMessage{
+		ProtocolVersion: protocol.CurrentVersion, MessageID: "message-1", Type: string(kind), SentAt: controlSessionNow.Format(time.RFC3339Nano),
+		OwnerID: "owner", NodeID: "node", WorkspaceID: workspace, ThreadID: thread, TurnID: turn, ItemID: item,
+		StreamID: "control-stream", Sequence: sequence, CorrelationID: "correlation-1", Payload: payload,
+		ExpiresAt: &expires, Nonce: &nonce, Signer: &protocol.Signer{ClientID: "client", KeyID: "key"},
+	}
+	input, err := protocol.ControlSigningInput(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, input))
+	message.Signature = &signature
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func receiveSessionEvent(t *testing.T, endpoint transport.Transport) protocol.YuanshuMessage {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	frame, err := endpoint.Receive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := protocol.ParseEvent(frame.Bytes())
+	if err != nil {
+		t.Fatalf("ParseEvent() = %v", err)
+	}
+	return message
+}
+
+type controlRuntime struct {
+	events    chan adapter.AgentEvent
+	calls     int
+	lastInput string
+}
+
+func (r *controlRuntime) ListThreads(context.Context, adapter.ListThreadsRequest) (adapter.ThreadPage, error) {
+	r.calls++
+	return adapter.ThreadPage{}, nil
+}
+func (r *controlRuntime) ReadThread(context.Context, adapter.ReadThreadRequest) (adapter.ThreadSnapshot, error) {
+	r.calls++
+	return adapter.ThreadSnapshot{Thread: adapter.Thread{ID: "thread", WorkspaceID: "workspace", Status: "idle"}}, nil
+}
+func (r *controlRuntime) StartThread(_ context.Context, request adapter.StartThreadRequest) (adapter.Thread, error) {
+	r.calls++
+	return adapter.Thread{ID: "thread", WorkspaceID: request.WorkspaceID, Status: "idle"}, nil
+}
+func (r *controlRuntime) ResumeThread(_ context.Context, request adapter.ResumeThreadRequest) (adapter.Thread, error) {
+	r.calls++
+	return adapter.Thread{ID: request.ThreadID, WorkspaceID: request.WorkspaceID, Status: "idle"}, nil
+}
+func (r *controlRuntime) StartTurn(_ context.Context, request adapter.StartTurnRequest) (adapter.Turn, error) {
+	r.calls++
+	r.lastInput = request.Input
+	return adapter.Turn{ID: "turn", ThreadID: request.ThreadID, Status: "inProgress"}, nil
+}
+func (r *controlRuntime) SteerTurn(context.Context, adapter.SteerTurnRequest) error {
+	r.calls++
+	return nil
+}
+func (r *controlRuntime) InterruptTurn(context.Context, adapter.InterruptTurnRequest) error {
+	r.calls++
+	return nil
+}
+func (r *controlRuntime) ResolveApproval(context.Context, adapter.ApprovalDecision) error {
+	r.calls++
+	return nil
+}
+func (r *controlRuntime) Events() <-chan adapter.AgentEvent { return r.events }
+func (r *controlRuntime) Health() adapter.HealthStatus      { return adapter.HealthStatus{State: "ready"} }
+func (r *controlRuntime) Close(context.Context) error       { return nil }

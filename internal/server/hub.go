@@ -73,6 +73,24 @@ type hubConnection struct {
 	relay     transport.Transport
 }
 
+// AttachLocalNode registers an already authenticated in-process Node
+// transport. Remote Nodes must continue to authenticate through NodeHandler.
+func (h *Hub) AttachLocalNode(ctx context.Context, ownerID, nodeID string, local transport.Transport) error {
+	if ctx == nil || local == nil || !validOpaque(ownerID, 128) || !validOpaque(nodeID, 128) {
+		return ErrInvalid
+	}
+	connection := &hubConnection{ownerID: ownerID, subjectID: nodeID, role: transport.SessionRoleNode, relay: local}
+	if !h.register(connection) {
+		return errors.New("server hub is closed")
+	}
+	defer func() {
+		h.unregister(connection)
+		_ = local.Close()
+	}()
+	h.route(ctx, connection)
+	return nil
+}
+
 func NewHub(store sessionStore, options HubOptions) (*Hub, error) {
 	if store == nil || options.QueueCapacity < 0 || options.AuthenticationTimeout < 0 || options.ChallengeTTL < 0 || options.HeartbeatInterval < 0 || options.IdleTimeout < 0 || options.MaxConnections < 0 {
 		return nil, ErrInvalid

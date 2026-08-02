@@ -8,6 +8,7 @@ import (
 
 	"github.com/yuanshu-ai/yuanshu/internal/node"
 	"github.com/yuanshu-ai/yuanshu/internal/server"
+	"github.com/yuanshu-ai/yuanshu/internal/standalone"
 )
 
 const usage = `Yuanshu · 远枢
@@ -21,7 +22,7 @@ Commands:
   node         Run the local Node bridge
   standalone   Run Server, Web, and the local Node together
 
-The Server and Windows Node commands are formal Alpha entry points. Standalone remains a temporary M0 PoC entry point.
+Server, Node, and Standalone are formal Alpha entry points.
 `
 
 var commandDescriptions = map[string]string{
@@ -60,7 +61,7 @@ func Run(
 	}
 
 	command := args[0]
-	description, known := commandDescriptions[command]
+	_, known := commandDescriptions[command]
 	if !known {
 		fmt.Fprintf(stderr, "error: unknown command %q\n", command)
 		fmt.Fprint(stderr, usage)
@@ -76,13 +77,8 @@ func Run(
 			fmt.Fprint(stdout, server.Usage)
 			return 0
 		}
-		fmt.Fprintf(stdout, "Usage: yuanshu %s\n\n%s.\n\nThis role remains a temporary M0 PoC and requires explicit YUANSHU_POC_* environment configuration.\n", command, description)
+		fmt.Fprint(stdout, standalone.Usage)
 		return 0
-	}
-
-	if command == "standalone" && len(args) != 1 {
-		fmt.Fprintf(stderr, "error: unexpected arguments for %q\n", command)
-		return 2
 	}
 
 	runner := selectRunner(command, runners)
@@ -92,10 +88,12 @@ func Run(
 	}
 
 	if err := runner(ctx, args[1:], stdout, stderr); err != nil {
-		if errors.Is(err, node.ErrUsage) || errors.Is(err, server.ErrUsage) {
+		if errors.Is(err, node.ErrUsage) || errors.Is(err, server.ErrUsage) || errors.Is(err, standalone.ErrUsage) {
 			fmt.Fprintf(stderr, "error: invalid arguments for %q\n", command)
 			if command == "server" {
 				fmt.Fprint(stderr, server.Usage)
+			} else if command == "standalone" {
+				fmt.Fprint(stderr, standalone.Usage)
 			} else {
 				fmt.Fprint(stderr, node.Usage)
 			}

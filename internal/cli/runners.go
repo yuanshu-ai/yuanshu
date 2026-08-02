@@ -1,9 +1,6 @@
 package cli
 
 import (
-	"context"
-	"io"
-
 	"github.com/yuanshu-ai/yuanshu/internal/node"
 	"github.com/yuanshu-ai/yuanshu/internal/server"
 	"github.com/yuanshu-ai/yuanshu/internal/standalone"
@@ -14,6 +11,6 @@ func DefaultRunners() Runners {
 	return Runners{
 		Server:     server.Command,
 		Node:       node.Command,
-		Standalone: func(ctx context.Context, _ []string, _ io.Writer, _ io.Writer) error { return standalone.Run(ctx) },
+		Standalone: standalone.Command,
 	}
 }

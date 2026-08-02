@@ -16,6 +16,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
+	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
 
@@ -33,12 +34,18 @@ type host struct {
 	options runOptions
 	status  *statusStore
 	log     *operationalLog
+	runCtx  context.Context
 
-	mu      sync.Mutex
-	local   *store.Store
-	runtime adapter.Runtime
-	pairing *pairingManager
-	relay   transport.Transport
+	mu               sync.Mutex
+	local            *store.Store
+	runtime          adapter.Runtime
+	pairing          *pairingManager
+	relay            transport.Transport
+	sessionCancel    context.CancelFunc
+	controlEvents    *eventlog.Manager
+	controlValidator *protocolv1.Validator
+	controlTarget    protocolv1.Target
+	controlName      string
 }
 
 func runHost(ctx context.Context, options runOptions) error {
@@ -59,7 +66,7 @@ func runHost(ctx context.Context, options runOptions) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	h := &host{options: options, status: newStatusStore(string(options.platform.Family())), log: newOperationalLog(options.paths.log)}
+	h := &host{options: options, status: newStatusStore(string(options.platform.Family())), log: newOperationalLog(options.paths.log), runCtx: runCtx}
 	h.refreshAutostart(runCtx)
 	server, err := startLocalServer(runCtx, options.platform.IPC(), h.status.snapshot, cancel, h.handleLocalManagement)
 	if err != nil {
@@ -238,6 +245,33 @@ func (h *host) reload(ctx context.Context) error {
 	} else if needsRecovery {
 		h.status.update(func(value *Status) { value.Recovery = "deferred_unpaired" })
 	}
+	if bound && h.relay != nil {
+		runtime, err := adapterInstance.StartRuntime(ctx)
+		if err != nil {
+			return h.fail("codex_unavailable")
+		}
+		manager, err := eventlog.NewManager(local, eventlog.Options{
+			OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID,
+			MaxAge:   time.Duration(loaded.Config.Events.MaxAgeHours) * time.Hour,
+			MaxBytes: int64(loaded.Config.Events.MaxSizeMiB) << 20,
+		})
+		if err != nil {
+			_ = runtime.Close(context.Background())
+			return h.fail("recovery_unavailable")
+		}
+		validator, err := protocolv1.NewValidator(protocolv1.Options{TrustStore: local, ReplayStore: local})
+		if err != nil {
+			_ = runtime.Close(context.Background())
+			return h.fail("recovery_unavailable")
+		}
+		h.runtime = runtime
+		h.controlEvents, h.controlValidator = manager, validator
+		h.controlTarget = protocolv1.Target{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID}
+		h.controlName = loaded.Config.Host.Name
+		if err := h.startControlSessionLocked(); err != nil {
+			return h.fail("recovery_unavailable")
+		}
+	}
 	state := "ready"
 	if !bound {
 		state = "unpaired"
@@ -288,6 +322,12 @@ func (h *host) close() error {
 
 func (h *host) closeResourcesLocked() error {
 	var result error
+	if h.sessionCancel != nil {
+		h.sessionCancel()
+		h.sessionCancel = nil
+	}
+	h.controlEvents, h.controlValidator = nil, nil
+	h.controlTarget, h.controlName = protocolv1.Target{}, ""
 	if h.relay != nil {
 		if err := h.relay.Close(); err != nil {
 			result = errors.New("relay close failed")
@@ -363,14 +403,22 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 		}
 	case "credential_rotate":
 		if err := h.pairing.RotateCredential(ctx); err == nil {
+			if h.sessionCancel != nil {
+				h.sessionCancel()
+				h.sessionCancel = nil
+			}
 			if h.relay != nil {
 				_ = h.relay.Close()
 				h.relay = nil
 			}
 			if relay, connectErr := h.pairing.Connect(ctx); connectErr == nil {
 				h.relay = relay
-				h.status.update(func(value *Status) { value.RemoteControl = "online" })
-				response.OK = true
+				if sessionErr := h.startControlSessionLocked(); sessionErr == nil {
+					h.status.update(func(value *Status) { value.RemoteControl = "online" })
+					response.OK = true
+				} else {
+					response.Error = "rotation_failed"
+				}
 			} else {
 				h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
 				response.Error = "rotation_failed"
@@ -382,6 +430,32 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 		response.Error = "unsupported_command"
 	}
 	return response
+}
+
+func (h *host) startControlSessionLocked() error {
+	if h.relay == nil || h.runtime == nil || h.controlEvents == nil || h.controlValidator == nil || h.local == nil || h.runCtx == nil {
+		return errors.New("node control session is unavailable")
+	}
+	if h.sessionCancel != nil {
+		h.sessionCancel()
+	}
+	session, err := NewControlSession(ControlSessionOptions{
+		Transport: h.relay, Validator: h.controlValidator, Target: h.controlTarget,
+		Events: h.controlEvents, Store: h.local, Runtime: h.runtime, DeviceName: h.controlName,
+	})
+	if err != nil {
+		return err
+	}
+	sessionCtx, cancel := context.WithCancel(h.runCtx)
+	h.sessionCancel = cancel
+	go func() {
+		if err := session.Run(sessionCtx); err != nil && sessionCtx.Err() == nil {
+			h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
+			h.options.trayUpdate(h.status.snapshot())
+			h.log.write("node_error", "control_session_unavailable", 0)
+		}
+	}()
+	return nil
 }
 
 func (o runOptions) trayUpdate(status Status) {

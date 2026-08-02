@@ -14,7 +14,14 @@ import (
 	"time"
 
 	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
+	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
+
+type LocalNodeSession struct {
+	OwnerID   string
+	NodeID    string
+	Transport transport.Transport
+}
 
 type Options struct {
 	DataDir         string
@@ -24,6 +31,7 @@ type Options struct {
 	Clock           func() time.Time
 	Listener        net.Listener
 	ShutdownTimeout time.Duration
+	LocalNode       *LocalNodeSession
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -99,14 +107,22 @@ func Run(ctx context.Context, options Options) error {
 		MaxHeaderBytes:    16 << 10,
 	}
 	done := make(chan struct{})
+	localDone := make(chan error, 1)
+	if options.LocalNode != nil {
+		go func() {
+			localDone <- hub.AttachLocalNode(ctx, options.LocalNode.OwnerID, options.LocalNode.NodeID, options.LocalNode.Transport)
+		}()
+	}
 	go func() {
 		select {
 		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-			defer cancel()
-			_ = httpServer.Shutdown(shutdownCtx)
+		case <-localDone:
 		case <-done:
+			return
 		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		_ = httpServer.Shutdown(shutdownCtx)
 	}()
 	err = httpServer.Serve(listener)
 	close(done)
@@ -129,6 +145,9 @@ func validateRunOptions(options Options) error {
 		return ErrInvalid
 	}
 	if host != "127.0.0.1" && host != "::1" {
+		return ErrInvalid
+	}
+	if options.LocalNode != nil && (options.LocalNode.Transport == nil || options.LocalNode.OwnerID == "" || options.LocalNode.NodeID == "") {
 		return ErrInvalid
 	}
 	return nil

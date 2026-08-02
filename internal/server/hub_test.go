@@ -128,6 +128,43 @@ func TestHubRoutesRawFramesInBothDirections(t *testing.T) {
 	}
 }
 
+func TestHubRoutesRemoteControlThroughStandaloneLocalNode(t *testing.T) {
+	fixture := newHubFixture(t)
+	serverSide, nodeSide, err := transport.NewStandalonePair(transport.StandaloneOptions{QueueCapacity: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nodeSide.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attached := make(chan error, 1)
+	go func() { attached <- fixture.hub.AttachLocalNode(ctx, "own_test", "nod_test", serverSide) }()
+	control := fixture.dialControl(t)
+	defer control.Close()
+	waitHubSnapshot(t, fixture.hub, 1, 1)
+
+	controlRaw := []byte(` {"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"nod_test","payload":{}} `)
+	if err := control.Send(context.Background(), transport.NewFrame(controlRaw)); err != nil {
+		t.Fatal(err)
+	}
+	received, err := nodeSide.Receive(context.Background())
+	if err != nil || !bytes.Equal(received.Bytes(), controlRaw) {
+		t.Fatalf("local Node received=%q err=%v", received.Bytes(), err)
+	}
+	eventRaw := []byte(`{"protocolVersion":"1.0","type":"runtime.status","ownerId":"own_test","nodeId":"nod_test","payload":{"status":"ready"}}`)
+	if err := nodeSide.Send(context.Background(), transport.NewFrame(eventRaw)); err != nil {
+		t.Fatal(err)
+	}
+	forwarded, err := control.Receive(context.Background())
+	if err != nil || !bytes.Equal(forwarded.Bytes(), eventRaw) {
+		t.Fatalf("Control received=%q err=%v", forwarded.Bytes(), err)
+	}
+	cancel()
+	if err := <-attached; err != nil {
+		t.Fatalf("AttachLocalNode() = %v", err)
+	}
+}
+
 func TestHubRejectsPlaintextOriginCredentialAndTargetSpoofing(t *testing.T) {
 	fixture := newHubFixture(t)
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/node/connect", nil)

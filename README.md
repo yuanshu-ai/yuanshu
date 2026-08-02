@@ -92,7 +92,7 @@ yuanshu node         Local bridge connecting an Agent Runtime to a Server
 yuanshu standalone   Server + Web + local Node in one deployment
 ```
 
-`yuanshu node` is the formal Windows user-session Alpha entry. It loads the versioned local configuration, owns Codex child processes, exposes a current-user-only management pipe, and provides a native tray icon. `yuanshu server` now starts the formal minimal metadata and bootstrap service on an explicit loopback address. `standalone` remains the disposable M0 engineering PoC. Codex app-server and other agent internals must never be exposed directly to the public internet.
+`yuanshu node` is the formal Windows user-session Alpha entry. It loads the versioned local configuration, owns Codex child processes, exposes a current-user-only management pipe, and provides a native tray icon. `yuanshu server` starts the formal metadata, pairing, and realtime routing service. `yuanshu standalone` now composes that Server with a local Node over the in-process `StandaloneTransport`; the Server never imports or calls an Agent Runtime. Codex app-server and other agent internals must never be exposed directly to the public internet.
 
 ## Project status
 
@@ -105,6 +105,7 @@ yuanshu standalone   Server + Web + local Node in one deployment
 - [x] JCS + Ed25519 control encoding and cross-language test vectors
 - [x] Node-side signed control validation and atomic replay protection
 - [x] Transport contract and shared Relay/Standalone behavior tests
+- [x] Formal Standalone composition through the same signed Node control session
 - [x] Windows/macOS/Linux Platform contract, safe skeletons, and stateful fakes
 - [x] Windows DPAPI identity storage and local workspace policy boundary
 - [x] Node-managed Codex stdio Runtime, formal Adapter contract, and Thread/Turn ownership
@@ -210,11 +211,21 @@ On an uninitialized data directory, the Server prints a 32-byte bootstrap secret
 
 The formal realtime handlers require TLS, authenticate Node credentials plus Ed25519 challenges, and route immutable Protocol v1 frames without re-encoding them. The current CLI still starts loopback HTTP, so its WebSocket endpoints return `tls_required`; certificate flags and public deployment remain AC-306. The Server now exposes a minimal mobile pairing page at `/pair`, but real-phone access still waits for trusted TLS and non-loopback deployment. Do not expose the loopback listener through a reverse proxy or outside the local machine.
 
+### Formal Standalone composition
+
+Standalone requires a versioned Node configuration with `transport.mode = "standalone"` and explicit absolute paths. It keeps `server/server.db` and `node/node.db` separate beneath the selected data directory, enrolls the local Node into an uninitialized local Server, and routes raw signed Protocol v1 frames through the same Node validator and dispatcher used by Relay mode:
+
+```powershell
+yuanshu standalone --data-dir C:\path\to\yuanshu-standalone --config C:\path\to\config.toml --listen 127.0.0.1:7444
+```
+
+The current command remains loopback-only. Linux process/security-store packaging, trusted TLS, public listening, and product containers are deliberately deferred to AC-306.
+
 The repository uses LF source files and supports these commands on Windows, macOS, and Linux. CI runs native Go checks on Ubuntu 24.04 x64, Windows Server 2025 x64, and macOS 15 arm64; Web/Protocol checks, a pinned-container Linux race suite, dependency and Secret scanning, and an SPDX SBOM are release gates. Successful runs retain unsigned Windows amd64, Linux amd64, and Darwin arm64 build artifacts for seven days. These are engineering artifacts, not installable releases; signed releases and product container images remain later milestones.
 
 ### M0 PoC (developers only)
 
-The isolated internal PoC harness and the `standalone` PoC use explicit temporary configuration:
+The isolated internal M0 PoC test harness uses explicit temporary configuration:
 
 ```text
 YUANSHU_POC_LISTEN=127.0.0.1:7443
@@ -225,7 +236,7 @@ YUANSHU_POC_SERVER_URL=wss://localhost:7443
 YUANSHU_POC_WORKSPACE=<existing non-root disposable directory>
 ```
 
-`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` is reserved for bounded test runs. These settings do not configure the formal `yuanshu server` or `yuanshu node` commands. Do not reuse the PoC token or development certificate, and do not expose the PoC outside loopback.
+`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` is reserved for bounded test runs. These settings do not configure the formal `yuanshu server`, `yuanshu node`, or `yuanshu standalone` commands. Do not reuse the PoC token or development certificate, and do not expose the PoC outside loopback.
 
 ## Security principles
 
