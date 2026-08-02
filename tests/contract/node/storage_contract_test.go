@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/config"
+	"github.com/yuanshu-ai/yuanshu/internal/node/eventlog"
 	"github.com/yuanshu-ai/yuanshu/internal/node/identity"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
@@ -83,6 +85,43 @@ func TestIdentitySecurityAndOutboxSurviveRestart(t *testing.T) {
 	pending, err := reopened.Pending(ctx, 10)
 	if err != nil || len(pending) != 1 || !bytes.Equal(pending[0].Frame, frame) {
 		t.Fatalf("reloaded outbox = %#v, %v", pending, err)
+	}
+}
+
+func TestEventLogAndOutboxRecoverTogether(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "node-events.db")
+	local, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := eventlog.NewManager(local, eventlog.Options{OwnerID: "owner", NodeID: "node", MaxAge: 24 * time.Hour, MaxBytes: 16 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := journal.Publish(ctx, adapter.AgentEvent{Type: v1.EventRuntimeStatus, Payload: map[string]any{"state": "ready"}})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("Publish = %#v, %v", records, err)
+	}
+	if err := local.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	restarted, err := eventlog.NewManager(reopened, eventlog.Options{OwnerID: "owner", NodeID: "node", MaxAge: 24 * time.Hour, MaxBytes: 16 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := restarted.Replay(ctx, 0, 10)
+	if err != nil || len(batch.Records) != 1 || batch.Records[0].Sequence != 1 {
+		t.Fatalf("Replay after restart = %#v, %v", batch, err)
+	}
+	pending, err := reopened.Pending(ctx, 10)
+	if err != nil || len(pending) != 1 || !bytes.Equal(pending[0].Frame, batch.Records[0].Frame) {
+		t.Fatalf("outbox after restart = %#v, %v", pending, err)
 	}
 }
 

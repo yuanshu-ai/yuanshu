@@ -107,6 +107,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] Windows/macOS/Linux Platform 合约、安全骨架与状态化 fake
 - [x] Windows DPAPI 身份存储与本地工作区策略边界
 - [x] Node 管理的 Codex stdio Runtime、正式 Adapter 合约与 Thread/Turn 所有权
+- [x] 有界 Node 事件日志、cursor 补发、Snapshot 与 ambiguous 恢复
 - [ ] Windows Yuanshu Node Alpha
 - [ ] Linux Server 与 Standalone 自托管预览版
 - [ ] 自托管设备与控制端配对
@@ -119,7 +120,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 
 ## 本地开发
 
-仓库同时包含保持隔离的 `m0-poc-1` Gate G0 实现和正式的内部 CodexAdapter 基础。正式 Adapter 使用 Node 管理的 stdio app-server、本地 workspace ID、有界事件、一次性审批和持久 Thread 所有权；目前尚未接入公开 CLI、Server、Transport 或 PWA。
+仓库同时包含保持隔离的 `m0-poc-1` Gate G0 实现和正式的内部 CodexAdapter 基础。正式 Adapter 使用 Node 管理的 stdio app-server、本地 workspace ID、有界事件、一次性审批和持久 Thread 所有权。Node SQLite 现已支持单调事件序号、有界保留、outbox cursor确认、补发、Snapshot，以及对不确定 Turn 的保守对账；目前尚未接入公开 CLI、Server、Transport 或 PWA。
 
 环境要求：
 
@@ -163,7 +164,7 @@ pnpm protocol:test
 
 版本化 Node 配置合约使用严格 TOML，由 `schemas/config/v1/node-config.schema.json` 定义。当前只接受 `relay`、`standalone` 和 Codex `stdio`。设备、Relay 与代理凭据只能表示为不透明 SecretRef；配置文件不会包含凭据字节，安全存储不可用时也绝不降级为明文。
 
-配置包支持原子替换、最近有效的 `.bak` 备份、显式恢复状态和脱敏 SecretRef 健康检查。Windows 上的配置工作区现在可以协调到 Node 本地 SQLite 策略库；远程调用方只使用不透明 workspace ID，canonical path、稳定文件身份、reparse point 检查及读写/网络权限上限始终留在本机。正式 CodexAdapter 现已消费该边界，并且只在 SQLite 保存 Runtime Thread 所有权与状态；事件补发、默认操作系统路径、Runner 组装和设置界面属于后续任务。
+配置包支持原子替换、最近有效的 `.bak` 备份、显式恢复状态和脱敏 SecretRef 健康检查。Windows 上的配置工作区现在可以协调到 Node 本地 SQLite 策略库；远程调用方只使用不透明 workspace ID，canonical path、稳定文件身份、reparse point 检查及读写/网络权限上限始终留在本机。正式 CodexAdapter 现已消费该边界，其 Protocol v1 映射事件可与 outbox 一同写入本地 SQLite；cursor补发、history gap、Snapshot和保守 ambiguous恢复可跨 Node重启延续。默认操作系统路径、Runner组装、真实 Relay接线和设置界面仍属于后续任务。
 
 查看不会启动服务的 CLI 帮助：
 

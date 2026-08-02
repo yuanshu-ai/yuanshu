@@ -148,14 +148,15 @@ type Approval struct {
 }
 
 type AgentEvent struct {
-	Type        protocol.EventType
-	WorkspaceID string
-	ThreadID    string
-	TurnID      string
-	ItemID      string
-	Payload     any
-	Approval    *Approval
-	Ambiguous   bool
+	Type          protocol.EventType
+	CorrelationID string
+	WorkspaceID   string
+	ThreadID      string
+	TurnID        string
+	ItemID        string
+	Payload       any
+	Approval      *Approval
+	Ambiguous     bool
 }
 
 type HealthStatus struct {

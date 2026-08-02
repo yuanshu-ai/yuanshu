@@ -98,7 +98,7 @@ func (r *Runtime) handleCommandApproval(client *appserver.Client, message appser
 		_ = client.Respond(*message.ID, map[string]string{"decision": "decline"}, nil)
 		return
 	}
-	operation := map[string]any{"command": params.Command, "cwd": cwd}
+	operation := map[string]any{"command": redactWorkspace(params.Command, resolved.CanonicalPath), "cwd": cwd}
 	if len(params.CommandActions) > 0 && string(params.CommandActions) != "null" {
 		var actions any
 		if json.Unmarshal(params.CommandActions, &actions) == nil {
@@ -376,7 +376,9 @@ func (r *Runtime) handleItem(message appserver.Message) {
 		} else {
 			eventType = protocol.EventCommandStarted
 		}
-		payload["command"] = params.Item.Command
+		if resolved, err := r.options.Workspaces.Resolve(context.Background(), record.WorkspaceID); err == nil {
+			payload["command"] = redactWorkspace(params.Item.Command, resolved.CanonicalPath)
+		}
 	case "fileChange":
 		if !completed {
 			return

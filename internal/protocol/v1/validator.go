@@ -119,6 +119,22 @@ func NewValidator(options Options) (*Validator, error) {
 		options.Now = time.Now
 	}
 
+	schema, err := protocolSchema()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Validator{
+		trustStore:  options.TrustStore,
+		replayStore: options.ReplayStore,
+		now:         options.Now,
+		maxTTL:      options.MaxTTL,
+		clockSkew:   options.ClockSkew,
+		schema:      schema,
+	}, nil
+}
+
+func protocolSchema() (*jsonschema.Schema, error) {
 	compiledProtocolSchemaOnce.Do(func() {
 		document, err := jsonschema.UnmarshalJSON(strings.NewReader(protocolSchemaJSON))
 		if err != nil {
@@ -140,15 +156,7 @@ func NewValidator(options Options) (*Validator, error) {
 	if compiledProtocolSchemaErr != nil {
 		return nil, compiledProtocolSchemaErr
 	}
-
-	return &Validator{
-		trustStore:  options.TrustStore,
-		replayStore: options.ReplayStore,
-		now:         options.Now,
-		maxTTL:      options.MaxTTL,
-		clockSkew:   options.ClockSkew,
-		schema:      compiledProtocolSchema,
-	}, nil
+	return compiledProtocolSchema, nil
 }
 
 type ecmaScriptRegexp regexp2.Regexp

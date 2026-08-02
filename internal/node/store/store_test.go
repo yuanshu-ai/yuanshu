@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,7 +93,7 @@ func TestOpenRejectsInvalidFutureAndCorruptStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := futureUser.db.Exec("PRAGMA user_version = 4"); err != nil {
+	if _, err := futureUser.db.Exec("PRAGMA user_version = " + strconv.Itoa(CurrentSchemaVersion+1)); err != nil {
 		t.Fatal(err)
 	}
 	_ = futureUser.Close()

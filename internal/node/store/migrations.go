@@ -113,6 +113,85 @@ var nodeMigrations = []migration{
 			`CREATE INDEX runtime_threads_workspace ON runtime_threads(workspace_id, thread_id)`,
 		},
 	},
+	{
+		version: 4,
+		name:    "event_log_recovery",
+		statements: []string{
+			`CREATE TABLE event_streams (
+				owner_id TEXT NOT NULL CHECK (length(owner_id) BETWEEN 1 AND 128),
+				node_id TEXT NOT NULL CHECK (length(node_id) BETWEEN 1 AND 128),
+				stream_id TEXT NOT NULL CHECK (length(stream_id) BETWEEN 1 AND 128),
+				latest_sequence INTEGER NOT NULL DEFAULT 0 CHECK (latest_sequence BETWEEN 0 AND 9007199254740991),
+				total_bytes INTEGER NOT NULL DEFAULT 0 CHECK (total_bytes >= 0),
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (owner_id, node_id, stream_id)
+			) STRICT`,
+			`CREATE TABLE event_log (
+				owner_id TEXT NOT NULL,
+				node_id TEXT NOT NULL,
+				stream_id TEXT NOT NULL,
+				sequence INTEGER NOT NULL CHECK (sequence BETWEEN 1 AND 9007199254740991),
+				message_id TEXT NOT NULL UNIQUE CHECK (length(message_id) BETWEEN 1 AND 128),
+				event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 128),
+				workspace_id TEXT,
+				thread_id TEXT,
+				turn_id TEXT,
+				item_id TEXT,
+				frame BLOB NOT NULL CHECK (length(frame) <= 1048576),
+				frame_bytes INTEGER NOT NULL CHECK (frame_bytes = length(frame)),
+				created_at TEXT NOT NULL,
+				PRIMARY KEY (owner_id, node_id, stream_id, sequence),
+				FOREIGN KEY (owner_id, node_id, stream_id) REFERENCES event_streams(owner_id, node_id, stream_id) ON DELETE CASCADE
+			) STRICT`,
+			`CREATE INDEX event_log_retention ON event_log(owner_id, node_id, stream_id, created_at, sequence)`,
+			`CREATE INDEX event_log_thread ON event_log(thread_id, sequence)`,
+			`CREATE TABLE event_cursors (
+				owner_id TEXT NOT NULL,
+				node_id TEXT NOT NULL,
+				stream_id TEXT NOT NULL,
+				acknowledged_sequence INTEGER NOT NULL CHECK (acknowledged_sequence BETWEEN 0 AND 9007199254740991),
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (owner_id, node_id, stream_id),
+				FOREIGN KEY (owner_id, node_id, stream_id) REFERENCES event_streams(owner_id, node_id, stream_id) ON DELETE CASCADE
+			) STRICT`,
+			`CREATE TABLE thread_snapshots (
+				thread_id TEXT PRIMARY KEY CHECK (length(thread_id) BETWEEN 1 AND 128),
+				workspace_id TEXT NOT NULL CHECK (length(workspace_id) BETWEEN 1 AND 128),
+				status TEXT NOT NULL CHECK (length(status) BETWEEN 1 AND 64),
+				latest_sequence INTEGER NOT NULL CHECK (latest_sequence BETWEEN 0 AND 9007199254740991),
+				payload BLOB NOT NULL CHECK (length(payload) <= 786432),
+				updated_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TABLE approval_state (
+				approval_id TEXT PRIMARY KEY CHECK (length(approval_id) BETWEEN 1 AND 128),
+				workspace_id TEXT NOT NULL CHECK (length(workspace_id) BETWEEN 1 AND 128),
+				thread_id TEXT NOT NULL CHECK (length(thread_id) BETWEEN 1 AND 128),
+				turn_id TEXT NOT NULL CHECK (length(turn_id) BETWEEN 1 AND 128),
+				item_id TEXT NOT NULL CHECK (length(item_id) BETWEEN 1 AND 128),
+				status TEXT NOT NULL CHECK (status IN ('pending', 'resolved', 'ambiguous')),
+				operation_digest TEXT CHECK (operation_digest IS NULL OR length(operation_digest) = 43),
+				payload BLOB NOT NULL CHECK (length(payload) <= 786432),
+				expires_at TEXT,
+				updated_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE INDEX approval_state_thread ON approval_state(thread_id, turn_id, status)`,
+			`CREATE TABLE control_requests (
+				message_id TEXT PRIMARY KEY CHECK (length(message_id) BETWEEN 1 AND 128),
+				request_digest BLOB NOT NULL CHECK (length(request_digest) = 32),
+				control_type TEXT NOT NULL CHECK (length(control_type) BETWEEN 1 AND 128),
+				workspace_id TEXT,
+				thread_id TEXT,
+				turn_id TEXT,
+				item_id TEXT,
+				state TEXT NOT NULL CHECK (state IN ('received', 'validated', 'dispatching', 'confirmed', 'rejected', 'ambiguous')),
+				error_code TEXT,
+				result_stream_id TEXT,
+				result_sequence INTEGER,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			) STRICT`,
+		},
+	},
 }
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -175,6 +254,8 @@ func sqlLiteralInt(value int) string {
 		return "2"
 	case 3:
 		return "3"
+	case 4:
+		return "4"
 	default:
 		panic(errors.New("unsupported schema version"))
 	}
