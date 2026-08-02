@@ -69,6 +69,21 @@ type ControlClient struct {
 	CreatedAt time.Time
 }
 
+type NodeSession struct {
+	OwnerID        string
+	NodeID         string
+	PublicKey      []byte
+	CredentialHash []byte
+	Status         string
+}
+
+type ControlClientSession struct {
+	OwnerID   string
+	ClientID  string
+	PublicKey []byte
+	Status    string
+}
+
 func (s *Store) RotateBootstrap(ctx context.Context, secretHash []byte, now time.Time) (BootstrapStatus, error) {
 	if err := requireContext(ctx); err != nil {
 		return BootstrapStatus{}, err
@@ -344,4 +359,53 @@ func (s *Store) ControlClients(ctx context.Context) ([]ControlClient, error) {
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) NodeSession(ctx context.Context, nodeID string) (NodeSession, error) {
+	if err := requireContext(ctx); err != nil {
+		return NodeSession{}, err
+	}
+	if nodeID == "" {
+		return NodeSession{}, ErrInvalid
+	}
+	db, err := s.database()
+	if err != nil {
+		return NodeSession{}, err
+	}
+	var result NodeSession
+	if err := db.QueryRowContext(ctx, `SELECT n.owner_id, n.id, n.public_key, c.credential_hash,
+		CASE WHEN n.status='active' AND c.status='active' THEN 'active' ELSE 'revoked' END
+		FROM nodes n JOIN node_credentials c ON c.node_id=n.id WHERE n.id=?`, nodeID).
+		Scan(&result.OwnerID, &result.NodeID, &result.PublicKey, &result.CredentialHash, &result.Status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return NodeSession{}, ErrNotFound
+		}
+		return NodeSession{}, internal("node session read")
+	}
+	result.PublicKey = append([]byte(nil), result.PublicKey...)
+	result.CredentialHash = append([]byte(nil), result.CredentialHash...)
+	return result, nil
+}
+
+func (s *Store) ControlClientSession(ctx context.Context, clientID string) (ControlClientSession, error) {
+	if err := requireContext(ctx); err != nil {
+		return ControlClientSession{}, err
+	}
+	if clientID == "" {
+		return ControlClientSession{}, ErrInvalid
+	}
+	db, err := s.database()
+	if err != nil {
+		return ControlClientSession{}, err
+	}
+	var result ControlClientSession
+	if err := db.QueryRowContext(ctx, "SELECT owner_id, id, public_key, status FROM control_clients WHERE id=?", clientID).
+		Scan(&result.OwnerID, &result.ClientID, &result.PublicKey, &result.Status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ControlClientSession{}, ErrNotFound
+		}
+		return ControlClientSession{}, internal("control client session read")
+	}
+	result.PublicKey = append([]byte(nil), result.PublicKey...)
+	return result, nil
 }

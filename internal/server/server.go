@@ -77,7 +77,12 @@ func Run(ctx context.Context, options Options) error {
 			return errors.New("server bootstrap output failed")
 		}
 	}
-	handler, err := NewHandler(service, local)
+	hub, err := NewHub(local, HubOptions{Random: options.Random, Clock: options.Clock})
+	if err != nil {
+		return err
+	}
+	defer hub.Close()
+	handler, err := NewHandler(service, local, hub)
 	if err != nil {
 		return err
 	}

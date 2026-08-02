@@ -48,8 +48,8 @@ func (l *attemptLimiter) failure() {
 	l.failed++
 }
 
-func NewHandler(service *BootstrapService, ready readiness) (http.Handler, error) {
-	if service == nil || ready == nil {
+func NewHandler(service *BootstrapService, ready readiness, hubs ...*Hub) (http.Handler, error) {
+	if service == nil || ready == nil || len(hubs) > 1 || (len(hubs) == 1 && hubs[0] == nil) {
 		return nil, ErrInvalid
 	}
 	limiter := newAttemptLimiter(service.clock)
@@ -133,6 +133,10 @@ func NewHandler(service *BootstrapService, ready readiness) (http.Handler, error
 		}
 		writeJSON(writer, status, response)
 	})
+	if len(hubs) == 1 {
+		mux.HandleFunc("GET /node/connect", hubs[0].NodeHandler)
+		mux.HandleFunc("GET /web/connect", hubs[0].ControlHandler)
+	}
 	return noStore(methodBoundary(mux)), nil
 }
 
@@ -142,6 +146,8 @@ func methodBoundary(next http.Handler) http.Handler {
 		"/readyz":              http.MethodGet,
 		"/v1/bootstrap/status": http.MethodGet,
 		"/v1/bootstrap/claim":  http.MethodPost,
+		"/node/connect":        http.MethodGet,
+		"/web/connect":         http.MethodGet,
 	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if method, known := methods[request.URL.Path]; known && request.Method != method {

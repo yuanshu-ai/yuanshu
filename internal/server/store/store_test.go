@@ -163,6 +163,43 @@ func TestBootstrapClaimPersistsMetadataAndReplaysExactly(t *testing.T) {
 	}
 }
 
+func TestSessionLookupsReturnDetachedActiveAndRevokedRecords(t *testing.T) {
+	local, _ := openTestStore(t)
+	secret := bytes.Repeat([]byte{0x51}, 32)
+	_, _ = local.RotateBootstrap(context.Background(), secret, testNow)
+	claim := syntheticClaim(secret, bytes.Repeat([]byte{0x52}, 32), testNow)
+	if _, err := local.ClaimBootstrap(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	node, err := local.NodeSession(context.Background(), claim.NodeID)
+	if err != nil || node.OwnerID != claim.OwnerID || node.Status != "active" || !bytes.Equal(node.CredentialHash, claim.CredentialHash) {
+		t.Fatalf("node session=%+v err=%v", node, err)
+	}
+	node.PublicKey[0] ^= 0xff
+	again, _ := local.NodeSession(context.Background(), claim.NodeID)
+	if node.PublicKey[0] == again.PublicKey[0] {
+		t.Fatal("node session returned shared key bytes")
+	}
+	if _, err := local.db.Exec(`INSERT INTO control_clients(id, owner_id, public_key, name, status, created_at)
+		VALUES ('cli_test', ?, ?, 'Synthetic Client', 'active', ?)`, claim.OwnerID, bytes.Repeat([]byte{0x53}, 32), timestamp(testNow)); err != nil {
+		t.Fatal(err)
+	}
+	client, err := local.ControlClientSession(context.Background(), "cli_test")
+	if err != nil || client.OwnerID != claim.OwnerID || client.Status != "active" {
+		t.Fatalf("client session=%+v err=%v", client, err)
+	}
+	if _, err := local.db.Exec("UPDATE node_credentials SET status='revoked' WHERE node_id=?", claim.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := local.NodeSession(context.Background(), claim.NodeID)
+	if err != nil || revoked.Status != "revoked" {
+		t.Fatalf("revoked session=%+v err=%v", revoked, err)
+	}
+	if _, err := local.NodeSession(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing node error=%v", err)
+	}
+}
+
 func TestBootstrapRetryWindowScrubsAuthorization(t *testing.T) {
 	local, _ := openTestStore(t)
 	secret := bytes.Repeat([]byte{4}, 32)

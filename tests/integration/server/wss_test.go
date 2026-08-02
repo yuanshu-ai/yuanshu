@@ -1,0 +1,126 @@
+package server_integration_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/yuanshu-ai/yuanshu/internal/server"
+	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
+	"github.com/yuanshu-ai/yuanshu/internal/transport"
+)
+
+func TestTLSHubAuthenticatesPersistedIdentitiesAndRoutes(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "server.db")
+	local, err := serverstore.Open(context.Background(), databasePath, serverstore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodePublic, nodePrivate, _ := ed25519.GenerateKey(nil)
+	controlPublic, controlPrivate, _ := ed25519.GenerateKey(nil)
+	credential := "integration-node-credential"
+	credentialHash := sha256.Sum256([]byte(credential))
+	bootstrap, err := server.NewBootstrapService(local, server.BootstrapOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, issued, err := bootstrap.Rotate(context.Background())
+	if err != nil || !issued {
+		t.Fatalf("rotate issued=%v err=%v", issued, err)
+	}
+	claim, _, err := bootstrap.Claim(context.Background(), secret, server.ClaimRequest{
+		RequestID: "wss-integration", Name: "Integration Node", OS: "windows", Version: "dev",
+		PublicKey: base64.RawURLEncoding.EncodeToString(nodePublic), CredentialHash: base64.RawURLEncoding.EncodeToString(credentialHash[:]),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite3", filepath.ToSlash(databasePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO control_clients(id, owner_id, public_key, name, status, created_at)
+		VALUES ('cli_integration', ?, ?, 'Integration Client', 'active', ?)`, claim.OwnerID, controlPublic, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	local, err = serverstore.Open(context.Background(), databasePath, serverstore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	bootstrap, _ = server.NewBootstrapService(local, server.BootstrapOptions{})
+	origin := "https://mobile.example.test"
+	hub, err := server.NewHub(local, server.HubOptions{AllowedControlOrigins: []string{origin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+	handler, err := server.NewHandler(bootstrap, local, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlsServer := httptest.NewTLSServer(handler)
+	defer tlsServer.Close()
+
+	nodeHeader := make(http.Header)
+	nodeHeader.Set("X-Yuanshu-Node-ID", claim.NodeID)
+	nodeHeader.Set("Authorization", "Bearer "+credential)
+	node, _, err := transport.DialRelay(context.Background(), toWSS(tlsServer.URL)+"/node/connect", transport.RelayDialOptions{
+		HTTPClient: tlsServer.Client(), Header: nodeHeader, Role: transport.SessionRoleNode, SubjectID: claim.NodeID,
+		Sign:  func(_ context.Context, input []byte) ([]byte, error) { return ed25519.Sign(nodePrivate, input), nil },
+		Relay: transport.RelayOptions{MaxSendBytes: 1 << 20, MaxReceiveBytes: 256 << 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close()
+	controlHeader := make(http.Header)
+	controlHeader.Set("X-Yuanshu-Client-ID", "cli_integration")
+	controlHeader.Set("Origin", origin)
+	control, _, err := transport.DialRelay(context.Background(), toWSS(tlsServer.URL)+"/web/connect", transport.RelayDialOptions{
+		HTTPClient: tlsServer.Client(), Header: controlHeader, Role: transport.SessionRoleControl, SubjectID: "cli_integration",
+		Sign:  func(_ context.Context, input []byte) ([]byte, error) { return ed25519.Sign(controlPrivate, input), nil },
+		Relay: transport.RelayOptions{MaxSendBytes: 256 << 10, MaxReceiveBytes: 1 << 20},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+
+	controlRaw := []byte(`{"protocolVersion":"1.0","type":"thread.list","ownerId":"` + claim.OwnerID + `","nodeId":"` + claim.NodeID + `"}`)
+	if err := control.Send(context.Background(), transport.NewFrame(controlRaw)); err != nil {
+		t.Fatal(err)
+	}
+	received, err := node.Receive(context.Background())
+	if err != nil || !bytes.Equal(received.Bytes(), controlRaw) {
+		t.Fatalf("node received=%q err=%v", received.Bytes(), err)
+	}
+	eventRaw := []byte(`{"protocolVersion":"1.0","type":"device.status","ownerId":"` + claim.OwnerID + `","nodeId":"` + claim.NodeID + `"}`)
+	if err := node.Send(context.Background(), transport.NewFrame(eventRaw)); err != nil {
+		t.Fatal(err)
+	}
+	received, err = control.Receive(context.Background())
+	if err != nil || !bytes.Equal(received.Bytes(), eventRaw) {
+		t.Fatalf("control received=%q err=%v", received.Bytes(), err)
+	}
+}
+
+func toWSS(value string) string { return "wss" + strings.TrimPrefix(value, "https") }
