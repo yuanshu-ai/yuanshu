@@ -3,13 +3,19 @@
 package platform
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestWindowsProcessManagerLifecycle(t *testing.T) {
@@ -88,10 +94,7 @@ func TestWindowsProcessManagerStopAndWaitTimeout(t *testing.T) {
 func TestWindowsProcessManagerErrorsAreRedacted(t *testing.T) {
 	const canary = "process-path-canary"
 	_, err := newWindowsProcessManager().Start(context.Background(), ProcessSpec{
-		Executable: canary,
-		Args:       []string{canary},
-		Env:        []string{"SECRET=" + canary},
-		Directory:  canary,
+		Executable: canary, Args: []string{canary}, Env: []string{"SECRET=" + canary}, Directory: canary,
 	})
 	if err == nil || strings.Contains(err.Error(), canary) {
 		t.Fatalf("error = %v", err)
@@ -107,7 +110,67 @@ func TestWindowsProcessManagerRejectsShellScripts(t *testing.T) {
 	}
 }
 
+func TestWindowsProcessManagerJobStopsProcessTree(t *testing.T) {
+	manager := newWindowsProcessManager()
+	executable, _ := os.Executable()
+	process, err := manager.Start(context.Background(), ProcessSpec{Executable: executable, Args: []string{"-test.run=TestWindowsProcessHelper", "--", "parent"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pidLine := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(process.Stdout())
+		if scanner.Scan() {
+			pidLine <- scanner.Text()
+			return
+		}
+		pidLine <- ""
+	}()
+	var line string
+	select {
+	case line = <-pidLine:
+	case <-time.After(5 * time.Second):
+		_, _ = process.Stop(context.Background())
+		t.Fatal("helper did not report its child")
+	}
+	childPID, err := strconv.ParseUint(line, 10, 32)
+	if err != nil {
+		_, _ = process.Stop(context.Background())
+		t.Fatalf("child pid = %q", line)
+	}
+	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(childPID))
+	if err != nil {
+		_, _ = process.Stop(context.Background())
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(handle)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	exit, err := process.Stop(ctx)
+	if err != nil || !exit.Forced {
+		t.Fatalf("Stop = %+v, %v", exit, err)
+	}
+	if result, err := windows.WaitForSingleObject(handle, 5000); err != nil || result != windows.WAIT_OBJECT_0 {
+		t.Fatalf("child process survived Job termination: result=%d error=%v", result, err)
+	}
+}
+
 func TestWindowsProcessHelper(t *testing.T) {
+	arguments := os.Args
+	if len(arguments) >= 2 && arguments[len(arguments)-2] == "--" {
+		switch arguments[len(arguments)-1] {
+		case "parent":
+			child := exec.Command(arguments[0], "-test.run=TestWindowsProcessHelper", "--", "child")
+			if err := child.Start(); err != nil {
+				os.Exit(2)
+			}
+			fmt.Println(child.Process.Pid)
+			_ = child.Wait()
+			os.Exit(0)
+		case "child":
+			select {}
+		}
+	}
 	mode := os.Getenv("YUANSHU_PROCESS_HELPER")
 	if mode == "" {
 		return

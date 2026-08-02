@@ -460,6 +460,17 @@ func TestIdentityFactoryRollbackAndBinding(t *testing.T) {
 	}
 }
 
+func TestReadOnlyInspectionReportsCurrentSchema(t *testing.T) {
+	database, path := openTestStore(t)
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := Inspect(context.Background(), path)
+	if err != nil || inspection.SchemaVersion != CurrentSchemaVersion || inspection.QuickCheck != "ok" {
+		t.Fatalf("Inspect = %+v, %v", inspection, err)
+	}
+}
+
 func bytesOf(value byte, size int) []byte {
 	result := make([]byte, size)
 	for index := range result {

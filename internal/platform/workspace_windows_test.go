@@ -80,9 +80,9 @@ func TestWindowsWorkspaceInspectorDetectsJunctionBoundary(t *testing.T) {
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", link, target)
-	if err := command.Run(); err != nil {
-		t.Fatal("synthetic junction setup failed")
+	command := exec.Command("cmd.exe", "/d", "/c", "mklink /J "+link+" "+target)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("synthetic junction setup failed: %v (%s)", err, strings.TrimSpace(string(output)))
 	}
 	facts, err := inspector.Inspect(context.Background(), link)
 	if err != nil {

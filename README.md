@@ -91,7 +91,7 @@ yuanshu node         Local bridge connecting an Agent Runtime to a Server
 yuanshu standalone   Server + Web + local Node in one deployment
 ```
 
-These commands currently expose only the disposable, loopback-only M0 engineering PoC when every required `YUANSHU_POC_*` setting is supplied. Without explicit configuration they fail closed. This is not the personal MVP, a production deployment, or a stable protocol. On a cloud server that also runs Codex or another supported agent, the planned deployment needs only one Standalone process and no second relay service. Standalone still routes local Agent access through the Node module, so Server code cannot bypass local policy and approvals. Codex app-server and other agents' internal interfaces must never be exposed directly to the public internet.
+`yuanshu node` is now the formal Windows user-session Alpha entry. It loads the versioned local configuration, owns Codex child processes, exposes a current-user-only management pipe, and provides a native tray icon. The `server` and `standalone` commands remain the disposable, loopback-only M0 engineering PoC and require explicit `YUANSHU_POC_*` settings. Codex app-server and other agent internals must never be exposed directly to the public internet.
 
 ## Project status
 
@@ -164,7 +164,18 @@ Protocol generation requires both Node.js and Go (`gofmt`) and is deterministic 
 
 The versioned Node configuration contract uses strict TOML and is defined by `schemas/config/v1/node-config.schema.json`. It currently accepts `relay` and `standalone` transport modes and Codex `stdio` only. Device, Relay, and proxy credentials are represented solely by opaque SecretRef values; configuration files never contain credential bytes, and an unavailable secure store never triggers a plaintext fallback.
 
-The configuration package supports atomic replacement, a last-known-good `.bak` file, explicit recovery status, and sanitized SecretRef health checks. On Windows, configured workspaces can now be reconciled into the Node's local SQLite policy store. Remote callers use only opaque workspace IDs; canonical paths, stable file identities, reparse-point checks, and read/write/network ceilings remain local. The formal CodexAdapter now consumes that boundary. Its mapped Protocol v1 events can be persisted with the event log and outbox in the same local SQLite database; cursor replay, history gaps, snapshots, and conservative ambiguous recovery survive Node restarts. Default OS paths, Runner assembly, real Relay wiring, and settings UI remain later tasks.
+The configuration package supports atomic replacement, a last-known-good `.bak` file, explicit recovery status, and sanitized SecretRef health checks. On Windows, configured workspaces are reconciled into the Node's local SQLite policy store. Remote callers use only opaque workspace IDs; canonical paths, stable file identities, reparse-point checks, and read/write/network ceilings remain local. The formal CodexAdapter consumes that boundary, while mapped Protocol v1 events, cursor replay, snapshots, and conservative ambiguous recovery survive Node restarts.
+
+The Windows Alpha uses `%LOCALAPPDATA%\Yuanshu\config.toml` by default. It runs in the current user session, shows a native tray menu, uses a current-user-only Named Pipe, protects Agent process trees with a Job Object, and can be explicitly enabled at login through HKCU. The tray opens or reloads configuration, copies a sanitized diagnostic report, toggles autostart, and exits the Node; it is deliberately not a second settings UI. Real Relay connection and device pairing are not yet available in this build.
+
+```powershell
+yuanshu node
+yuanshu node status --json
+yuanshu node doctor
+yuanshu node autostart enable
+yuanshu node autostart disable
+yuanshu node stop
+```
 
 Inspect the CLI without starting any service:
 

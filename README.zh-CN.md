@@ -91,7 +91,7 @@ yuanshu node         在 Agent 所在机器运行，并连接 Server
 yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 ```
 
-这些命令目前只在完整提供 `YUANSHU_POC_*` 配置时启用一次性的、仅 loopback 可用的 M0 工程 PoC；缺少配置会安全失败。它不是个人 MVP、生产部署或稳定协议。未来如果云服务器同时运行 Codex 或其他受支持 Agent，只需部署一个 Standalone，不需要再搭建第二套中转服务。Standalone 内部仍必须通过 Node 模块访问本机 Agent，Server 不能绕过本地策略和审批。不得把 Codex app-server 或其他 Agent 的内部接口直接暴露到公网。
+`yuanshu node` 现在是正式的 Windows 当前用户会话 Alpha 入口：加载版本化本地配置、管理 Codex 子进程、提供当前用户专属管理管道和原生托盘。`server` 与 `standalone` 仍是一次性的、仅 loopback 可用的 M0 工程 PoC，需要显式 `YUANSHU_POC_*` 配置。不得把 Codex app-server 或其他 Agent 的内部接口直接暴露到公网。
 
 ## 项目状态
 
@@ -191,6 +191,19 @@ YUANSHU_POC_WORKSPACE=<已存在、非根目录的临时工作区>
 ```
 
 `YUANSHU_POC_ARCHIVE_ON_CLOSE=1` 仅用于有界测试。Server 会拒绝 wildcard、LAN 和公网监听地址。不得复用 PoC Token 或开发证书，也不得把当前构建暴露到 loopback 以外。
+
+### Windows Node Alpha
+
+Windows 默认使用 `%LOCALAPPDATA%\Yuanshu\config.toml`。Node 运行在当前用户会话，提供原生托盘、当前用户专属 Named Pipe、Job Object进程树回收和显式 HKCU登录启动项。托盘支持打开/重载配置、复制脱敏诊断、切换登录启动和退出；它不重复实现设置页面。当前构建尚未接入正式 Relay和设备配对。
+
+```powershell
+yuanshu node
+yuanshu node status --json
+yuanshu node doctor
+yuanshu node autostart enable
+yuanshu node autostart disable
+yuanshu node stop
+```
 
 ## 安全原则
 

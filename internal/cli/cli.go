@@ -2,8 +2,11 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+
+	"github.com/yuanshu-ai/yuanshu/internal/node"
 )
 
 const usage = `Yuanshu · 远枢
@@ -17,7 +20,7 @@ Commands:
   node         Run the local Node bridge
   standalone   Run Server, Web, and the local Node together
 
-The temporary M0 PoC requires explicit YUANSHU_POC_* environment configuration.
+The Windows Node command is the formal local Alpha entry. Server and Standalone remain temporary M0 PoC entry points.
 `
 
 var commandDescriptions = map[string]string{
@@ -26,8 +29,8 @@ var commandDescriptions = map[string]string{
 	"standalone": "Run Server, Web, and the local Node together",
 }
 
-// Runner is the smallest execution boundary between the CLI and a Yuanshu role.
-type Runner func(context.Context) error
+// Runner is the execution boundary between the CLI and a Yuanshu role.
+type Runner func(context.Context, []string, io.Writer, io.Writer) error
 
 // Runners contains the role entry points selected by the CLI.
 type Runners struct {
@@ -64,11 +67,15 @@ func Run(
 	}
 
 	if len(args) == 2 && isHelp(args[1]) {
-		fmt.Fprintf(stdout, "Usage: yuanshu %s\n\n%s.\n\nThis temporary M0 PoC requires explicit YUANSHU_POC_* environment configuration.\n", command, description)
+		if command == "node" {
+			fmt.Fprint(stdout, node.Usage)
+			return 0
+		}
+		fmt.Fprintf(stdout, "Usage: yuanshu %s\n\n%s.\n\nThis role remains a temporary M0 PoC and requires explicit YUANSHU_POC_* environment configuration.\n", command, description)
 		return 0
 	}
 
-	if len(args) != 1 {
+	if command != "node" && len(args) != 1 {
 		fmt.Fprintf(stderr, "error: unexpected arguments for %q\n", command)
 		return 2
 	}
@@ -79,7 +86,12 @@ func Run(
 		return 1
 	}
 
-	if err := runner(ctx); err != nil {
+	if err := runner(ctx, args[1:], stdout, stderr); err != nil {
+		if errors.Is(err, node.ErrUsage) {
+			fmt.Fprintf(stderr, "error: invalid arguments for %q\n", command)
+			fmt.Fprint(stderr, node.Usage)
+			return 2
+		}
 		fmt.Fprintf(stderr, "%s: %v\n", command, err)
 		return 1
 	}

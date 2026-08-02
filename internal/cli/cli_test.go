@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -22,7 +23,7 @@ func TestHelpDoesNotInvokeRunners(t *testing.T) {
 			t.Parallel()
 
 			calls := 0
-			runner := func(context.Context) error {
+			runner := func(context.Context, []string, io.Writer, io.Writer) error {
 				calls++
 				return nil
 			}
@@ -66,6 +67,14 @@ func TestMissingAndUnknownCommandsExitWithUsageError(t *testing.T) {
 	}
 }
 
+func TestInvalidNodeArgumentsExitWithUsageError(t *testing.T) {
+	stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
+	exitCode := Run(context.Background(), []string{"node", "unknown"}, stdout, stderr, DefaultRunners())
+	if exitCode != 2 || !strings.Contains(stderr.String(), "yuanshu node") {
+		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+}
+
 func TestBareCommandInvokesOnlySelectedRunner(t *testing.T) {
 	t.Parallel()
 
@@ -76,9 +85,9 @@ func TestBareCommandInvokesOnlySelectedRunner(t *testing.T) {
 
 			calls := map[string]int{}
 			runners := Runners{
-				Server: func(context.Context) error { calls["server"]++; return nil },
-				Node:   func(context.Context) error { calls["node"]++; return nil },
-				Standalone: func(context.Context) error {
+				Server: func(context.Context, []string, io.Writer, io.Writer) error { calls["server"]++; return nil },
+				Node:   func(context.Context, []string, io.Writer, io.Writer) error { calls["node"]++; return nil },
+				Standalone: func(context.Context, []string, io.Writer, io.Writer) error {
 					calls["standalone"]++
 					return nil
 				},
@@ -108,7 +117,7 @@ func TestRunnerErrorIsReported(t *testing.T) {
 	wantErr := errors.New("runner failed")
 	stderr := new(bytes.Buffer)
 	exitCode := Run(context.Background(), []string{"server"}, new(bytes.Buffer), stderr, Runners{
-		Server: func(context.Context) error { return wantErr },
+		Server: func(context.Context, []string, io.Writer, io.Writer) error { return wantErr },
 	})
 
 	if exitCode != 1 {
@@ -119,10 +128,10 @@ func TestRunnerErrorIsReported(t *testing.T) {
 	}
 }
 
-func TestDefaultRunnersFailSafelyWithoutPOCConfiguration(t *testing.T) {
+func TestDefaultServerAndStandaloneFailSafelyWithoutPOCConfiguration(t *testing.T) {
 	t.Parallel()
 
-	for _, command := range []string{"server", "node", "standalone"} {
+	for _, command := range []string{"server", "standalone"} {
 		stderr := new(bytes.Buffer)
 		exitCode := Run(context.Background(), []string{command}, new(bytes.Buffer), stderr, DefaultRunners())
 

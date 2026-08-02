@@ -23,33 +23,57 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 	if current.Processes().Available() != expectedProcessAvailable {
 		t.Fatalf("Processes().Available() = %v, want %v", current.Processes().Available(), expectedProcessAvailable)
 	}
+	wantWindowsUserCapabilities := expectedCurrentFamily == FamilyWindows
+	if current.IPC().Available() != wantWindowsUserCapabilities {
+		t.Fatalf("IPC().Available() = %v, want %v", current.IPC().Available(), wantWindowsUserCapabilities)
+	}
+	if current.Autostart().Available() != wantWindowsUserCapabilities {
+		t.Fatalf("Autostart().Available() = %v, want %v", current.Autostart().Available(), wantWindowsUserCapabilities)
+	}
 
 	const canary = "platform-sensitive-canary"
 	tests := []struct {
 		name      string
 		available bool
 		call      func() error
-	}{
-		{"ipc listen", current.IPC().Available(), func() error {
+	}{}
+	if !wantWindowsUserCapabilities {
+		tests = append(tests, struct {
+			name      string
+			available bool
+			call      func() error
+		}{"ipc listen", current.IPC().Available(), func() error {
 			_, err := current.IPC().Listen(context.Background(), IPCName(canary))
 			return err
-		}},
-		{"ipc dial", current.IPC().Available(), func() error {
+		}}, struct {
+			name      string
+			available bool
+			call      func() error
+		}{"ipc dial", current.IPC().Available(), func() error {
 			_, err := current.IPC().Dial(context.Background(), IPCName(canary))
 			return err
-		}},
-		{"autostart install", current.Autostart().Available(), func() error {
+		}}, struct {
+			name      string
+			available bool
+			call      func() error
+		}{"autostart install", current.Autostart().Available(), func() error {
 			return current.Autostart().Install(context.Background(), AutostartEntry{
 				ID: canary, Executable: canary, Env: []string{"SECRET=" + canary},
 			})
-		}},
-		{"autostart remove", current.Autostart().Available(), func() error {
+		}}, struct {
+			name      string
+			available bool
+			call      func() error
+		}{"autostart remove", current.Autostart().Available(), func() error {
 			return current.Autostart().Remove(context.Background(), canary)
-		}},
-		{"autostart status", current.Autostart().Available(), func() error {
+		}}, struct {
+			name      string
+			available bool
+			call      func() error
+		}{"autostart status", current.Autostart().Available(), func() error {
 			_, err := current.Autostart().Status(context.Background(), canary)
 			return err
-		}},
+		}})
 	}
 	if !expectedProcessAvailable {
 		tests = append(tests, struct {

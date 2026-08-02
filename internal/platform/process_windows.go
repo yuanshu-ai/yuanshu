@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 type windowsProcessManager struct{}
@@ -53,7 +56,15 @@ func (*windowsProcessManager) Start(ctx context.Context, spec ProcessSpec) (Proc
 		_ = stdout.Close()
 		return nil, ErrUnavailable
 	}
+	job, err := createKillOnCloseJob()
+	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return nil, ErrUnavailable
+	}
 	if err := command.Start(); err != nil {
+		_ = windows.CloseHandle(job)
 		_ = stdin.Close()
 		_ = stdout.Close()
 		_ = stderr.Close()
@@ -62,8 +73,23 @@ func (*windowsProcessManager) Start(ctx context.Context, spec ProcessSpec) (Proc
 		}
 		return nil, ErrUnavailable
 	}
+	processHandle, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(command.Process.Pid))
+	if err == nil {
+		err = windows.AssignProcessToJobObject(job, processHandle)
+		_ = windows.CloseHandle(processHandle)
+	}
+	if err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		_ = windows.CloseHandle(job)
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return nil, ErrUnavailable
+	}
 	process := &windowsProcess{
 		command: command,
+		job:     job,
 		stdin:   stdin,
 		stdout:  stdout,
 		stderr:  stderr,
@@ -71,6 +97,25 @@ func (*windowsProcessManager) Start(ctx context.Context, spec ProcessSpec) (Proc
 	}
 	go process.reap()
 	return process, nil
+}
+
+func createKillOnCloseJob() (windows.Handle, error) {
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return 0, err
+	}
+	information := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
+	information.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if _, err := windows.SetInformationJobObject(
+		job,
+		windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&information)),
+		uint32(unsafe.Sizeof(information)),
+	); err != nil {
+		_ = windows.CloseHandle(job)
+		return 0, err
+	}
+	return job, nil
 }
 
 func resolveWindowsExecutable(value string) (string, error) {
@@ -99,6 +144,7 @@ func resolveWindowsExecutable(value string) (string, error) {
 
 type windowsProcess struct {
 	command *exec.Cmd
+	job     windows.Handle
 	stdin   io.WriteCloser
 	stdout  io.ReadCloser
 	stderr  io.ReadCloser
@@ -146,9 +192,16 @@ func (p *windowsProcess) Stop(ctx context.Context) (ProcessExit, error) {
 	p.mu.Lock()
 	p.stopping = true
 	p.mu.Unlock()
-	if p.command.Process != nil {
-		if err := p.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return ProcessExit{}, ErrUnavailable
+	p.mu.RLock()
+	job := p.job
+	p.mu.RUnlock()
+	if job != 0 {
+		if err := windows.TerminateJobObject(job, 1); err != nil {
+			select {
+			case <-p.done:
+			default:
+				return ProcessExit{}, ErrUnavailable
+			}
 		}
 	}
 	return p.Wait(ctx)
@@ -167,6 +220,11 @@ func (p *windowsProcess) reap() {
 			p.waitErr = ErrUnavailable
 		}
 	}
+	job := p.job
+	p.job = 0
 	p.mu.Unlock()
+	if job != 0 {
+		_ = windows.CloseHandle(job)
+	}
 	close(p.done)
 }

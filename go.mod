@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.26.5
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/coder/websocket v1.8.15
 	github.com/dlclark/regexp2 v1.11.0
 	github.com/gowebpki/jcs v1.0.1

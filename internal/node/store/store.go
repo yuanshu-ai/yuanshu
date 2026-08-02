@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,6 +16,51 @@ import (
 )
 
 const CurrentSchemaVersion = 4
+
+type Inspection struct {
+	SchemaVersion int
+	QuickCheck    string
+}
+
+// Inspect opens an existing Node database read-only and never creates or migrates it.
+func Inspect(ctx context.Context, path string) (Inspection, error) {
+	if ctx == nil || ctx.Err() != nil {
+		if ctx == nil {
+			return Inspection{}, context.Canceled
+		}
+		return Inspection{}, ctx.Err()
+	}
+	if !filepath.IsAbs(path) {
+		return Inspection{}, ErrInvalid
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Inspection{}, ErrNotFound
+		}
+		return Inspection{}, internal("inspection")
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return Inspection{}, ErrInvalid
+	}
+	uri := (&url.URL{Scheme: "file", Opaque: filepath.ToSlash(path), RawQuery: "mode=ro"}).String()
+	db, err := sql.Open("sqlite3", uri)
+	if err != nil {
+		return Inspection{}, ErrCorrupt
+	}
+	defer db.Close()
+	var result Inspection
+	if err := db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result.QuickCheck); err != nil || result.QuickCheck != "ok" {
+		return Inspection{}, ErrCorrupt
+	}
+	if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&result.SchemaVersion); err != nil {
+		return Inspection{}, ErrCorrupt
+	}
+	if result.SchemaVersion < 1 || result.SchemaVersion > CurrentSchemaVersion {
+		return Inspection{}, ErrCorrupt
+	}
+	return result, nil
+}
 
 type Options struct {
 	Clock func() time.Time
