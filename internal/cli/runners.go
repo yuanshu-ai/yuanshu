@@ -12,7 +12,7 @@ import (
 // DefaultRunners returns the pre-alpha role entry points.
 func DefaultRunners() Runners {
 	return Runners{
-		Server:     func(ctx context.Context, _ []string, _ io.Writer, _ io.Writer) error { return server.Run(ctx) },
+		Server:     server.Command,
 		Node:       node.Command,
 		Standalone: func(ctx context.Context, _ []string, _ io.Writer, _ io.Writer) error { return standalone.Run(ctx) },
 	}

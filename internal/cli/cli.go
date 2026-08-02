@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/yuanshu-ai/yuanshu/internal/node"
+	"github.com/yuanshu-ai/yuanshu/internal/server"
 )
 
 const usage = `Yuanshu · 远枢
@@ -20,7 +21,7 @@ Commands:
   node         Run the local Node bridge
   standalone   Run Server, Web, and the local Node together
 
-The Windows Node command is the formal local Alpha entry. Server and Standalone remain temporary M0 PoC entry points.
+The Server and Windows Node commands are formal Alpha entry points. Standalone remains a temporary M0 PoC entry point.
 `
 
 var commandDescriptions = map[string]string{
@@ -71,11 +72,15 @@ func Run(
 			fmt.Fprint(stdout, node.Usage)
 			return 0
 		}
+		if command == "server" {
+			fmt.Fprint(stdout, server.Usage)
+			return 0
+		}
 		fmt.Fprintf(stdout, "Usage: yuanshu %s\n\n%s.\n\nThis role remains a temporary M0 PoC and requires explicit YUANSHU_POC_* environment configuration.\n", command, description)
 		return 0
 	}
 
-	if command != "node" && len(args) != 1 {
+	if command == "standalone" && len(args) != 1 {
 		fmt.Fprintf(stderr, "error: unexpected arguments for %q\n", command)
 		return 2
 	}
@@ -87,9 +92,13 @@ func Run(
 	}
 
 	if err := runner(ctx, args[1:], stdout, stderr); err != nil {
-		if errors.Is(err, node.ErrUsage) {
+		if errors.Is(err, node.ErrUsage) || errors.Is(err, server.ErrUsage) {
 			fmt.Fprintf(stderr, "error: invalid arguments for %q\n", command)
-			fmt.Fprint(stderr, node.Usage)
+			if command == "server" {
+				fmt.Fprint(stderr, server.Usage)
+			} else {
+				fmt.Fprint(stderr, node.Usage)
+			}
 			return 2
 		}
 		fmt.Fprintf(stderr, "%s: %v\n", command, err)

@@ -92,7 +92,7 @@ yuanshu node         Local bridge connecting an Agent Runtime to a Server
 yuanshu standalone   Server + Web + local Node in one deployment
 ```
 
-`yuanshu node` is now the formal Windows user-session Alpha entry. It loads the versioned local configuration, owns Codex child processes, exposes a current-user-only management pipe, and provides a native tray icon. The `server` and `standalone` commands remain the disposable, loopback-only M0 engineering PoC and require explicit `YUANSHU_POC_*` settings. Codex app-server and other agent internals must never be exposed directly to the public internet.
+`yuanshu node` is the formal Windows user-session Alpha entry. It loads the versioned local configuration, owns Codex child processes, exposes a current-user-only management pipe, and provides a native tray icon. `yuanshu server` now starts the formal minimal metadata and bootstrap service on an explicit loopback address. `standalone` remains the disposable M0 engineering PoC. Codex app-server and other agent internals must never be exposed directly to the public internet.
 
 ## Project status
 
@@ -111,6 +111,7 @@ yuanshu standalone   Server + Web + local Node in one deployment
 - [x] Bounded Node event journal, cursor replay, snapshots, and ambiguous recovery
 - [x] Windows Yuanshu Node alpha
 - [x] Native three-platform CI, containerized Linux race, dependency/secret scanning, and SBOM
+- [x] Formal loopback Server bootstrap and SQLite metadata baseline
 - [ ] Linux Server and Standalone self-hosting preview
 - [ ] Self-hosted device and control-client pairing
 - [ ] Linux Yuanshu Node
@@ -122,7 +123,7 @@ The roadmap establishes a reliable daily-use loop for one developer first, then 
 
 ## Development
 
-The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. Node SQLite now also provides monotonic event sequences, bounded retention, outbox cursor acknowledgement, replay, snapshots, and conservative reconciliation of uncertain Turns. It is not wired to the public CLI, Server, Transport, or PWA yet.
+The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. Node SQLite now also provides monotonic event sequences, bounded retention, outbox cursor acknowledgement, replay, snapshots, and conservative reconciliation of uncertain Turns. Formal WSS transport, pairing, and the PWA are not connected yet.
 
 Prerequisites:
 
@@ -188,11 +189,23 @@ go run ./cmd/yuanshu node --help
 go run ./cmd/yuanshu standalone --help
 ```
 
+### Formal Server bootstrap
+
+The minimal Server requires an explicit absolute data directory and listens only on the literal loopback addresses `127.0.0.1` or `::1`:
+
+```powershell
+yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
+```
+
+On an uninitialized data directory, the Server prints a 32-byte bootstrap secret once to local stdout. The enrolling Node generates its own Ed25519 key and connection credential, retains the credential locally, and sends only the public key and SHA-256 credential hash to `POST /v1/bootstrap/claim`. The Server persists `server.db`, creates the first Owner and Node atomically, and supports exact claim retries for five minutes. The current HTTP endpoints are `/healthz`, `/readyz`, `/v1/bootstrap/status`, and `/v1/bootstrap/claim`.
+
+This bootstrap listener is deliberately loopback HTTP for Alpha initialization work. It has no WSS, ordinary pairing, Web UI, TLS, or public deployment support yet. Do not expose it through a reverse proxy or outside the local machine.
+
 The repository uses LF source files and supports these commands on Windows, macOS, and Linux. CI runs native Go checks on Ubuntu 24.04 x64, Windows Server 2025 x64, and macOS 15 arm64; Web/Protocol checks, a pinned-container Linux race suite, dependency and Secret scanning, and an SPDX SBOM are release gates. Successful runs retain unsigned Windows amd64, Linux amd64, and Darwin arm64 build artifacts for seven days. These are engineering artifacts, not installable releases; signed releases and product container images remain later milestones.
 
 ### M0 PoC (developers only)
 
-The PoC supports `server`, `node`, and `standalone` only with explicit temporary configuration:
+The isolated internal PoC harness and the `standalone` PoC use explicit temporary configuration:
 
 ```text
 YUANSHU_POC_LISTEN=127.0.0.1:7443
@@ -203,7 +216,7 @@ YUANSHU_POC_SERVER_URL=wss://localhost:7443
 YUANSHU_POC_WORKSPACE=<existing non-root disposable directory>
 ```
 
-`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` is reserved for bounded test runs. The Server rejects wildcard, LAN, and public listen addresses. Do not reuse the PoC token or development certificate, and do not expose this build outside loopback.
+`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` is reserved for bounded test runs. These settings do not configure the formal `yuanshu server` or `yuanshu node` commands. Do not reuse the PoC token or development certificate, and do not expose the PoC outside loopback.
 
 ## Security principles
 

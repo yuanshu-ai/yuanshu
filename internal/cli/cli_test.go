@@ -49,7 +49,7 @@ func TestHelpDoesNotInvokeRunners(t *testing.T) {
 func TestMissingAndUnknownCommandsExitWithUsageError(t *testing.T) {
 	t.Parallel()
 
-	for _, args := range [][]string{nil, {"unknown"}, {"server", "unexpected"}} {
+	for _, args := range [][]string{nil, {"unknown"}, {"standalone", "unexpected"}} {
 		args := args
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			t.Parallel()
@@ -71,6 +71,14 @@ func TestInvalidNodeArgumentsExitWithUsageError(t *testing.T) {
 	stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
 	exitCode := Run(context.Background(), []string{"node", "unknown"}, stdout, stderr, DefaultRunners())
 	if exitCode != 2 || !strings.Contains(stderr.String(), "yuanshu node") {
+		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+}
+
+func TestInvalidServerArgumentsExitWithUsageError(t *testing.T) {
+	stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
+	exitCode := Run(context.Background(), []string{"server", "unknown"}, stdout, stderr, DefaultRunners())
+	if exitCode != 2 || !strings.Contains(stderr.String(), "yuanshu server") {
 		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
 	}
 }
@@ -128,18 +136,18 @@ func TestRunnerErrorIsReported(t *testing.T) {
 	}
 }
 
-func TestDefaultServerAndStandaloneFailSafelyWithoutPOCConfiguration(t *testing.T) {
-	t.Parallel()
+func TestDefaultServerRequiresExplicitDataDirectory(t *testing.T) {
+	stderr := new(bytes.Buffer)
+	exitCode := Run(context.Background(), []string{"server"}, new(bytes.Buffer), stderr, DefaultRunners())
+	if exitCode != 2 || !strings.Contains(stderr.String(), "--data-dir") {
+		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+}
 
-	for _, command := range []string{"server", "standalone"} {
-		stderr := new(bytes.Buffer)
-		exitCode := Run(context.Background(), []string{command}, new(bytes.Buffer), stderr, DefaultRunners())
-
-		if exitCode != 1 {
-			t.Fatalf("Run(%q) exit code = %d, want 1", command, exitCode)
-		}
-		if !strings.Contains(stderr.String(), "PoC configuration is not available") {
-			t.Fatalf("Run(%q) stderr = %q, want safe configuration failure", command, stderr.String())
-		}
+func TestDefaultStandaloneFailsSafelyWithoutPOCConfiguration(t *testing.T) {
+	stderr := new(bytes.Buffer)
+	exitCode := Run(context.Background(), []string{"standalone"}, new(bytes.Buffer), stderr, DefaultRunners())
+	if exitCode != 1 || !strings.Contains(stderr.String(), "PoC configuration is not available") {
+		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
 	}
 }

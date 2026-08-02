@@ -92,7 +92,7 @@ yuanshu node         在 Agent 所在机器运行，并连接 Server
 yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 ```
 
-`yuanshu node` 现在是正式的 Windows 当前用户会话 Alpha 入口：加载版本化本地配置、管理 Codex 子进程、提供当前用户专属管理管道和原生托盘。`server` 与 `standalone` 仍是一次性的、仅 loopback 可用的 M0 工程 PoC，需要显式 `YUANSHU_POC_*` 配置。不得把 Codex app-server 或其他 Agent 的内部接口直接暴露到公网。
+`yuanshu node` 是正式的 Windows 当前用户会话 Alpha 入口：加载版本化本地配置、管理 Codex 子进程、提供当前用户专属管理管道和原生托盘。`yuanshu server` 现在会在显式 loopback 地址启动正式的最小元数据与 bootstrap 服务；`standalone` 仍是一次性的 M0 工程 PoC。不得把 Codex app-server 或其他 Agent 的内部接口直接暴露到公网。
 
 ## 项目状态
 
@@ -111,6 +111,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] 有界 Node 事件日志、cursor 补发、Snapshot 与 ambiguous 恢复
 - [x] Windows Yuanshu Node Alpha
 - [x] 三平台原生 CI、容器化 Linux race、依赖/Secret 扫描与 SBOM
+- [x] 正式 loopback Server bootstrap 与 SQLite 元数据基线
 - [ ] Linux Server 与 Standalone 自托管预览版
 - [ ] 自托管设备与控制端配对
 - [ ] Linux Yuanshu Node
@@ -122,7 +123,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 
 ## 本地开发
 
-仓库同时包含保持隔离的 `m0-poc-1` Gate G0 实现和正式的内部 CodexAdapter 基础。正式 Adapter 使用 Node 管理的 stdio app-server、本地 workspace ID、有界事件、一次性审批和持久 Thread 所有权。Node SQLite 现已支持单调事件序号、有界保留、outbox cursor确认、补发、Snapshot，以及对不确定 Turn 的保守对账；目前尚未接入公开 CLI、Server、Transport 或 PWA。
+仓库同时包含保持隔离的 `m0-poc-1` Gate G0 实现和正式的内部 CodexAdapter 基础。正式 Adapter 使用 Node 管理的 stdio app-server、本地 workspace ID、有界事件、一次性审批和持久 Thread 所有权。Node SQLite 现已支持单调事件序号、有界保留、outbox cursor确认、补发、Snapshot，以及对不确定 Turn 的保守对账；正式 WSS Transport、配对和 PWA 尚未接通。
 
 环境要求：
 
@@ -177,11 +178,23 @@ go run ./cmd/yuanshu node --help
 go run ./cmd/yuanshu standalone --help
 ```
 
+### 正式 Server bootstrap
+
+最小 Server 要求显式绝对数据目录，并且只接受字面量 loopback 地址 `127.0.0.1` 或 `::1`：
+
+```powershell
+yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
+```
+
+未初始化的数据目录首次启动时，Server 只向本地 stdout 显示一次 32 字节 bootstrap secret。待领取 Node 自己生成 Ed25519 密钥和连接凭据、在本地保留凭据正文，并仅向 `POST /v1/bootstrap/claim` 提交公钥和凭据 SHA-256。Server 在 `server.db` 中原子创建首个 Owner 与 Node，并在五分钟内支持完全相同的 claim 重试。当前 HTTP 端点只有 `/healthz`、`/readyz`、`/v1/bootstrap/status` 和 `/v1/bootstrap/claim`。
+
+该引导监听器在 Alpha 初始化阶段刻意使用 loopback HTTP；当前没有 WSS、普通配对、Web UI、TLS 或公网部署能力。不要通过反向代理或其他方式将它暴露到本机以外。
+
 仓库源文件统一使用 LF，以上命令面向 Windows、macOS 和 Linux。CI 在 Ubuntu 24.04 x64、Windows Server 2025 x64和 macOS 15 arm64原生运行 Go 门禁，并执行 Web/Protocol检查、固定容器中的 Linux race、依赖与 Secret扫描和 SPDX SBOM生成。成功的工作流会保留7天的 Windows amd64、Linux amd64和 Darwin arm64未签名构建工件；它们只是工程工件，不是可安装 Release，正式签名与产品容器镜像属于后续里程碑。
 
 ### M0 PoC（仅开发验证）
 
-PoC 的 `server`、`node`、`standalone` 只接受显式临时配置：
+隔离的内部 PoC 测试链路和 `standalone` PoC 使用以下显式临时配置：
 
 ```text
 YUANSHU_POC_LISTEN=127.0.0.1:7443
@@ -192,7 +205,7 @@ YUANSHU_POC_SERVER_URL=wss://localhost:7443
 YUANSHU_POC_WORKSPACE=<已存在、非根目录的临时工作区>
 ```
 
-`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` 仅用于有界测试。Server 会拒绝 wildcard、LAN 和公网监听地址。不得复用 PoC Token 或开发证书，也不得把当前构建暴露到 loopback 以外。
+`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` 仅用于有界测试。这些变量不配置正式的 `yuanshu server` 或 `yuanshu node` 命令。不得复用 PoC Token 或开发证书，也不得把 PoC 暴露到 loopback 以外。
 
 ### Windows Node Alpha
 
