@@ -25,6 +25,13 @@ const Usage = `Usage:
   yuanshu node clients list
   yuanshu node clients revoke <client-id> <key-id>
   yuanshu node credential rotate
+  yuanshu node enrollment create
+  yuanshu node enrollment list
+  yuanshu node enrollment approve <enrollment-id>
+  yuanshu node enrollment reject <enrollment-id>
+  yuanshu node enrollment join <join-url>
+  yuanshu node devices list
+  yuanshu node devices revoke <node-id>
   yuanshu node autostart enable [--config <absolute-path>]
   yuanshu node autostart disable
   yuanshu node autostart status [--json]
@@ -95,7 +102,7 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return nil
 	case "autostart":
 		return commandAutostart(ctx, current, defaults, args, stdout)
-	case "pairing", "clients", "credential":
+	case "pairing", "clients", "credential", "enrollment", "devices":
 		return commandLocalManagement(ctx, current.IPC(), command, args, stdout)
 	default:
 		return ErrUsage
@@ -148,6 +155,25 @@ func validateNodeArguments(args []string) error {
 			return nil
 		}
 		return ErrUsage
+	case "enrollment":
+		if len(args) == 1 && (args[0] == "create" || args[0] == "list") {
+			return nil
+		}
+		if len(args) == 2 && (args[0] == "approve" || args[0] == "reject") && validLocalID(args[1]) {
+			return nil
+		}
+		if len(args) == 2 && args[0] == "join" && strings.HasPrefix(args[1], "https://") && len(args[1]) <= 2048 {
+			return nil
+		}
+		return ErrUsage
+	case "devices":
+		if len(args) == 1 && args[0] == "list" {
+			return nil
+		}
+		if len(args) == 2 && args[0] == "revoke" && validLocalID(args[1]) {
+			return nil
+		}
+		return ErrUsage
 	default:
 		return ErrUsage
 	}
@@ -175,6 +201,25 @@ func commandLocalManagement(ctx context.Context, ipc platform.LocalIPC, command 
 		}
 	case "credential":
 		request.Command = "credential_rotate"
+	case "enrollment":
+		switch args[0] {
+		case "create":
+			request.Command = "enrollment_create"
+		case "list":
+			request.Command = "enrollment_list"
+		case "approve":
+			request.Command, request.EnrollmentID = "enrollment_accept", args[1]
+		case "reject":
+			request.Command, request.EnrollmentID = "enrollment_decline", args[1]
+		case "join":
+			request.Command, request.JoinURL = "enrollment_join", args[1]
+		}
+	case "devices":
+		if args[0] == "list" {
+			request.Command = "device_list"
+		} else {
+			request.Command, request.NodeID = "device_revoke", args[1]
+		}
 	}
 	response, err := callLocalRequest(ctx, ipc, request)
 	if err != nil || !response.OK {
@@ -205,6 +250,27 @@ func commandLocalManagement(ctx context.Context, ipc platform.LocalIPC, command 
 		fmt.Fprintln(stdout, "Control client revoked.")
 	case "credential_rotate":
 		fmt.Fprintln(stdout, "Node connection credential rotated.")
+	case "enrollment_create":
+		fmt.Fprintln(stdout, response.EnrollmentURL)
+	case "enrollment_list":
+		if len(response.Enrollments) == 0 {
+			fmt.Fprintln(stdout, "No pending node enrollments.")
+		}
+		for _, item := range response.Enrollments {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", item.EnrollmentID, item.Name, item.OS, item.Fingerprint, item.ExpiresAt)
+		}
+	case "enrollment_accept":
+		fmt.Fprintln(stdout, "Node enrollment approved.")
+	case "enrollment_decline":
+		fmt.Fprintln(stdout, "Node enrollment declined.")
+	case "enrollment_join":
+		fmt.Fprintln(stdout, "Node enrollment claimed; approve it on the existing Node.")
+	case "device_list":
+		for _, item := range response.Devices {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%t\n", item.NodeID, item.Name, item.OS, item.Status, item.Online)
+		}
+	case "device_revoke":
+		fmt.Fprintln(stdout, "Node revoked.")
 	}
 	return nil
 }

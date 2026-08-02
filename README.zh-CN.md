@@ -115,6 +115,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] 正式 loopback Server bootstrap 与 SQLite 元数据基线
 - [x] 仅TLS的WSS Hub、认证RelayTransport与Owner/Node路由
 - [x] 控制端短期配对、Node本地确认、凭据轮换与即时撤销
+- [x] 单 Owner 最多五 Node、签名 Node enrollment、全局控制端信任与防串流
 - [ ] Linux Server 与 Standalone 自托管预览版
 - [ ] Linux Server 与真实手机自托管部署
 - [ ] Linux Yuanshu Node
@@ -126,7 +127,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 
 ## 本地开发
 
-仓库同时包含保持隔离的 `m0-poc-1` Gate G0 实现和正式的内部 CodexAdapter 基础。正式 Adapter 使用 Node 管理的 stdio app-server、本地 workspace ID、有界事件、一次性审批和持久 Thread 所有权。Node SQLite 现已支持单调事件序号、有界保留、outbox cursor确认、补发、Snapshot，以及对不确定 Turn 的保守对账；正式的仅TLS WSS Hub、RelayTransport和控制端配对边界已经接通，完整任务 PWA 仍在后续任务中。
+仓库同时包含保持隔离的 `m0-poc-1` Gate G0 实现和正式的内部 CodexAdapter 基础。正式 Adapter 使用 Node 管理的 stdio app-server、本地 workspace ID、有界事件、一次性审批和持久 Thread 所有权。Node SQLite 现已支持单调事件序号、有界保留、outbox cursor确认、补发、Snapshot，以及对不确定 Turn 的保守对账；仅TLS Hub已支持单个个人 Owner 下最多五台隔离 Node，由现有 Node签名批准五分钟 enrollment，并由每台 Node独立复核Owner全局Control Client信任。完整任务 PWA 仍在后续任务中。
 
 环境要求：
 
@@ -191,7 +192,7 @@ yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
 
 未初始化的数据目录首次启动时，Server 只向本地 stdout 显示一次 32 字节 bootstrap secret。待领取 Node 自己生成 Ed25519 密钥和连接凭据、在本地保留凭据正文，并仅向 `POST /v1/bootstrap/claim` 提交公钥和凭据 SHA-256。Server 在 `server.db` 中原子创建首个 Owner 与 Node，并在五分钟内支持完全相同的 claim 重试。HTTP初始化使用 `/healthz`、`/readyz`、`/v1/bootstrap/status` 和 `/v1/bootstrap/claim`；认证实时连接使用 `/node/connect` 与 `/web/connect`。
 
-正式实时Handler强制TLS，使用Node连接凭据和Ed25519 challenge认证，并且不重新编码地路由Protocol v1原始帧。当前CLI仍启动loopback HTTP，因此两个WebSocket端点会返回 `tls_required`；证书参数和公网部署继续属于AC-306。Server 已提供 `/pair` 最小移动配对页，但真实手机访问仍须等待受信TLS与非loopback部署。不要通过反向代理或其他方式将loopback监听器暴露到本机以外。
+正式实时Handler强制TLS，使用Node连接凭据和Ed25519 challenge认证，并且不重新编码地路由Protocol v1原始帧。Server Schema v3新增只保存散列的五分钟附加Node enrollment和Owner信任revision；每台Node的连接凭据仍只保留在本机。当前CLI仍启动loopback HTTP，因此两个WebSocket端点会返回 `tls_required`；证书参数和公网部署继续属于AC-306。Server 已提供 `/pair` 最小移动配对页，但真实手机访问仍须等待受信TLS与非loopback部署。不要通过反向代理或其他方式将loopback监听器暴露到本机以外。
 
 ### 正式 Standalone 组装
 
@@ -235,6 +236,13 @@ yuanshu node pairing reject <pairing-id>
 yuanshu node clients list
 yuanshu node clients revoke <client-id> <key-id>
 yuanshu node credential rotate
+yuanshu node enrollment create
+yuanshu node enrollment list
+yuanshu node enrollment approve <enrollment-id>
+yuanshu node enrollment reject <enrollment-id>
+yuanshu node enrollment join <join-url>
+yuanshu node devices list
+yuanshu node devices revoke <node-id>
 yuanshu node autostart enable
 yuanshu node autostart disable
 yuanshu node stop

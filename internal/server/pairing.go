@@ -80,6 +80,14 @@ func (s *PairingService) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/control-client-pairings/{id}/decision", s.decide)
 	mux.HandleFunc("DELETE /v1/control-clients/{id}", s.revokeClient)
 	mux.HandleFunc("POST /v1/nodes/{id}/credential/rotate", s.rotateCredential)
+	mux.HandleFunc("POST /v1/node-enrollments", s.createNodeEnrollment)
+	mux.HandleFunc("GET /v1/node-enrollments", s.pendingNodeEnrollments)
+	mux.HandleFunc("POST /v1/node-enrollments/{id}/claim", s.claimNodeEnrollment)
+	mux.HandleFunc("GET /v1/node-enrollments/{id}/status", s.nodeEnrollmentStatus)
+	mux.HandleFunc("POST /v1/node-enrollments/{id}/decision", s.decideNodeEnrollment)
+	mux.HandleFunc("GET /v1/nodes", s.listNodes)
+	mux.HandleFunc("DELETE /v1/nodes/{id}", s.revokeNode)
+	mux.HandleFunc("GET /v1/control-clients", s.controlTrustManifest)
 	return mux
 }
 

@@ -115,6 +115,7 @@ yuanshu standalone   Server + Web + local Node in one deployment
 - [x] Formal loopback Server bootstrap and SQLite metadata baseline
 - [x] TLS-only WSS Hub, authenticated RelayTransport, and Owner/Node routing
 - [x] Short-lived control-client pairing, local Node confirmation, credential rotation, and immediate revocation
+- [x] One Owner with up to five Nodes, signed Node enrollment, global controller trust, and cross-stream isolation
 - [ ] Linux Server and Standalone self-hosting preview
 - [ ] Linux Server and real-phone self-hosted deployment
 - [ ] Linux Yuanshu Node
@@ -126,7 +127,7 @@ The roadmap establishes a reliable daily-use loop for one developer first, then 
 
 ## Development
 
-The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. Node SQLite now also provides monotonic event sequences, bounded retention, outbox cursor acknowledgement, replay, snapshots, and conservative reconciliation of uncertain Turns. The formal TLS-only WSS Hub, RelayTransport, and control-client pairing boundary are connected; the full task PWA remains a later milestone.
+The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. Node SQLite now also provides monotonic event sequences, bounded retention, outbox cursor acknowledgement, replay, snapshots, and conservative reconciliation of uncertain Turns. The TLS-only Hub supports one personal Owner with up to five isolated Nodes; an existing Node signs five-minute enrollment decisions, and Owner-wide Control Client trust is revalidated independently by every Node. The full task PWA remains a later milestone.
 
 Prerequisites:
 
@@ -185,6 +186,13 @@ yuanshu node pairing reject <pairing-id>
 yuanshu node clients list
 yuanshu node clients revoke <client-id> <key-id>
 yuanshu node credential rotate
+yuanshu node enrollment create
+yuanshu node enrollment list
+yuanshu node enrollment approve <enrollment-id>
+yuanshu node enrollment reject <enrollment-id>
+yuanshu node enrollment join <join-url>
+yuanshu node devices list
+yuanshu node devices revoke <node-id>
 yuanshu node autostart enable
 yuanshu node autostart disable
 yuanshu node stop
@@ -209,7 +217,7 @@ yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
 
 On an uninitialized data directory, the Server prints a 32-byte bootstrap secret once to local stdout. The enrolling Node generates its own Ed25519 key and connection credential, retains the credential locally, and sends only the public key and SHA-256 credential hash to `POST /v1/bootstrap/claim`. The Server persists `server.db`, creates the first Owner and Node atomically, and supports exact claim retries for five minutes. HTTP initialization uses `/healthz`, `/readyz`, `/v1/bootstrap/status`, and `/v1/bootstrap/claim`; authenticated realtime connections use `/node/connect` and `/web/connect`.
 
-The formal realtime handlers require TLS, authenticate Node credentials plus Ed25519 challenges, and route immutable Protocol v1 frames without re-encoding them. The current CLI still starts loopback HTTP, so its WebSocket endpoints return `tls_required`; certificate flags and public deployment remain AC-306. The Server now exposes a minimal mobile pairing page at `/pair`, but real-phone access still waits for trusted TLS and non-loopback deployment. Do not expose the loopback listener through a reverse proxy or outside the local machine.
+The formal realtime handlers require TLS, authenticate Node credentials plus Ed25519 challenges, and route immutable Protocol v1 frames without re-encoding them. Server Schema v3 adds hashed, five-minute additional-Node enrollment and Owner trust revisions; connection credentials remain local to each Node. The current CLI still starts loopback HTTP, so its WebSocket endpoints return `tls_required`; certificate flags and public deployment remain AC-306. The Server now exposes a minimal mobile pairing page at `/pair`, but real-phone access still waits for trusted TLS and non-loopback deployment. Do not expose the loopback listener through a reverse proxy or outside the local machine.
 
 ### Formal Standalone composition
 

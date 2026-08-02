@@ -137,6 +137,125 @@ func TestPairingPageUsesStrictBrowserBoundary(t *testing.T) {
 	}
 }
 
+func TestPersonalNodeEnrollmentRoutesOneControlToTwoIsolatedNodes(t *testing.T) {
+	service, local, bootstrapSecret := openServerService(t)
+	issuerPublic, issuerPrivate, _ := ed25519.GenerateKey(nil)
+	issuerCredential := "issuer-node-credential-material"
+	issuerHash := sha256.Sum256([]byte(issuerCredential))
+	claim := validClaimRequest()
+	claim.PublicKey = base64.RawURLEncoding.EncodeToString(issuerPublic)
+	claim.CredentialHash = base64.RawURLEncoding.EncodeToString(issuerHash[:])
+	bound, _, err := service.Claim(context.Background(), bootstrapSecret, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := "https://mobile.example.test"
+	hub, _ := NewHub(local, HubOptions{AllowedControlOrigins: []string{origin}})
+	defer hub.Close()
+	handler, _ := NewHandler(service, local, hub)
+	tlsServer := httptest.NewTLSServer(handler)
+	defer tlsServer.Close()
+	issuer := dialPairedTestNodeCount(t, tlsServer, hub, bound.NodeID, issuerCredential, issuerPrivate, 1)
+	defer issuer.Close()
+
+	clientPublic, clientPrivate, _ := ed25519.GenerateKey(nil)
+	clientID, keyID := "cli_multi", "key_multi"
+	pairSecret := bytes.Repeat([]byte{0x31}, 32)
+	pairHash := sha256.Sum256(pairSecret)
+	createdPair := doPairingJSON(t, tlsServer.Client(), http.MethodPost, tlsServer.URL+"/v1/control-client-pairings", map[string]string{"codeHash": base64.RawURLEncoding.EncodeToString(pairHash[:]), "challenge": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x32}, 32))}, nodeHeaders(bound.NodeID, issuerCredential))
+	var pair struct{ PairingID, ExpiresAt string }
+	_ = json.Unmarshal(createdPair, &pair)
+	pairHeaders := make(http.Header)
+	pairHeaders.Set("Authorization", "Bearer "+string(pairSecret))
+	doPairingJSON(t, tlsServer.Client(), http.MethodPost, tlsServer.URL+"/v1/control-client-pairings/"+pair.PairingID+"/claim", map[string]string{"clientId": clientID, "keyId": keyID, "name": "One controller", "publicKey": base64.RawURLEncoding.EncodeToString(clientPublic)}, pairHeaders)
+	pairBinding := enrollment.PairingDecision{Version: "1", PairingID: pair.PairingID, OwnerID: bound.OwnerID, NodeID: bound.NodeID, ClientID: clientID, KeyID: keyID, PublicKey: base64.RawURLEncoding.EncodeToString(clientPublic), Name: "One controller", Decision: "accept", ExpiresAt: pair.ExpiresAt}
+	pairInput, _ := enrollment.PairingDecisionSigningInput(pairBinding)
+	doPairingJSON(t, tlsServer.Client(), http.MethodPost, tlsServer.URL+"/v1/control-client-pairings/"+pair.PairingID+"/decision", map[string]string{"decision": "accept", "signature": base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerPrivate, pairInput))}, nodeHeaders(bound.NodeID, issuerCredential))
+
+	enrollSecret := bytes.Repeat([]byte{0x41}, 32)
+	enrollHash := sha256.Sum256(enrollSecret)
+	created := doPairingJSON(t, tlsServer.Client(), http.MethodPost, tlsServer.URL+"/v1/node-enrollments", map[string]string{"codeHash": base64.RawURLEncoding.EncodeToString(enrollHash[:])}, nodeHeaders(bound.NodeID, issuerCredential))
+	var enrollmentCreated struct{ EnrollmentID, ExpiresAt string }
+	if json.Unmarshal(created, &enrollmentCreated) != nil || enrollmentCreated.EnrollmentID == "" {
+		t.Fatalf("create=%s", created)
+	}
+	candidatePublic, candidatePrivate, _ := ed25519.GenerateKey(nil)
+	candidateCredential := "candidate-node-credential-material"
+	candidateHash := sha256.Sum256([]byte(candidateCredential))
+	enrollHeaders := make(http.Header)
+	enrollHeaders.Set("Authorization", "Bearer "+string(enrollSecret))
+	claimed := doPairingJSON(t, tlsServer.Client(), http.MethodPost, tlsServer.URL+"/v1/node-enrollments/"+enrollmentCreated.EnrollmentID+"/claim", map[string]string{"name": "Home PC", "os": "windows", "version": "dev", "publicKey": base64.RawURLEncoding.EncodeToString(candidatePublic), "credentialHash": base64.RawURLEncoding.EncodeToString(candidateHash[:])}, enrollHeaders)
+	var claimValue struct {
+		CandidateNodeID string `json:"candidateNodeId"`
+	}
+	if json.Unmarshal(claimed, &claimValue) != nil || claimValue.CandidateNodeID == "" {
+		t.Fatalf("claim=%s", claimed)
+	}
+	pending := doPairingJSON(t, tlsServer.Client(), http.MethodGet, tlsServer.URL+"/v1/node-enrollments", nil, nodeHeaders(bound.NodeID, issuerCredential))
+	var pendingValue struct {
+		Enrollments []struct{ EnrollmentID, CandidateNodeID, Name, OS, Version, PublicKey, CredentialHash, ExpiresAt string } `json:"enrollments"`
+	}
+	if json.Unmarshal(pending, &pendingValue) != nil || len(pendingValue.Enrollments) != 1 {
+		t.Fatalf("pending=%s", pending)
+	}
+	candidate := pendingValue.Enrollments[0]
+	decision := enrollment.NodeEnrollmentDecision{Version: "1", EnrollmentID: candidate.EnrollmentID, OwnerID: bound.OwnerID, IssuerNodeID: bound.NodeID, CandidateNodeID: candidate.CandidateNodeID, CandidatePublicKey: candidate.PublicKey, CredentialHash: candidate.CredentialHash, Name: candidate.Name, OS: candidate.OS, NodeVersion: candidate.Version, Decision: "accept", ExpiresAt: candidate.ExpiresAt}
+	decisionInput, _ := enrollment.NodeEnrollmentDecisionSigningInput(decision)
+	doPairingJSON(t, tlsServer.Client(), http.MethodPost, tlsServer.URL+"/v1/node-enrollments/"+candidate.EnrollmentID+"/decision", map[string]string{"decision": "accept", "signature": base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerPrivate, decisionInput))}, nodeHeaders(bound.NodeID, issuerCredential))
+	status := doPairingJSON(t, tlsServer.Client(), http.MethodGet, tlsServer.URL+"/v1/node-enrollments/"+candidate.EnrollmentID+"/status", nil, enrollHeaders)
+	if !bytes.Contains(status, []byte(`"status":"approved"`)) || !bytes.Contains(status, []byte(`"proof"`)) {
+		t.Fatalf("status=%s", status)
+	}
+	candidateNode := dialPairedTestNodeCount(t, tlsServer, hub, claimValue.CandidateNodeID, candidateCredential, candidatePrivate, 2)
+	defer candidateNode.Close()
+
+	controlHeader := make(http.Header)
+	controlHeader.Set("X-Yuanshu-Client-ID", clientID)
+	controlHeader.Set("Origin", origin)
+	control, _, err := transport.DialRelay(context.Background(), wssURL(tlsServer.URL)+"/web/connect", transport.RelayDialOptions{HTTPClient: tlsServer.Client(), Header: controlHeader, Role: transport.SessionRoleControl, SubjectID: clientID, Sign: func(_ context.Context, input []byte) ([]byte, error) { return ed25519.Sign(clientPrivate, input), nil }, Relay: transport.RelayOptions{MaxSendBytes: 256 << 10, MaxReceiveBytes: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	waitHubSnapshot(t, hub, 2, 1)
+	first := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"` + bound.OwnerID + `","nodeId":"` + bound.NodeID + `","payload":{}}`)
+	second := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"` + bound.OwnerID + `","nodeId":"` + claimValue.CandidateNodeID + `","payload":{}}`)
+	if err := control.Send(context.Background(), transport.NewFrame(first)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := issuer.Receive(context.Background()); err != nil || !bytes.Equal(got.Bytes(), first) {
+		t.Fatalf("issuer route err=%v", err)
+	}
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := candidateNode.Receive(short); err != context.DeadlineExceeded {
+		t.Fatalf("cross-stream err=%v", err)
+	}
+	if err := control.Send(context.Background(), transport.NewFrame(second)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := candidateNode.Receive(context.Background()); err != nil || !bytes.Equal(got.Bytes(), second) {
+		t.Fatalf("candidate route err=%v", err)
+	}
+	manifest := doPairingJSON(t, tlsServer.Client(), http.MethodGet, tlsServer.URL+"/v1/control-clients", nil, nodeHeaders(claimValue.CandidateNodeID, candidateCredential))
+	if !bytes.Contains(manifest, []byte(clientID)) || !bytes.Contains(manifest, []byte(`"revision":1`)) {
+		t.Fatalf("manifest=%s", manifest)
+	}
+
+	issued := fixedServerNow.Format(time.RFC3339Nano)
+	revoke := enrollment.NodeRevocation{Version: "1", OwnerID: bound.OwnerID, IssuerNodeID: bound.NodeID, TargetNodeID: claimValue.CandidateNodeID, IssuedAt: issued}
+	revokeInput, _ := enrollment.NodeRevocationSigningInput(revoke)
+	doPairingJSON(t, tlsServer.Client(), http.MethodDelete, tlsServer.URL+"/v1/nodes/"+claimValue.CandidateNodeID, map[string]string{"issuedAt": issued, "signature": base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerPrivate, revokeInput))}, nodeHeaders(bound.NodeID, issuerCredential))
+	ctx, cancelRevoke := context.WithTimeout(context.Background(), time.Second)
+	defer cancelRevoke()
+	if _, err := candidateNode.Receive(ctx); err == nil {
+		t.Fatal("revoked node remained connected")
+	}
+	if !hub.NodeConnected(bound.OwnerID, bound.NodeID) {
+		t.Fatal("issuer node was disconnected by target revocation")
+	}
+}
+
 type PairingCandidateWire struct {
 	PairingID string `json:"pairingId"`
 }
@@ -148,12 +267,15 @@ func nodeHeaders(nodeID, credential string) http.Header {
 	return header
 }
 func dialPairedTestNode(t *testing.T, server *httptest.Server, hub *Hub, nodeID, credential string, private ed25519.PrivateKey) transport.Transport {
+	return dialPairedTestNodeCount(t, server, hub, nodeID, credential, private, 1)
+}
+func dialPairedTestNodeCount(t *testing.T, server *httptest.Server, hub *Hub, nodeID, credential string, private ed25519.PrivateKey, expected int) transport.Transport {
 	t.Helper()
 	result, _, err := transport.DialRelay(context.Background(), wssURL(server.URL)+"/node/connect", transport.RelayDialOptions{HTTPClient: server.Client(), Header: nodeHeaders(nodeID, credential), Role: transport.SessionRoleNode, SubjectID: nodeID, Sign: func(_ context.Context, input []byte) ([]byte, error) { return ed25519.Sign(private, input), nil }, Relay: transport.RelayOptions{MaxSendBytes: 1 << 20, MaxReceiveBytes: 256 << 10}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitHubSnapshot(t, hub, 1, hub.Snapshot().ControlConnections)
+	waitHubSnapshot(t, hub, expected, hub.Snapshot().ControlConnections)
 	return result
 }
 func doPairingJSON(t *testing.T, client *http.Client, method, url string, body any, headers http.Header) []byte {

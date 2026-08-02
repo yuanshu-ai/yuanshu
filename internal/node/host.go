@@ -40,6 +40,8 @@ type host struct {
 	local            *store.Store
 	runtime          adapter.Runtime
 	pairing          *pairingManager
+	joiner           *nodeEnrollmentJoiner
+	trustCancel      context.CancelFunc
 	relay            transport.Transport
 	sessionCancel    context.CancelFunc
 	controlEvents    *eventlog.Manager
@@ -166,6 +168,12 @@ func (h *host) reload(ctx context.Context) error {
 			value.Identity = "unpaired"
 		}
 	})
+	if !bound && loaded.Config.Transport.Mode == config.TransportRelay {
+		joiner, joinErr := newNodeEnrollmentJoiner(enrollmentJoinerOptions{RelayURL: loaded.Config.Relay.URL, Identity: nodeIdentity, Signer: identityManager, Local: local, Secrets: h.options.platform.SecureStore(), CredentialRef: loaded.Config.Relay.CredentialRef, Name: loaded.Config.Host.Name, Version: "dev", OnComplete: func() { _ = h.reload(h.runCtx) }})
+		if joinErr == nil {
+			h.joiner = joiner
+		}
+	}
 	if bound && loaded.Config.Transport.Mode == config.TransportRelay {
 		credential, secretErr := h.options.platform.SecureStore().Get(ctx, loaded.Config.Relay.CredentialRef)
 		if secretErr == nil {
@@ -177,6 +185,7 @@ func (h *host) reload(ctx context.Context) error {
 			clear(credential)
 			if managerErr == nil {
 				h.pairing = manager
+				_ = manager.SyncTrust(ctx)
 				relay, relayErr := manager.Connect(ctx)
 				if relayErr == nil {
 					h.relay = relay
@@ -184,6 +193,20 @@ func (h *host) reload(ctx context.Context) error {
 				} else {
 					h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
 				}
+				trustCtx, trustCancel := context.WithCancel(h.runCtx)
+				h.trustCancel = trustCancel
+				go func(value *pairingManager) {
+					ticker := time.NewTicker(30 * time.Second)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-trustCtx.Done():
+							return
+						case <-ticker.C:
+							_ = value.SyncTrust(trustCtx)
+						}
+					}
+				}(manager)
 			}
 		}
 	}
@@ -334,9 +357,17 @@ func (h *host) closeResourcesLocked() error {
 		}
 		h.relay = nil
 	}
+	if h.trustCancel != nil {
+		h.trustCancel()
+		h.trustCancel = nil
+	}
 	if h.pairing != nil {
 		h.pairing.Close()
 		h.pairing = nil
+	}
+	if h.joiner != nil {
+		h.joiner.Close()
+		h.joiner = nil
 	}
 	if h.runtime != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -359,6 +390,18 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	response := localResponse{Protocol: localProtocol}
+	if request.Command == "enrollment_join" {
+		if h.joiner == nil {
+			response.Error = "enrollment_unavailable"
+			return response
+		}
+		if err := h.joiner.Join(ctx, request.JoinURL); err == nil {
+			response.OK = true
+		} else {
+			response.Error = "enrollment_failed"
+		}
+		return response
+	}
 	if h.pairing == nil {
 		response.Error = "remote_not_available"
 		return response
@@ -426,6 +469,43 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 		} else {
 			response.Error = "rotation_failed"
 		}
+	case "enrollment_create":
+		value, err := h.pairing.CreateNodeEnrollment(ctx)
+		if err == nil {
+			response.OK, response.EnrollmentURL = true, value
+		} else {
+			response.Error = "enrollment_failed"
+		}
+	case "enrollment_list":
+		value, err := h.pairing.PendingNodeEnrollments(ctx)
+		if err == nil {
+			response.OK, response.Enrollments = true, value
+		} else {
+			response.Error = "enrollment_failed"
+		}
+	case "enrollment_accept", "enrollment_decline":
+		decision := "accept"
+		if request.Command == "enrollment_decline" {
+			decision = "decline"
+		}
+		if err := h.pairing.DecideNodeEnrollment(ctx, request.EnrollmentID, decision); err == nil {
+			response.OK = true
+		} else {
+			response.Error = "enrollment_failed"
+		}
+	case "device_list":
+		value, err := h.pairing.Devices(ctx)
+		if err == nil {
+			response.OK, response.Devices = true, value
+		} else {
+			response.Error = "device_failed"
+		}
+	case "device_revoke":
+		if err := h.pairing.RevokeNode(ctx, request.NodeID); err == nil {
+			response.OK = true
+		} else {
+			response.Error = "device_failed"
+		}
 	default:
 		response.Error = "unsupported_command"
 	}
@@ -441,7 +521,7 @@ func (h *host) startControlSessionLocked() error {
 	}
 	session, err := NewControlSession(ControlSessionOptions{
 		Transport: h.relay, Validator: h.controlValidator, Target: h.controlTarget,
-		Events: h.controlEvents, Store: h.local, Runtime: h.runtime, DeviceName: h.controlName,
+		Events: h.controlEvents, Store: h.local, Runtime: h.runtime, DeviceName: h.controlName, RefreshTrust: h.pairing.SyncTrust,
 	})
 	if err != nil {
 		return err

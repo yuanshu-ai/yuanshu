@@ -22,24 +22,26 @@ type controlWorkspaceStore interface {
 // protocol validator, durable event log, workspace policy, and Agent runtime.
 // The same component is used by Relay and Standalone compositions.
 type ControlSessionOptions struct {
-	Transport  transport.Transport
-	Validator  *protocol.Validator
-	Target     protocol.Target
-	Events     *eventlog.Manager
-	Store      controlWorkspaceStore
-	Runtime    adapter.Runtime
-	DeviceName string
+	Transport    transport.Transport
+	Validator    *protocol.Validator
+	Target       protocol.Target
+	Events       *eventlog.Manager
+	Store        controlWorkspaceStore
+	Runtime      adapter.Runtime
+	DeviceName   string
+	RefreshTrust func(context.Context) error
 }
 
 // ControlSession is the formal Node-side Protocol v1 control boundary.
 type ControlSession struct {
-	transport  transport.Transport
-	validator  *protocol.Validator
-	target     protocol.Target
-	events     *eventlog.Manager
-	store      controlWorkspaceStore
-	runtime    adapter.Runtime
-	deviceName string
+	transport    transport.Transport
+	validator    *protocol.Validator
+	target       protocol.Target
+	events       *eventlog.Manager
+	store        controlWorkspaceStore
+	runtime      adapter.Runtime
+	deviceName   string
+	refreshTrust func(context.Context) error
 }
 
 func NewControlSession(options ControlSessionOptions) (*ControlSession, error) {
@@ -49,7 +51,7 @@ func NewControlSession(options ControlSessionOptions) (*ControlSession, error) {
 	}
 	return &ControlSession{
 		transport: options.Transport, validator: options.Validator, target: options.Target,
-		events: options.Events, store: options.Store, runtime: options.Runtime, deviceName: options.DeviceName,
+		events: options.Events, store: options.Store, runtime: options.Runtime, deviceName: options.DeviceName, refreshTrust: options.RefreshTrust,
 	}, nil
 }
 
@@ -105,6 +107,12 @@ func (s *ControlSession) Run(ctx context.Context) error {
 
 func (s *ControlSession) handle(ctx context.Context, raw []byte) error {
 	validated, err := s.validator.Validate(ctx, raw, s.target)
+	var validation *protocol.ValidationError
+	if err != nil && s.refreshTrust != nil && errors.As(err, &validation) && validation.Stage == protocol.ValidationStageTrust && validation.Code == protocol.ErrorUnauthorized {
+		if refreshErr := s.refreshTrust(ctx); refreshErr == nil {
+			validated, err = s.validator.Validate(ctx, raw, s.target)
+		}
+	}
 	if err != nil {
 		return err
 	}

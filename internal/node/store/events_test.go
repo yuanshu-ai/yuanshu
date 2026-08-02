@@ -164,7 +164,7 @@ func TestEventRecoveryMigrationUpgradesSchemaV3(t *testing.T) {
 	}
 	defer upgraded.Close()
 	var version int
-	if err := upgraded.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 4 {
+	if err := upgraded.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != CurrentSchemaVersion {
 		t.Fatalf("upgraded version = %d, %v", version, err)
 	}
 	if record, err := upgraded.RuntimeThread(context.Background(), "thread"); err != nil || record.State != RuntimeThreadNeedsReconcile {

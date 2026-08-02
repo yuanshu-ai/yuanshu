@@ -19,6 +19,8 @@ const (
 	PairingDecisionDomain    = "yuanshu-pairing-decision-v1\x00"
 	ClientRevocationDomain   = "yuanshu-client-revocation-v1\x00"
 	CredentialRotationDomain = "yuanshu-node-credential-rotation-v1\x00"
+	NodeEnrollmentDomain     = "yuanshu-node-enrollment-decision-v1\x00"
+	NodeRevocationDomain     = "yuanshu-node-revocation-v1\x00"
 )
 
 type PairingDecision struct {
@@ -51,6 +53,29 @@ type CredentialRotation struct {
 	IssuedAt          string `json:"issuedAt"`
 }
 
+type NodeEnrollmentDecision struct {
+	Version            string `json:"version"`
+	EnrollmentID       string `json:"enrollmentId"`
+	OwnerID            string `json:"ownerId"`
+	IssuerNodeID       string `json:"issuerNodeId"`
+	CandidateNodeID    string `json:"candidateNodeId"`
+	CandidatePublicKey string `json:"candidatePublicKey"`
+	CredentialHash     string `json:"credentialHash"`
+	Name               string `json:"name"`
+	OS                 string `json:"os"`
+	NodeVersion        string `json:"nodeVersion"`
+	Decision           string `json:"decision"`
+	ExpiresAt          string `json:"expiresAt"`
+}
+
+type NodeRevocation struct {
+	Version      string `json:"version"`
+	OwnerID      string `json:"ownerId"`
+	IssuerNodeID string `json:"issuerNodeId"`
+	TargetNodeID string `json:"targetNodeId"`
+	IssuedAt     string `json:"issuedAt"`
+}
+
 func PairingDecisionSigningInput(value PairingDecision) ([]byte, error) {
 	if value.Version != "1" || !validOpaque(value.PairingID) || !validOpaque(value.OwnerID) || !validOpaque(value.NodeID) ||
 		!validOpaque(value.ClientID) || !validOpaque(value.KeyID) || value.PublicKey == "" || !validName(value.Name) ||
@@ -72,6 +97,24 @@ func CredentialRotationSigningInput(value CredentialRotation) ([]byte, error) {
 		return nil, errors.New("credential rotation binding is invalid")
 	}
 	return signingInput(CredentialRotationDomain, value)
+}
+
+func NodeEnrollmentDecisionSigningInput(value NodeEnrollmentDecision) ([]byte, error) {
+	if value.Version != "1" || !validOpaque(value.EnrollmentID) || !validOpaque(value.OwnerID) ||
+		!validOpaque(value.IssuerNodeID) || !validOpaque(value.CandidateNodeID) || value.CandidatePublicKey == "" ||
+		value.CredentialHash == "" || !validName(value.Name) || (value.OS != "windows" && value.OS != "linux" && value.OS != "darwin") ||
+		!validOpaque(value.NodeVersion) || (value.Decision != "accept" && value.Decision != "decline") || !validTime(value.ExpiresAt) {
+		return nil, errors.New("node enrollment decision binding is invalid")
+	}
+	return signingInput(NodeEnrollmentDomain, value)
+}
+
+func NodeRevocationSigningInput(value NodeRevocation) ([]byte, error) {
+	if value.Version != "1" || !validOpaque(value.OwnerID) || !validOpaque(value.IssuerNodeID) ||
+		!validOpaque(value.TargetNodeID) || value.IssuerNodeID == value.TargetNodeID || !validTime(value.IssuedAt) {
+		return nil, errors.New("node revocation binding is invalid")
+	}
+	return signingInput(NodeRevocationDomain, value)
 }
 
 func signingInput(domain string, value any) ([]byte, error) {

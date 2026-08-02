@@ -31,6 +31,40 @@ func openTestStore(t *testing.T) (*Store, string) {
 	return store, path
 }
 
+func TestTrustManifestIsOwnerWideButAppliedPerNodeAndNeverRollsBack(t *testing.T) {
+	local, _ := openTestStore(t)
+	key := bytes.Repeat([]byte{0x61}, ed25519.PublicKeySize)
+	first := TrustManifest{OwnerID: "owner", NodeID: "node-a", Revision: 1, Clients: []TrustedClientRecord{{OwnerID: "owner", NodeID: "node-a", ClientID: "client", KeyID: "key", PublicKey: key, Status: v1.TrustStatusActive}}}
+	if err := local.ReconcileTrustManifest(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.NodeID = "node-b"
+	second.Clients = []TrustedClientRecord{{OwnerID: "owner", NodeID: "node-b", ClientID: "client", KeyID: "key", PublicKey: key, Status: v1.TrustStatusActive}}
+	if err := local.ReconcileTrustManifest(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	for _, nodeID := range []string{"node-a", "node-b"} {
+		trusted, err := local.LookupControlKey(context.Background(), v1.KeyRef{OwnerID: "owner", NodeID: nodeID, ClientID: "client", KeyID: "key"})
+		if err != nil || trusted.Status != v1.TrustStatusActive {
+			t.Fatalf("node %s trust=%+v err=%v", nodeID, trusted, err)
+		}
+	}
+	revoked := TrustManifest{OwnerID: "owner", NodeID: "node-a", Revision: 2, Clients: []TrustedClientRecord{{OwnerID: "owner", NodeID: "node-a", ClientID: "client", KeyID: "key", PublicKey: key, Status: v1.TrustStatusRevoked}}}
+	if err := local.ReconcileTrustManifest(context.Background(), revoked); err != nil {
+		t.Fatal(err)
+	}
+	if trusted, _ := local.LookupControlKey(context.Background(), v1.KeyRef{OwnerID: "owner", NodeID: "node-a", ClientID: "client", KeyID: "key"}); trusted.Status != v1.TrustStatusRevoked {
+		t.Fatalf("revoked trust=%+v", trusted)
+	}
+	if err := local.ReconcileTrustManifest(context.Background(), first); !errors.Is(err, ErrConflict) {
+		t.Fatalf("old revision error=%v", err)
+	}
+	if trusted, _ := local.LookupControlKey(context.Background(), v1.KeyRef{OwnerID: "owner", NodeID: "node-b", ClientID: "client", KeyID: "key"}); trusted.Status != v1.TrustStatusActive {
+		t.Fatal("one Node manifest changed another Node")
+	}
+}
+
 func TestOpenMigratesAndReopensSQLite(t *testing.T) {
 	store, path := openTestStore(t)
 	var version int
@@ -41,7 +75,7 @@ func TestOpenMigratesAndReopensSQLite(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
 		t.Fatalf("journal_mode = %q, %v", mode, err)
 	}
-	wantTables := []string{"identity", "outbox", "replay_messages", "replay_nonces", "runtime_threads", "schema_migrations", "signer_sequences", "trusted_clients", "workspaces"}
+	wantTables := []string{"identity", "outbox", "replay_messages", "replay_nonces", "runtime_threads", "schema_migrations", "signer_sequences", "trust_manifests", "trusted_clients", "workspaces"}
 	for _, table := range wantTables {
 		var count int
 		if err := store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count); err != nil || count != 1 {
@@ -231,6 +265,16 @@ func TestReplayStoreIsAtomicAndPersistent(t *testing.T) {
 	count, err := reopened.PruneExpiredNonces(context.Background(), fixedNow.Add(2*time.Minute))
 	if err != nil || count != 3 {
 		t.Fatalf("PruneExpiredNonces() = %d, %v", count, err)
+	}
+}
+
+func TestReplaySequenceIsIndependentPerNode(t *testing.T) {
+	local, _ := openTestStore(t)
+	for _, nodeID := range []string{"node-a", "node-b"} {
+		record := v1.ReplayRecord{OwnerID: "owner", NodeID: nodeID, ClientID: "client", KeyID: "key", MessageID: "message-" + nodeID, Nonce: "nonce-" + nodeID, Sequence: 1, NonceRetainTo: fixedNow.Add(time.Minute)}
+		if err := local.CheckAndRecord(context.Background(), record); err != nil {
+			t.Fatalf("node %s sequence 1: %v", nodeID, err)
+		}
 	}
 }
 

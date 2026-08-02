@@ -21,6 +21,65 @@ type TrustedClientRecord struct {
 	Status                           v1.TrustStatus
 }
 
+type TrustManifest struct {
+	OwnerID, NodeID string
+	Revision        int64
+	Clients         []TrustedClientRecord
+}
+
+// ReconcileTrustManifest atomically applies an Owner-level control-client
+// manifest to this Node. Older revisions can never restore revoked keys.
+func (s *Store) ReconcileTrustManifest(ctx context.Context, manifest TrustManifest) error {
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
+	if manifest.OwnerID == "" || manifest.NodeID == "" || len(manifest.OwnerID) > 128 || len(manifest.NodeID) > 128 || manifest.Revision < 0 {
+		return ErrInvalid
+	}
+	for _, item := range manifest.Clients {
+		if item.OwnerID != manifest.OwnerID || item.NodeID != manifest.NodeID || !validKeyRef(v1.KeyRef{OwnerID: item.OwnerID, NodeID: item.NodeID, ClientID: item.ClientID, KeyID: item.KeyID}) || len(item.PublicKey) != ed25519.PublicKeySize || (item.Status != v1.TrustStatusActive && item.Status != v1.TrustStatusRevoked) {
+			return ErrInvalid
+		}
+	}
+	db, err := s.database()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return internal("trust manifest")
+	}
+	defer tx.Rollback()
+	var current int64
+	err = tx.QueryRowContext(ctx, "SELECT revision FROM trust_manifests WHERE owner_id=? AND node_id=?", manifest.OwnerID, manifest.NodeID).Scan(&current)
+	if err == nil && manifest.Revision < current {
+		return ErrConflict
+	}
+	if err == nil && manifest.Revision == current {
+		return tx.Commit()
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return internal("trust manifest")
+	}
+	now := timestamp(s.clock())
+	if _, err := tx.ExecContext(ctx, "UPDATE trusted_clients SET status='revoked',revoked_at=? WHERE owner_id=? AND node_id=? AND status='active'", now, manifest.OwnerID, manifest.NodeID); err != nil {
+		return internal("trust manifest")
+	}
+	for _, item := range manifest.Clients {
+		var revoked any
+		if item.Status == v1.TrustStatusRevoked {
+			revoked = now
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO trusted_clients(owner_id,node_id,client_id,key_id,public_key,status,created_at,revoked_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(owner_id,node_id,client_id,key_id) DO UPDATE SET public_key=excluded.public_key,status=excluded.status,revoked_at=excluded.revoked_at`, item.OwnerID, item.NodeID, item.ClientID, item.KeyID, item.PublicKey, item.Status, now, revoked); err != nil {
+			return internal("trust manifest")
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO trust_manifests(owner_id,node_id,revision,updated_at) VALUES(?,?,?,?) ON CONFLICT(owner_id,node_id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at`, manifest.OwnerID, manifest.NodeID, manifest.Revision, now); err != nil {
+		return internal("trust manifest")
+	}
+	return tx.Commit()
+}
+
 func (s *Store) TrustedClients(ctx context.Context, ownerID, nodeID string) ([]TrustedClientRecord, error) {
 	if err := requireContext(ctx); err != nil {
 		return nil, err

@@ -23,21 +23,27 @@ const (
 )
 
 type localRequest struct {
-	Protocol  string `json:"protocol"`
-	Command   string `json:"command"`
-	PairingID string `json:"pairingId,omitempty"`
-	ClientID  string `json:"clientId,omitempty"`
-	KeyID     string `json:"keyId,omitempty"`
+	Protocol     string `json:"protocol"`
+	Command      string `json:"command"`
+	PairingID    string `json:"pairingId,omitempty"`
+	ClientID     string `json:"clientId,omitempty"`
+	KeyID        string `json:"keyId,omitempty"`
+	EnrollmentID string `json:"enrollmentId,omitempty"`
+	NodeID       string `json:"nodeId,omitempty"`
+	JoinURL      string `json:"joinUrl,omitempty"`
 }
 
 type localResponse struct {
-	Protocol   string                 `json:"protocol"`
-	OK         bool                   `json:"ok"`
-	Error      string                 `json:"error,omitempty"`
-	Status     *Status                `json:"status,omitempty"`
-	PairingURL string                 `json:"pairingUrl,omitempty"`
-	Pairings   []PairingCandidate     `json:"pairings,omitempty"`
-	Clients    []TrustedClientSummary `json:"clients,omitempty"`
+	Protocol      string                    `json:"protocol"`
+	OK            bool                      `json:"ok"`
+	Error         string                    `json:"error,omitempty"`
+	Status        *Status                   `json:"status,omitempty"`
+	PairingURL    string                    `json:"pairingUrl,omitempty"`
+	Pairings      []PairingCandidate        `json:"pairings,omitempty"`
+	Clients       []TrustedClientSummary    `json:"clients,omitempty"`
+	EnrollmentURL string                    `json:"enrollmentUrl,omitempty"`
+	Enrollments   []NodeEnrollmentCandidate `json:"enrollments,omitempty"`
+	Devices       []DeviceSummary           `json:"devices,omitempty"`
 }
 
 type localServer struct {

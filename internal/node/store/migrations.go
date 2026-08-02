@@ -192,6 +192,19 @@ var nodeMigrations = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 5,
+		name:    "owner_control_trust_manifest",
+		statements: []string{
+			`CREATE TABLE trust_manifests (
+				owner_id TEXT NOT NULL CHECK (length(owner_id) BETWEEN 1 AND 128),
+				node_id TEXT NOT NULL CHECK (length(node_id) BETWEEN 1 AND 128),
+				revision INTEGER NOT NULL CHECK (revision >= 0),
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (owner_id, node_id)
+			) STRICT`,
+		},
+	},
 }
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -256,6 +269,8 @@ func sqlLiteralInt(value int) string {
 		return "3"
 	case 4:
 		return "4"
+	case 5:
+		return "5"
 	default:
 		panic(errors.New("unsupported schema version"))
 	}

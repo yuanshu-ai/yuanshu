@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yuanshu-ai/yuanshu/internal/enrollment"
@@ -42,6 +43,7 @@ type pairingManager struct {
 	credential        []byte
 	random            io.Reader
 	clock             func() time.Time
+	mu                sync.RWMutex
 }
 
 type pairingManagerOptions struct {
@@ -89,9 +91,11 @@ func newPairingManager(options pairingManagerOptions) (*pairingManager, error) {
 }
 
 func (m *pairingManager) Connect(ctx context.Context) (transport.Transport, error) {
+	credential := m.credentialCopy()
+	defer clear(credential)
 	header := make(http.Header)
 	header.Set("X-Yuanshu-Node-ID", m.identity.NodeID)
-	header.Set("Authorization", "Bearer "+string(m.credential))
+	header.Set("Authorization", "Bearer "+string(credential))
 	connection, _, err := transport.DialRelay(ctx, m.relayURL, transport.RelayDialOptions{HTTPClient: m.httpClient, Header: header, Role: transport.SessionRoleNode, SubjectID: m.identity.NodeID, Sign: m.signer.Sign, Relay: transport.RelayOptions{MaxSendBytes: protocolv1.EventFrameMaxBytes, MaxReceiveBytes: protocolv1.ControlFrameMaxBytes}})
 	if err != nil {
 		return nil, errors.New("node relay connection failed")
@@ -109,7 +113,8 @@ func (m *pairingManager) Create(ctx context.Context) (string, error) {
 	if _, err := io.ReadFull(m.random, challenge); err != nil {
 		return "", errors.New("pairing generation failed")
 	}
-	hash := sha256.Sum256(secret)
+	token := base64.RawURLEncoding.EncodeToString(secret)
+	hash := sha256.Sum256([]byte(token))
 	var response struct{ PairingID, ExpiresAt string }
 	err := m.nodeJSON(ctx, http.MethodPost, "/v1/control-client-pairings", map[string]string{"codeHash": base64.RawURLEncoding.EncodeToString(hash[:]), "challenge": base64.RawURLEncoding.EncodeToString(challenge)}, &response)
 	clear(challenge)
@@ -119,7 +124,7 @@ func (m *pairingManager) Create(ctx context.Context) (string, error) {
 	if response.PairingID == "" {
 		return "", errors.New("pairing service response is invalid")
 	}
-	return m.baseURL + "/pair#" + response.PairingID + "." + base64.RawURLEncoding.EncodeToString(secret), nil
+	return m.baseURL + "/pair#" + response.PairingID + "." + token, nil
 }
 
 func (m *pairingManager) Pending(ctx context.Context) ([]PairingCandidate, error) {
@@ -228,7 +233,7 @@ func (m *pairingManager) RotateCredential(ctx context.Context) error {
 		return errors.New("credential rotation failed")
 	}
 	defer clear(signature)
-	old := append([]byte(nil), m.credential...)
+	old := m.credentialCopy()
 	defer clear(old)
 	if err := m.secrets.Put(ctx, m.credentialRef, newCredential); err != nil {
 		return errors.New("credential rotation failed")
@@ -238,12 +243,19 @@ func (m *pairingManager) RotateCredential(ctx context.Context) error {
 		_ = m.secrets.Put(context.Background(), m.credentialRef, old)
 		return err
 	}
+	m.mu.Lock()
 	clear(m.credential)
 	m.credential = append([]byte(nil), newCredential...)
+	m.mu.Unlock()
 	return nil
 }
 
-func (m *pairingManager) Close() { clear(m.credential); m.credential = nil }
+func (m *pairingManager) Close() { m.mu.Lock(); clear(m.credential); m.credential = nil; m.mu.Unlock() }
+func (m *pairingManager) credentialCopy() []byte {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]byte(nil), m.credential...)
+}
 
 func (m *pairingManager) nodeJSON(ctx context.Context, method, path string, body any, target any) error {
 	var reader io.Reader
@@ -259,7 +271,9 @@ func (m *pairingManager) nodeJSON(ctx context.Context, method, path string, body
 		return errors.New("pairing request failed")
 	}
 	request.Header.Set("X-Yuanshu-Node-ID", m.identity.NodeID)
-	request.Header.Set("Authorization", "Bearer "+string(m.credential))
+	credential := m.credentialCopy()
+	defer clear(credential)
+	request.Header.Set("Authorization", "Bearer "+string(credential))
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

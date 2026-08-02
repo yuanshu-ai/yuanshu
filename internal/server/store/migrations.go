@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 3
 
 type migration struct {
 	version    int
@@ -108,6 +108,39 @@ var serverMigrations = []migration{{
 		) STRICT`,
 		`CREATE INDEX pairings_node_status ON pairings(node_id, status, expires_at)`,
 	},
+}, {
+	version: 3,
+	name:    "personal_node_enrollment",
+	statements: []string{
+		`ALTER TABLE owners ADD COLUMN trust_revision INTEGER NOT NULL DEFAULT 0 CHECK (trust_revision >= 0)`,
+		`CREATE TABLE node_enrollments (
+			id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+			owner_id TEXT NOT NULL,
+			issuer_node_id TEXT NOT NULL,
+			code_hash BLOB NOT NULL UNIQUE CHECK (length(code_hash) = 32),
+			status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'approved', 'declined', 'expired')),
+			expires_at TEXT NOT NULL,
+			candidate_node_id TEXT,
+			public_key BLOB CHECK (public_key IS NULL OR length(public_key) = 32),
+			credential_hash BLOB CHECK (credential_hash IS NULL OR length(credential_hash) = 32),
+			name TEXT,
+			os TEXT CHECK (os IS NULL OR os IN ('windows', 'linux', 'darwin')),
+			version TEXT,
+			created_at TEXT NOT NULL,
+			claimed_at TEXT,
+			resolved_at TEXT,
+			proof BLOB CHECK (proof IS NULL OR length(proof) = 64),
+			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE,
+			FOREIGN KEY (issuer_node_id) REFERENCES nodes(id),
+			CHECK (
+				(status = 'pending' AND candidate_node_id IS NULL AND public_key IS NULL AND credential_hash IS NULL AND name IS NULL AND os IS NULL AND version IS NULL AND claimed_at IS NULL AND resolved_at IS NULL AND proof IS NULL)
+				OR (status = 'claimed' AND candidate_node_id IS NOT NULL AND public_key IS NOT NULL AND credential_hash IS NOT NULL AND name IS NOT NULL AND os IS NOT NULL AND version IS NOT NULL AND claimed_at IS NOT NULL AND resolved_at IS NULL AND proof IS NULL)
+				OR (status IN ('approved', 'declined') AND candidate_node_id IS NOT NULL AND public_key IS NOT NULL AND credential_hash IS NOT NULL AND name IS NOT NULL AND os IS NOT NULL AND version IS NOT NULL AND claimed_at IS NOT NULL AND resolved_at IS NOT NULL AND proof IS NOT NULL)
+				OR (status = 'expired' AND resolved_at IS NOT NULL)
+			)
+		) STRICT`,
+		`CREATE INDEX node_enrollments_issuer_status ON node_enrollments(issuer_node_id, status, expires_at)`,
+	},
 }}
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -168,6 +201,10 @@ func schemaLiteral(version int) string {
 		return "1"
 	case 2:
 		return "2"
+	case 3:
+		return "3"
+	case 4:
+		return "4"
 	default:
 		panic("unsupported server schema version")
 	}

@@ -186,9 +186,19 @@ func (s *Store) ResolvePairing(ctx context.Context, value PairingResolution) (Pa
 	status := "declined"
 	if value.Decision == "accept" {
 		status = "approved"
-		_, err = tx.ExecContext(ctx, `INSERT INTO control_clients(id,owner_id,public_key,name,status,created_at,key_id) VALUES(?,?,?,?,'active',?,?)`, item.ClientID, item.OwnerID, item.PublicKey, item.ClientName, timestamp(value.Now), item.KeyID)
+		result, insertErr := tx.ExecContext(ctx, `INSERT INTO control_clients(id,owner_id,public_key,name,status,created_at,key_id) VALUES(?,?,?,?,'active',?,?) ON CONFLICT(id) DO NOTHING`, item.ClientID, item.OwnerID, item.PublicKey, item.ClientName, timestamp(value.Now), item.KeyID)
+		err = insertErr
 		if err != nil {
 			return Pairing{}, pairingWriteError(ctx, err)
+		}
+		inserted, _ := result.RowsAffected()
+		if inserted == 0 {
+			var exact int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM control_clients WHERE id=? AND owner_id=? AND key_id=? AND public_key=? AND name=? AND status='active'`, item.ClientID, item.OwnerID, item.KeyID, item.PublicKey, item.ClientName).Scan(&exact); err != nil || exact != 1 {
+				return Pairing{}, ErrConflict
+			}
+		} else if _, err := tx.ExecContext(ctx, "UPDATE owners SET trust_revision=trust_revision+1 WHERE id=?", item.OwnerID); err != nil {
+			return Pairing{}, internal("control trust revision")
 		}
 	}
 	_, err = tx.ExecContext(ctx, "UPDATE pairings SET status=?,resolved_at=?,proof=? WHERE id=? AND status='claimed'", status, timestamp(value.Now), append([]byte(nil), value.Proof...), value.PairingID)
@@ -213,7 +223,12 @@ func (s *Store) RevokeControlClient(ctx context.Context, ownerID, clientID strin
 	if err != nil {
 		return err
 	}
-	result, err := db.ExecContext(ctx, "UPDATE control_clients SET status='revoked',revoked_at=? WHERE owner_id=? AND id=? AND status='active'", timestamp(now), ownerID, clientID)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return internal("control client revoke")
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, "UPDATE control_clients SET status='revoked',revoked_at=? WHERE owner_id=? AND id=? AND status='active'", timestamp(now), ownerID, clientID)
 	if err != nil {
 		return internal("control client revoke")
 	}
@@ -221,7 +236,10 @@ func (s *Store) RevokeControlClient(ctx context.Context, ownerID, clientID strin
 	if count == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, "UPDATE owners SET trust_revision=trust_revision+1 WHERE id=?", ownerID); err != nil {
+		return internal("control trust revision")
+	}
+	return tx.Commit()
 }
 
 func (s *Store) RotateNodeCredential(ctx context.Context, ownerID, nodeID string, credentialHash []byte, now time.Time) error {

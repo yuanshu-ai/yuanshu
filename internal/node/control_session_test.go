@@ -97,6 +97,13 @@ func TestControlSessionRejectsTamperedControlBeforeDispatch(t *testing.T) {
 	}
 }
 
+func TestControlSessionRefreshesOwnerTrustOnceForUnknownSigner(t *testing.T){
+	local,err:=store.Open(context.Background(),filepath.Join(t.TempDir(),"node.db"),store.Options{Clock:func()time.Time{return controlSessionNow}});if err!=nil{t.Fatal(err)};defer local.Close()
+	public,private,_:=ed25519.GenerateKey(nil);manager,err:=eventlog.NewManager(local,eventlog.Options{OwnerID:"owner",NodeID:"node",MaxAge:time.Hour,MaxBytes:16<<20,Clock:func()time.Time{return controlSessionNow}});if err!=nil{t.Fatal(err)};validator,err:=protocol.NewValidator(protocol.Options{TrustStore:local,ReplayStore:local,Now:func()time.Time{return controlSessionNow}});if err!=nil{t.Fatal(err)};serverSide,nodeSide,_:=transport.NewStandalonePair(transport.StandaloneOptions{QueueCapacity:8});defer serverSide.Close();runtime:=&controlRuntime{events:make(chan adapter.AgentEvent,4)};refreshes:=0
+	session,err:=NewControlSession(ControlSessionOptions{Transport:nodeSide,Validator:validator,Target:protocol.Target{OwnerID:"owner",NodeID:"node"},Events:manager,Store:local,Runtime:runtime,DeviceName:"Node",RefreshTrust:func(ctx context.Context)error{refreshes++;return local.PutTrustedKey(ctx,protocol.KeyRef{OwnerID:"owner",NodeID:"node",ClientID:"client",KeyID:"key"},protocol.TrustedKey{PublicKey:public,Status:protocol.TrustStatusActive})}});if err!=nil{t.Fatal(err)}
+	ctx,cancel:=context.WithCancel(context.Background());done:=make(chan error,1);go func(){done<-session.Run(ctx)}();raw:=signedSessionControl(t,private,protocol.ControlDeviceSync,1,map[string]any{},nil,nil,nil,nil);if err:=serverSide.Send(ctx,transport.NewFrame(raw));err!=nil{t.Fatal(err)};_ = receiveSessionEvent(t,serverSide);_ = receiveSessionEvent(t,serverSide);if refreshes!=1{t.Fatalf("refreshes=%d",refreshes)};cancel();if err:=<-done;err!=nil{t.Fatal(err)}
+}
+
 func newControlSessionHarness(t *testing.T) (transport.Transport, *ControlSession, *controlRuntime, ed25519.PrivateKey) {
 	t.Helper()
 	local, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "node.db"), store.Options{Clock: func() time.Time { return controlSessionNow }})

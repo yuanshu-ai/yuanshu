@@ -165,6 +165,47 @@ func TestHubRoutesRemoteControlThroughStandaloneLocalNode(t *testing.T) {
 	}
 }
 
+func TestHubKeepsStandaloneAndRemoteNodeStreamsIndependent(t *testing.T) {
+	fixture := newHubFixture(t)
+	remote := fixture.dialNode(t)
+	defer remote.Close()
+	serverSide, localSide, err := transport.NewStandalonePair(transport.StandaloneOptions{QueueCapacity: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer localSide.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attached := make(chan error, 1)
+	go func() { attached <- fixture.hub.AttachLocalNode(ctx, "own_test", "nod_local", serverSide) }()
+	control := fixture.dialControl(t)
+	defer control.Close()
+	waitHubSnapshot(t, fixture.hub, 2, 1)
+	localRaw := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"nod_local","payload":{}}`)
+	remoteRaw := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"nod_test","payload":{}}`)
+	if err := control.Send(context.Background(), transport.NewFrame(localRaw)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := localSide.Receive(context.Background()); err != nil || !bytes.Equal(got.Bytes(), localRaw) {
+		t.Fatalf("local route err=%v", err)
+	}
+	short, shortCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	if _, err := remote.Receive(short); err != context.DeadlineExceeded {
+		t.Fatalf("local frame crossed to remote: %v", err)
+	}
+	shortCancel()
+	if err := control.Send(context.Background(), transport.NewFrame(remoteRaw)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := remote.Receive(context.Background()); err != nil || !bytes.Equal(got.Bytes(), remoteRaw) {
+		t.Fatalf("remote route err=%v", err)
+	}
+	cancel()
+	if err := <-attached; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHubRejectsPlaintextOriginCredentialAndTargetSpoofing(t *testing.T) {
 	fixture := newHubFixture(t)
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/node/connect", nil)

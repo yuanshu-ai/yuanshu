@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, string) {
 
 func TestOpenCreatesServerSchemaAndReopens(t *testing.T) {
 	local, path := openTestStore(t)
-	for _, table := range []string{"bootstrap", "control_clients", "node_credentials", "nodes", "owners", "pairings", "schema_migrations"} {
+	for _, table := range []string{"bootstrap", "control_clients", "node_credentials", "node_enrollments", "nodes", "owners", "pairings", "schema_migrations"} {
 		var count int
 		if err := local.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("table %s count=%d err=%v", table, count, err)
@@ -64,10 +65,10 @@ func TestOpenRejectsInvalidFutureAndCorruptFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := future.db.Exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES (3,'future',?)", timestamp(testNow)); err != nil {
+	if _, err := future.db.Exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES (?,'future',?)", CurrentSchemaVersion+1, timestamp(testNow)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := future.db.Exec("PRAGMA user_version = 3"); err != nil {
+	if _, err := future.db.Exec("PRAGMA user_version = " + schemaLiteral(CurrentSchemaVersion+1)); err != nil {
 		t.Fatal(err)
 	}
 	_ = future.Close()
@@ -163,6 +164,49 @@ func TestBootstrapClaimPersistsMetadataAndReplaysExactly(t *testing.T) {
 	again, _ := local.Nodes(context.Background())
 	if nodes[0].PublicKey[0] == again[0].PublicKey[0] {
 		t.Fatal("Nodes returned shared bytes")
+	}
+}
+
+func TestNodeEnrollmentEnforcesFiveNodeLimitAndIdempotentDecision(t *testing.T) {
+	local, _ := openTestStore(t)
+	bootstrap := bytes.Repeat([]byte{0x10}, 32)
+	_, _ = local.RotateBootstrap(context.Background(), bootstrap, testNow)
+	first := syntheticClaim(bootstrap, bytes.Repeat([]byte{0x11}, 32), testNow)
+	if _, err := local.ClaimBootstrap(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	var last NodeEnrollment
+	for index := 2; index <= MaxActiveNodes+1; index++ {
+		value := byte(0x20 + index)
+		item := NodeEnrollment{ID: fmt.Sprintf("enrollment-%d", index), OwnerID: first.OwnerID, IssuerNodeID: first.NodeID, CodeHash: bytes.Repeat([]byte{value}, 32), CreatedAt: testNow, ExpiresAt: testNow.Add(5 * time.Minute)}
+		if err := local.CreateNodeEnrollment(context.Background(), item); err != nil {
+			t.Fatal(err)
+		}
+		claimed, err := local.ClaimNodeEnrollment(context.Background(), NodeEnrollmentClaim{EnrollmentID: item.ID, CandidateNodeID: fmt.Sprintf("node-%d", index), Name: "Synthetic Node", OS: "windows", Version: "dev", CodeHash: item.CodeHash, PublicKey: bytes.Repeat([]byte{value + 20}, 32), CredentialHash: bytes.Repeat([]byte{value + 40}, 32), Now: testNow.Add(time.Second)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		proof := bytes.Repeat([]byte{value + 60}, 64)
+		resolved, err := local.ResolveNodeEnrollment(context.Background(), NodeEnrollmentResolution{EnrollmentID: item.ID, IssuerNodeID: first.NodeID, Decision: "accept", Proof: proof, Now: testNow.Add(2 * time.Second)})
+		if index <= MaxActiveNodes {
+			if err != nil || resolved.Status != "approved" {
+				t.Fatalf("index %d resolved=%+v err=%v", index, resolved, err)
+			}
+			last = resolved
+			if replay, err := local.ResolveNodeEnrollment(context.Background(), NodeEnrollmentResolution{EnrollmentID: item.ID, IssuerNodeID: first.NodeID, Decision: "accept", Proof: proof, Now: testNow.Add(3 * time.Second)}); err != nil || replay.Status != "approved" {
+				t.Fatalf("idempotent decision=%+v err=%v", replay, err)
+			}
+		} else if !errors.Is(err, ErrConflict) {
+			t.Fatalf("sixth Node error=%v", err)
+		}
+		_ = claimed
+	}
+	if err := local.RevokeNode(context.Background(), first.OwnerID, first.NodeID, last.CandidateNodeID, testNow.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	session, err := local.NodeSession(context.Background(), last.CandidateNodeID)
+	if err != nil || session.Status != "revoked" {
+		t.Fatalf("revoked session=%+v err=%v", session, err)
 	}
 }
 
