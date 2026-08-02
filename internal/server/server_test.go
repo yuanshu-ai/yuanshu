@@ -184,15 +184,25 @@ func TestServerArgumentValidation(t *testing.T) {
 }
 
 func TestRunRejectsInjectedNonLoopbackListener(t *testing.T) {
-	listener, err := net.Listen("tcp", "0.0.0.0:0")
-	if err != nil {
-		t.Skipf("wildcard listener unavailable: %v", err)
-	}
-	defer listener.Close()
-	err = Run(context.Background(), Options{
+	listener := nonLoopbackTestListener{}
+	err := Run(context.Background(), Options{
 		DataDir: filepath.Join(t.TempDir(), "data"), Listen: "127.0.0.1:7444", Listener: listener,
 	})
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Run() error=%v", err)
 	}
 }
+
+// nonLoopbackTestListener proves the listener-address boundary without
+// opening a wildcard socket. A real 0.0.0.0 test listener causes Windows
+// Firewall to prompt for the ephemeral server.test.exe on every test build.
+type nonLoopbackTestListener struct{}
+
+func (nonLoopbackTestListener) Accept() (net.Conn, error) { return nil, errors.New("not used") }
+func (nonLoopbackTestListener) Close() error              { return nil }
+func (nonLoopbackTestListener) Addr() net.Addr            { return nonLoopbackTestAddr("0.0.0.0:7444") }
+
+type nonLoopbackTestAddr string
+
+func (nonLoopbackTestAddr) Network() string  { return "tcp" }
+func (a nonLoopbackTestAddr) String() string { return string(a) }
