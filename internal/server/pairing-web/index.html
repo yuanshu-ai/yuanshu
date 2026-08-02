@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>连接到远枢</title>
+  <link rel="stylesheet" href="/pair/style.css">
+</head>
+<body>
+  <main>
+    <header><span class="mark">Y</span><span>远枢 Yuanshu</span></header>
+    <section class="card">
+      <p class="eyebrow">安全配对</p>
+      <h1>连接这个浏览器</h1>
+      <p class="lead">密钥只保存在此浏览器。办公室电脑确认指纹后，连接才会生效。</p>
+      <label for="name">设备名称</label>
+      <input id="name" maxlength="128" autocomplete="off" value="My browser">
+      <button id="pair" type="button">请求连接</button>
+      <div id="result" class="result" role="status" aria-live="polite">
+        <span class="dot"></span><span id="status">等待配对链接</span>
+      </div>
+      <dl id="details" hidden><dt>安全指纹</dt><dd id="fingerprint"></dd></dl>
+    </section>
+    <p class="foot">配对链接 5 分钟有效且只能使用一次。</p>
+  </main>
+  <script src="/pair/app.js" type="module"></script>
+</body>
+</html>

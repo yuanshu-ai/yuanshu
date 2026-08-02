@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
 )
 
 const maxClaimBytes = 16 << 10
@@ -136,6 +138,18 @@ func NewHandler(service *BootstrapService, ready readiness, hubs ...*Hub) (http.
 	if len(hubs) == 1 {
 		mux.HandleFunc("GET /node/connect", hubs[0].NodeHandler)
 		mux.HandleFunc("GET /web/connect", hubs[0].ControlHandler)
+		if local, ok := ready.(*serverstore.Store); ok {
+			pairing, err := NewPairingService(local, hubs[0], PairingOptions{Clock: service.clock})
+			if err != nil {
+				return nil, err
+			}
+			mux.Handle("/v1/control-client-pairings", pairing.Handler())
+			mux.Handle("/v1/control-client-pairings/", pairing.Handler())
+			mux.Handle("/v1/control-clients/", pairing.Handler())
+			mux.Handle("/v1/nodes/", pairing.Handler())
+			mux.Handle("/pair", PairingPageHandler())
+			mux.Handle("/pair/", PairingPageHandler())
+		}
 	}
 	return noStore(methodBoundary(mux)), nil
 }

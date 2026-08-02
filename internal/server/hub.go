@@ -345,6 +345,10 @@ func (h *Hub) node(ownerID, nodeID string) *hubConnection {
 	return h.nodes[ownerID+"\x00"+nodeID]
 }
 
+func (h *Hub) NodeConnected(ownerID, nodeID string) bool {
+	return h.node(ownerID, nodeID) != nil
+}
+
 func (h *Hub) broadcast(ownerID string, frame transport.Frame) {
 	h.mu.RLock()
 	var targets []*hubConnection
@@ -369,6 +373,31 @@ func (h *Hub) Snapshot() HubSnapshot {
 		status = "closed"
 	}
 	return HubSnapshot{Status: status, NodeConnections: len(h.nodes), ControlConnections: len(h.controls)}
+}
+
+// DisconnectControl immediately removes and closes an authenticated control
+// session after its trust record has been revoked.
+func (h *Hub) DisconnectControl(ownerID, clientID string) {
+	h.disconnect(h.controls, ownerID, clientID)
+}
+
+// DisconnectNode immediately removes and closes a Node session after its
+// connection credential has been rotated or revoked.
+func (h *Hub) DisconnectNode(ownerID, nodeID string) {
+	h.disconnect(h.nodes, ownerID, nodeID)
+}
+
+func (h *Hub) disconnect(collection map[string]*hubConnection, ownerID, subjectID string) {
+	key := ownerID + "\x00" + subjectID
+	h.mu.Lock()
+	connection := collection[key]
+	if connection != nil {
+		delete(collection, key)
+	}
+	h.mu.Unlock()
+	if connection != nil {
+		_ = connection.relay.Close()
+	}
 }
 
 func (h *Hub) Close() error {

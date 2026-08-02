@@ -113,8 +113,9 @@ yuanshu standalone   Server + Web + local Node in one deployment
 - [x] Native three-platform CI, containerized Linux race, dependency/secret scanning, and SBOM
 - [x] Formal loopback Server bootstrap and SQLite metadata baseline
 - [x] TLS-only WSS Hub, authenticated RelayTransport, and Owner/Node routing
+- [x] Short-lived control-client pairing, local Node confirmation, credential rotation, and immediate revocation
 - [ ] Linux Server and Standalone self-hosting preview
-- [ ] Self-hosted device and control-client pairing
+- [ ] Linux Server and real-phone self-hosted deployment
 - [ ] Linux Yuanshu Node
 - [ ] macOS arm64 Yuanshu Node
 - [ ] Mobile PWA task loop
@@ -124,7 +125,7 @@ The roadmap establishes a reliable daily-use loop for one developer first, then 
 
 ## Development
 
-The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. Node SQLite now also provides monotonic event sequences, bounded retention, outbox cursor acknowledgement, replay, snapshots, and conservative reconciliation of uncertain Turns. The formal TLS-only WSS Hub and RelayTransport are implemented; ordinary pairing, Node Runner wiring, and the PWA are not connected yet.
+The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. Node SQLite now also provides monotonic event sequences, bounded retention, outbox cursor acknowledgement, replay, snapshots, and conservative reconciliation of uncertain Turns. The formal TLS-only WSS Hub, RelayTransport, and control-client pairing boundary are connected; the full task PWA remains a later milestone.
 
 Prerequisites:
 
@@ -170,12 +171,19 @@ The versioned Node configuration contract uses strict TOML and is defined by `sc
 
 The configuration package supports atomic replacement, a last-known-good `.bak` file, explicit recovery status, and sanitized SecretRef health checks. On Windows, configured workspaces are reconciled into the Node's local SQLite policy store. Remote callers use only opaque workspace IDs; canonical paths, stable file identities, reparse-point checks, and read/write/network ceilings remain local. The formal CodexAdapter consumes that boundary, while mapped Protocol v1 events, cursor replay, snapshots, and conservative ambiguous recovery survive Node restarts.
 
-The Windows Alpha uses `%LOCALAPPDATA%\Yuanshu\config.toml` by default. It runs in the current user session, shows a native tray menu, uses a current-user-only Named Pipe, protects Agent process trees with a Job Object, and can be explicitly enabled at login through HKCU. The tray opens or reloads configuration, copies a sanitized diagnostic report, toggles autostart, and exits the Node; it is deliberately not a second settings UI. Real Relay connection and device pairing are not yet available in this build.
+The Windows Alpha uses `%LOCALAPPDATA%\Yuanshu\config.toml` by default. It runs in the current user session, shows a native tray menu, uses a current-user-only Named Pipe, protects Agent process trees with a Job Object, and can be explicitly enabled at login through HKCU. A bound Relay Node establishes outbound WSS for online pairing; a new browser must be confirmed through the local CLI and cannot approve itself. The tray remains deliberately thin rather than becoming a second settings UI.
 
 ```powershell
 yuanshu node
 yuanshu node status --json
 yuanshu node doctor
+yuanshu node pairing create
+yuanshu node pairing list
+yuanshu node pairing approve <pairing-id>
+yuanshu node pairing reject <pairing-id>
+yuanshu node clients list
+yuanshu node clients revoke <client-id> <key-id>
+yuanshu node credential rotate
 yuanshu node autostart enable
 yuanshu node autostart disable
 yuanshu node stop
@@ -200,7 +208,7 @@ yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
 
 On an uninitialized data directory, the Server prints a 32-byte bootstrap secret once to local stdout. The enrolling Node generates its own Ed25519 key and connection credential, retains the credential locally, and sends only the public key and SHA-256 credential hash to `POST /v1/bootstrap/claim`. The Server persists `server.db`, creates the first Owner and Node atomically, and supports exact claim retries for five minutes. HTTP initialization uses `/healthz`, `/readyz`, `/v1/bootstrap/status`, and `/v1/bootstrap/claim`; authenticated realtime connections use `/node/connect` and `/web/connect`.
 
-The formal realtime handlers require TLS, authenticate Node credentials plus Ed25519 challenges, and route immutable Protocol v1 frames without re-encoding them. The current CLI still starts loopback HTTP, so its WebSocket endpoints return `tls_required`; certificate flags and public deployment remain AC-306. Ordinary pairing and the Web UI are also not available yet. Do not expose the loopback listener through a reverse proxy or outside the local machine.
+The formal realtime handlers require TLS, authenticate Node credentials plus Ed25519 challenges, and route immutable Protocol v1 frames without re-encoding them. The current CLI still starts loopback HTTP, so its WebSocket endpoints return `tls_required`; certificate flags and public deployment remain AC-306. The Server now exposes a minimal mobile pairing page at `/pair`, but real-phone access still waits for trusted TLS and non-loopback deployment. Do not expose the loopback listener through a reverse proxy or outside the local machine.
 
 The repository uses LF source files and supports these commands on Windows, macOS, and Linux. CI runs native Go checks on Ubuntu 24.04 x64, Windows Server 2025 x64, and macOS 15 arm64; Web/Protocol checks, a pinned-container Linux race suite, dependency and Secret scanning, and an SPDX SBOM are release gates. Successful runs retain unsigned Windows amd64, Linux amd64, and Darwin arm64 build artifacts for seven days. These are engineering artifacts, not installable releases; signed releases and product container images remain later milestones.
 

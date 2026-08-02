@@ -23,26 +23,33 @@ const (
 )
 
 type localRequest struct {
-	Protocol string `json:"protocol"`
-	Command  string `json:"command"`
+	Protocol  string `json:"protocol"`
+	Command   string `json:"command"`
+	PairingID string `json:"pairingId,omitempty"`
+	ClientID  string `json:"clientId,omitempty"`
+	KeyID     string `json:"keyId,omitempty"`
 }
 
 type localResponse struct {
-	Protocol string  `json:"protocol"`
-	OK       bool    `json:"ok"`
-	Error    string  `json:"error,omitempty"`
-	Status   *Status `json:"status,omitempty"`
+	Protocol   string                 `json:"protocol"`
+	OK         bool                   `json:"ok"`
+	Error      string                 `json:"error,omitempty"`
+	Status     *Status                `json:"status,omitempty"`
+	PairingURL string                 `json:"pairingUrl,omitempty"`
+	Pairings   []PairingCandidate     `json:"pairings,omitempty"`
+	Clients    []TrustedClientSummary `json:"clients,omitempty"`
 }
 
 type localServer struct {
 	listener net.Listener
 	status   func() Status
 	stop     context.CancelFunc
+	manage   func(context.Context, localRequest) localResponse
 	done     chan struct{}
 	once     sync.Once
 }
 
-func startLocalServer(ctx context.Context, ipc platform.LocalIPC, status func() Status, stop context.CancelFunc) (*localServer, error) {
+func startLocalServer(ctx context.Context, ipc platform.LocalIPC, status func() Status, stop context.CancelFunc, management ...func(context.Context, localRequest) localResponse) (*localServer, error) {
 	if ipc == nil || !ipc.Available() || status == nil || stop == nil {
 		return nil, platform.ErrUnavailable
 	}
@@ -51,6 +58,9 @@ func startLocalServer(ctx context.Context, ipc platform.LocalIPC, status func() 
 		return nil, err
 	}
 	server := &localServer{listener: listener, status: status, stop: stop, done: make(chan struct{})}
+	if len(management) > 0 {
+		server.manage = management[0]
+	}
 	go server.serve(ctx)
 	return server, nil
 }
@@ -112,7 +122,13 @@ func (s *localServer) handle(connection net.Conn) {
 		_ = writeLocalResponse(connection, localResponse{Protocol: localProtocol, OK: true})
 		s.stop()
 	default:
-		_ = writeLocalResponse(connection, localResponse{Protocol: localProtocol, Error: "unsupported_command"})
+		if s.manage == nil {
+			_ = writeLocalResponse(connection, localResponse{Protocol: localProtocol, Error: "unsupported_command"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), localDeadline)
+		defer cancel()
+		_ = writeLocalResponse(connection, s.manage(ctx, request))
 	}
 }
 
@@ -126,6 +142,10 @@ func writeLocalResponse(writer io.Writer, response localResponse) error {
 }
 
 func callLocal(ctx context.Context, ipc platform.LocalIPC, command string) (localResponse, error) {
+	return callLocalRequest(ctx, ipc, localRequest{Protocol: localProtocol, Command: command})
+}
+
+func callLocalRequest(ctx context.Context, ipc platform.LocalIPC, request localRequest) (localResponse, error) {
 	if ipc == nil || !ipc.Available() {
 		return localResponse{}, platform.ErrUnavailable
 	}
@@ -139,8 +159,9 @@ func callLocal(ctx context.Context, ipc platform.LocalIPC, command string) (loca
 		deadline = limit
 	}
 	_ = connection.SetDeadline(deadline)
-	request, _ := json.Marshal(localRequest{Protocol: localProtocol, Command: command})
-	if _, err := connection.Write(append(request, '\n')); err != nil {
+	request.Protocol = localProtocol
+	encoded, _ := json.Marshal(request)
+	if _, err := connection.Write(append(encoded, '\n')); err != nil {
 		return localResponse{}, errors.New("local node is unavailable")
 	}
 	reader := bufio.NewReader(io.LimitReader(connection, localMaxBytes+1))

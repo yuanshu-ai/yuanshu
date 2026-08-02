@@ -113,8 +113,9 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] 三平台原生 CI、容器化 Linux race、依赖/Secret 扫描与 SBOM
 - [x] 正式 loopback Server bootstrap 与 SQLite 元数据基线
 - [x] 仅TLS的WSS Hub、认证RelayTransport与Owner/Node路由
+- [x] 控制端短期配对、Node本地确认、凭据轮换与即时撤销
 - [ ] Linux Server 与 Standalone 自托管预览版
-- [ ] 自托管设备与控制端配对
+- [ ] Linux Server 与真实手机自托管部署
 - [ ] Linux Yuanshu Node
 - [ ] macOS arm64 Yuanshu Node
 - [ ] 移动 PWA 任务闭环
@@ -124,7 +125,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 
 ## 本地开发
 
-仓库同时包含保持隔离的 `m0-poc-1` Gate G0 实现和正式的内部 CodexAdapter 基础。正式 Adapter 使用 Node 管理的 stdio app-server、本地 workspace ID、有界事件、一次性审批和持久 Thread 所有权。Node SQLite 现已支持单调事件序号、有界保留、outbox cursor确认、补发、Snapshot，以及对不确定 Turn 的保守对账；正式的仅TLS WSS Hub和RelayTransport已经实现，普通配对、Node Runner接线和PWA尚未接通。
+仓库同时包含保持隔离的 `m0-poc-1` Gate G0 实现和正式的内部 CodexAdapter 基础。正式 Adapter 使用 Node 管理的 stdio app-server、本地 workspace ID、有界事件、一次性审批和持久 Thread 所有权。Node SQLite 现已支持单调事件序号、有界保留、outbox cursor确认、补发、Snapshot，以及对不确定 Turn 的保守对账；正式的仅TLS WSS Hub、RelayTransport和控制端配对边界已经接通，完整任务 PWA 仍在后续任务中。
 
 环境要求：
 
@@ -189,7 +190,7 @@ yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
 
 未初始化的数据目录首次启动时，Server 只向本地 stdout 显示一次 32 字节 bootstrap secret。待领取 Node 自己生成 Ed25519 密钥和连接凭据、在本地保留凭据正文，并仅向 `POST /v1/bootstrap/claim` 提交公钥和凭据 SHA-256。Server 在 `server.db` 中原子创建首个 Owner 与 Node，并在五分钟内支持完全相同的 claim 重试。HTTP初始化使用 `/healthz`、`/readyz`、`/v1/bootstrap/status` 和 `/v1/bootstrap/claim`；认证实时连接使用 `/node/connect` 与 `/web/connect`。
 
-正式实时Handler强制TLS，使用Node连接凭据和Ed25519 challenge认证，并且不重新编码地路由Protocol v1原始帧。当前CLI仍启动loopback HTTP，因此两个WebSocket端点会返回 `tls_required`；证书参数和公网部署继续属于AC-306。普通配对和Web UI同样尚未提供。不要通过反向代理或其他方式将loopback监听器暴露到本机以外。
+正式实时Handler强制TLS，使用Node连接凭据和Ed25519 challenge认证，并且不重新编码地路由Protocol v1原始帧。当前CLI仍启动loopback HTTP，因此两个WebSocket端点会返回 `tls_required`；证书参数和公网部署继续属于AC-306。Server 已提供 `/pair` 最小移动配对页，但真实手机访问仍须等待受信TLS与非loopback部署。不要通过反向代理或其他方式将loopback监听器暴露到本机以外。
 
 仓库源文件统一使用 LF，以上命令面向 Windows、macOS 和 Linux。CI 在 Ubuntu 24.04 x64、Windows Server 2025 x64和 macOS 15 arm64原生运行 Go 门禁，并执行 Web/Protocol检查、固定容器中的 Linux race、依赖与 Secret扫描和 SPDX SBOM生成。成功的工作流会保留7天的 Windows amd64、Linux amd64和 Darwin arm64未签名构建工件；它们只是工程工件，不是可安装 Release，正式签名与产品容器镜像属于后续里程碑。
 
@@ -210,12 +211,19 @@ YUANSHU_POC_WORKSPACE=<已存在、非根目录的临时工作区>
 
 ### Windows Node Alpha
 
-Windows 默认使用 `%LOCALAPPDATA%\Yuanshu\config.toml`。Node 运行在当前用户会话，提供原生托盘、当前用户专属 Named Pipe、Job Object进程树回收和显式 HKCU登录启动项。托盘支持打开/重载配置、复制脱敏诊断、切换登录启动和退出；它不重复实现设置页面。当前构建尚未接入正式 Relay和设备配对。
+Windows 默认使用 `%LOCALAPPDATA%\Yuanshu\config.toml`。Node 运行在当前用户会话，提供原生托盘、当前用户专属 Named Pipe、Job Object进程树回收和显式 HKCU登录启动项。绑定后的 Relay Node 会建立出站WSS用于在线配对；新浏览器必须由本机CLI确认指纹，不能批准自己。托盘仍保持为薄入口。
 
 ```powershell
 yuanshu node
 yuanshu node status --json
 yuanshu node doctor
+yuanshu node pairing create
+yuanshu node pairing list
+yuanshu node pairing approve <pairing-id>
+yuanshu node pairing reject <pairing-id>
+yuanshu node clients list
+yuanshu node clients revoke <client-id> <key-id>
+yuanshu node credential rotate
 yuanshu node autostart enable
 yuanshu node autostart disable
 yuanshu node stop

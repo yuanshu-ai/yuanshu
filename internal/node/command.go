@@ -18,6 +18,13 @@ const Usage = `Usage:
   yuanshu node status [--json]
   yuanshu node stop
   yuanshu node doctor [--config <absolute-path>] [--json]
+  yuanshu node pairing create
+  yuanshu node pairing list
+  yuanshu node pairing approve <pairing-id>
+  yuanshu node pairing reject <pairing-id>
+  yuanshu node clients list
+  yuanshu node clients revoke <client-id> <key-id>
+  yuanshu node credential rotate
   yuanshu node autostart enable [--config <absolute-path>]
   yuanshu node autostart disable
   yuanshu node autostart status [--json]
@@ -88,6 +95,8 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return nil
 	case "autostart":
 		return commandAutostart(ctx, current, defaults, args, stdout)
+	case "pairing", "clients", "credential":
+		return commandLocalManagement(ctx, current.IPC(), command, args, stdout)
 	default:
 		return ErrUsage
 	}
@@ -118,9 +127,90 @@ func validateNodeArguments(args []string) error {
 		return err
 	case "autostart":
 		return validateAutostartArguments(args)
+	case "pairing":
+		if len(args) == 1 && (args[0] == "create" || args[0] == "list") {
+			return nil
+		}
+		if len(args) == 2 && (args[0] == "approve" || args[0] == "reject") && validLocalID(args[1]) {
+			return nil
+		}
+		return ErrUsage
+	case "clients":
+		if len(args) == 1 && args[0] == "list" {
+			return nil
+		}
+		if len(args) == 3 && args[0] == "revoke" && validLocalID(args[1]) && validLocalID(args[2]) {
+			return nil
+		}
+		return ErrUsage
+	case "credential":
+		if len(args) == 1 && args[0] == "rotate" {
+			return nil
+		}
+		return ErrUsage
 	default:
 		return ErrUsage
 	}
+}
+
+func commandLocalManagement(ctx context.Context, ipc platform.LocalIPC, command string, args []string, stdout io.Writer) error {
+	request := localRequest{}
+	switch command {
+	case "pairing":
+		switch args[0] {
+		case "create":
+			request.Command = "pairing_create"
+		case "list":
+			request.Command = "pairing_list"
+		case "approve":
+			request.Command, request.PairingID = "pairing_accept", args[1]
+		case "reject":
+			request.Command, request.PairingID = "pairing_decline", args[1]
+		}
+	case "clients":
+		if args[0] == "list" {
+			request.Command = "client_list"
+		} else {
+			request.Command, request.ClientID, request.KeyID = "client_revoke", args[1], args[2]
+		}
+	case "credential":
+		request.Command = "credential_rotate"
+	}
+	response, err := callLocalRequest(ctx, ipc, request)
+	if err != nil || !response.OK {
+		return errors.New("node local operation failed")
+	}
+	switch request.Command {
+	case "pairing_create":
+		fmt.Fprintln(stdout, response.PairingURL)
+	case "pairing_list":
+		if len(response.Pairings) == 0 {
+			fmt.Fprintln(stdout, "No pending pairing requests.")
+		}
+		for _, item := range response.Pairings {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", item.PairingID, item.Name, item.Fingerprint, item.ExpiresAt)
+		}
+	case "client_list":
+		if len(response.Clients) == 0 {
+			fmt.Fprintln(stdout, "No trusted control clients.")
+		}
+		for _, item := range response.Clients {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", item.ClientID, item.KeyID, item.Fingerprint, item.Status)
+		}
+	case "pairing_accept":
+		fmt.Fprintln(stdout, "Control client approved.")
+	case "pairing_decline":
+		fmt.Fprintln(stdout, "Control client declined.")
+	case "client_revoke":
+		fmt.Fprintln(stdout, "Control client revoked.")
+	case "credential_rotate":
+		fmt.Fprintln(stdout, "Node connection credential rotated.")
+	}
+	return nil
+}
+
+func validLocalID(value string) bool {
+	return value != "" && len(value) <= 128 && strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }) < 0
 }
 
 func validateAutostartArguments(args []string) error {

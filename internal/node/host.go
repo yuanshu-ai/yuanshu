@@ -16,6 +16,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
+	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
 
 const autostartID = "yuanshu-node"
@@ -36,6 +37,8 @@ type host struct {
 	mu      sync.Mutex
 	local   *store.Store
 	runtime adapter.Runtime
+	pairing *pairingManager
+	relay   transport.Transport
 }
 
 func runHost(ctx context.Context, options runOptions) error {
@@ -58,7 +61,7 @@ func runHost(ctx context.Context, options runOptions) error {
 	defer cancel()
 	h := &host{options: options, status: newStatusStore(string(options.platform.Family())), log: newOperationalLog(options.paths.log)}
 	h.refreshAutostart(runCtx)
-	server, err := startLocalServer(runCtx, options.platform.IPC(), h.status.snapshot, cancel)
+	server, err := startLocalServer(runCtx, options.platform.IPC(), h.status.snapshot, cancel, h.handleLocalManagement)
 	if err != nil {
 		return errors.New("node local management is unavailable")
 	}
@@ -156,6 +159,27 @@ func (h *host) reload(ctx context.Context) error {
 			value.Identity = "unpaired"
 		}
 	})
+	if bound && loaded.Config.Transport.Mode == config.TransportRelay {
+		credential, secretErr := h.options.platform.SecureStore().Get(ctx, loaded.Config.Relay.CredentialRef)
+		if secretErr == nil {
+			manager, managerErr := newPairingManager(pairingManagerOptions{
+				RelayURL: loaded.Config.Relay.URL, Timeout: time.Duration(loaded.Config.Relay.ConnectTimeoutSeconds) * time.Second,
+				Identity: nodeIdentity, Signer: identityManager, Local: local, Secrets: h.options.platform.SecureStore(),
+				CredentialRef: loaded.Config.Relay.CredentialRef, Credential: credential,
+			})
+			clear(credential)
+			if managerErr == nil {
+				h.pairing = manager
+				relay, relayErr := manager.Connect(ctx)
+				if relayErr == nil {
+					h.relay = relay
+					h.status.update(func(value *Status) { value.RemoteControl = "online" })
+				} else {
+					h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
+				}
+			}
+		}
+	}
 	adapterInstance, err := codex.New(codex.Options{
 		Config: loaded.Config.Adapters.Codex, Processes: h.options.platform.Processes(),
 		Workspaces: workspaceManager, Threads: local,
@@ -264,6 +288,16 @@ func (h *host) close() error {
 
 func (h *host) closeResourcesLocked() error {
 	var result error
+	if h.relay != nil {
+		if err := h.relay.Close(); err != nil {
+			result = errors.New("relay close failed")
+		}
+		h.relay = nil
+	}
+	if h.pairing != nil {
+		h.pairing.Close()
+		h.pairing = nil
+	}
 	if h.runtime != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := h.runtime.Close(ctx); err != nil {
@@ -279,6 +313,75 @@ func (h *host) closeResourcesLocked() error {
 		h.local = nil
 	}
 	return result
+}
+
+func (h *host) handleLocalManagement(ctx context.Context, request localRequest) localResponse {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	response := localResponse{Protocol: localProtocol}
+	if h.pairing == nil {
+		response.Error = "remote_not_available"
+		return response
+	}
+	switch request.Command {
+	case "pairing_create":
+		value, err := h.pairing.Create(ctx)
+		if err == nil {
+			response.OK, response.PairingURL = true, value
+		} else {
+			response.Error = "pairing_failed"
+		}
+	case "pairing_list":
+		value, err := h.pairing.Pending(ctx)
+		if err == nil {
+			response.OK, response.Pairings = true, value
+		} else {
+			response.Error = "pairing_failed"
+		}
+	case "pairing_accept", "pairing_decline":
+		decision := "accept"
+		if request.Command == "pairing_decline" {
+			decision = "decline"
+		}
+		if err := h.pairing.Decide(ctx, request.PairingID, decision); err == nil {
+			response.OK = true
+		} else {
+			response.Error = "pairing_failed"
+		}
+	case "client_list":
+		value, err := h.pairing.Clients(ctx)
+		if err == nil {
+			response.OK, response.Clients = true, value
+		} else {
+			response.Error = "client_failed"
+		}
+	case "client_revoke":
+		if err := h.pairing.Revoke(ctx, request.ClientID, request.KeyID); err == nil {
+			response.OK = true
+		} else {
+			response.Error = "client_failed"
+		}
+	case "credential_rotate":
+		if err := h.pairing.RotateCredential(ctx); err == nil {
+			if h.relay != nil {
+				_ = h.relay.Close()
+				h.relay = nil
+			}
+			if relay, connectErr := h.pairing.Connect(ctx); connectErr == nil {
+				h.relay = relay
+				h.status.update(func(value *Status) { value.RemoteControl = "online" })
+				response.OK = true
+			} else {
+				h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
+				response.Error = "rotation_failed"
+			}
+		} else {
+			response.Error = "rotation_failed"
+		}
+	default:
+		response.Error = "unsupported_command"
+	}
+	return response
 }
 
 func (o runOptions) trayUpdate(status Status) {

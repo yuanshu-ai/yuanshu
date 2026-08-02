@@ -29,14 +29,14 @@ func openTestStore(t *testing.T) (*Store, string) {
 
 func TestOpenCreatesServerSchemaAndReopens(t *testing.T) {
 	local, path := openTestStore(t)
-	for _, table := range []string{"bootstrap", "control_clients", "node_credentials", "nodes", "owners", "schema_migrations"} {
+	for _, table := range []string{"bootstrap", "control_clients", "node_credentials", "nodes", "owners", "pairings", "schema_migrations"} {
 		var count int
 		if err := local.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("table %s count=%d err=%v", table, count, err)
 		}
 	}
 	inspection, err := Inspect(context.Background(), path)
-	if err != nil || inspection.SchemaVersion != 1 || inspection.QuickCheck != "ok" {
+	if err != nil || inspection.SchemaVersion != CurrentSchemaVersion || inspection.QuickCheck != "ok" {
 		t.Fatalf("inspection=%+v err=%v", inspection, err)
 	}
 	if err := local.Close(); err != nil {
@@ -64,7 +64,10 @@ func TestOpenRejectsInvalidFutureAndCorruptFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := future.db.Exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES (2,'future',?)", timestamp(testNow)); err != nil {
+	if _, err := future.db.Exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES (3,'future',?)", timestamp(testNow)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := future.db.Exec("PRAGMA user_version = 3"); err != nil {
 		t.Fatal(err)
 	}
 	_ = future.Close()

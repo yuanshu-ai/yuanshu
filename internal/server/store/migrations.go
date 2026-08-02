@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const CurrentSchemaVersion = 1
+const CurrentSchemaVersion = 2
 
 type migration struct {
 	version    int
@@ -76,6 +76,38 @@ var serverMigrations = []migration{{
 			FOREIGN KEY (node_id) REFERENCES nodes(id)
 		) STRICT`,
 	},
+}, {
+	version: 2,
+	name:    "control_client_pairing",
+	statements: []string{
+		`ALTER TABLE control_clients ADD COLUMN key_id TEXT NOT NULL DEFAULT 'primary' CHECK (length(key_id) BETWEEN 1 AND 128)`,
+		`CREATE TABLE pairings (
+			id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+			owner_id TEXT NOT NULL,
+			node_id TEXT NOT NULL,
+			code_hash BLOB NOT NULL UNIQUE CHECK (length(code_hash) = 32),
+			challenge BLOB NOT NULL CHECK (length(challenge) = 32),
+			status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'approved', 'declined', 'expired')),
+			expires_at TEXT NOT NULL,
+			client_id TEXT,
+			key_id TEXT,
+			public_key BLOB CHECK (public_key IS NULL OR length(public_key) = 32),
+			client_name TEXT,
+			created_at TEXT NOT NULL,
+			claimed_at TEXT,
+			resolved_at TEXT,
+			proof BLOB CHECK (proof IS NULL OR length(proof) = 64),
+			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE,
+			FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+			CHECK (
+				(status = 'pending' AND client_id IS NULL AND key_id IS NULL AND public_key IS NULL AND client_name IS NULL AND claimed_at IS NULL AND resolved_at IS NULL AND proof IS NULL)
+				OR (status = 'claimed' AND client_id IS NOT NULL AND key_id IS NOT NULL AND public_key IS NOT NULL AND client_name IS NOT NULL AND claimed_at IS NOT NULL AND resolved_at IS NULL AND proof IS NULL)
+				OR (status IN ('approved', 'declined') AND client_id IS NOT NULL AND key_id IS NOT NULL AND public_key IS NOT NULL AND client_name IS NOT NULL AND claimed_at IS NOT NULL AND resolved_at IS NOT NULL AND proof IS NOT NULL)
+				OR (status = 'expired' AND resolved_at IS NOT NULL)
+			)
+		) STRICT`,
+		`CREATE INDEX pairings_node_status ON pairings(node_id, status, expires_at)`,
+	},
 }}
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -120,7 +152,7 @@ func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
 		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)", item.version, item.name, timestamp(now)); err != nil {
 			return internal("migration")
 		}
-		if _, err := tx.ExecContext(ctx, "PRAGMA user_version = 1"); err != nil {
+		if _, err := tx.ExecContext(ctx, "PRAGMA user_version = "+schemaLiteral(item.version)); err != nil {
 			return internal("migration")
 		}
 	}
@@ -128,4 +160,15 @@ func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
 		return internal("migration")
 	}
 	return nil
+}
+
+func schemaLiteral(version int) string {
+	switch version {
+	case 1:
+		return "1"
+	case 2:
+		return "2"
+	default:
+		panic("unsupported server schema version")
+	}
 }

@@ -63,6 +63,7 @@ type Node struct {
 type ControlClient struct {
 	ID        string
 	OwnerID   string
+	KeyID     string
 	PublicKey []byte
 	Name      string
 	Status    string
@@ -80,6 +81,7 @@ type NodeSession struct {
 type ControlClientSession struct {
 	OwnerID   string
 	ClientID  string
+	KeyID     string
 	PublicKey []byte
 	Status    string
 }
@@ -339,7 +341,7 @@ func (s *Store) ControlClients(ctx context.Context) ([]ControlClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, "SELECT id, owner_id, public_key, name, status, created_at FROM control_clients ORDER BY id")
+	rows, err := db.QueryContext(ctx, "SELECT id, owner_id, key_id, public_key, name, status, created_at FROM control_clients ORDER BY id")
 	if err != nil {
 		return nil, internal("control clients read")
 	}
@@ -348,7 +350,7 @@ func (s *Store) ControlClients(ctx context.Context) ([]ControlClient, error) {
 	for rows.Next() {
 		var item ControlClient
 		var created string
-		if err := rows.Scan(&item.ID, &item.OwnerID, &item.PublicKey, &item.Name, &item.Status, &created); err != nil {
+		if err := rows.Scan(&item.ID, &item.OwnerID, &item.KeyID, &item.PublicKey, &item.Name, &item.Status, &created); err != nil {
 			return nil, internal("control clients read")
 		}
 		item.PublicKey = append([]byte(nil), item.PublicKey...)
@@ -399,8 +401,8 @@ func (s *Store) ControlClientSession(ctx context.Context, clientID string) (Cont
 		return ControlClientSession{}, err
 	}
 	var result ControlClientSession
-	if err := db.QueryRowContext(ctx, "SELECT owner_id, id, public_key, status FROM control_clients WHERE id=?", clientID).
-		Scan(&result.OwnerID, &result.ClientID, &result.PublicKey, &result.Status); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT owner_id, id, key_id, public_key, status FROM control_clients WHERE id=?", clientID).
+		Scan(&result.OwnerID, &result.ClientID, &result.KeyID, &result.PublicKey, &result.Status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ControlClientSession{}, ErrNotFound
 		}

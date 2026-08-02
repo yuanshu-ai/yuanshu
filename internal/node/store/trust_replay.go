@@ -15,6 +15,44 @@ var (
 	_ v1.ReplayStore = (*Store)(nil)
 )
 
+type TrustedClientRecord struct {
+	OwnerID, NodeID, ClientID, KeyID string
+	PublicKey                        []byte
+	Status                           v1.TrustStatus
+}
+
+func (s *Store) TrustedClients(ctx context.Context, ownerID, nodeID string) ([]TrustedClientRecord, error) {
+	if err := requireContext(ctx); err != nil {
+		return nil, err
+	}
+	if ownerID == "" || nodeID == "" || len(ownerID) > 128 || len(nodeID) > 128 {
+		return nil, ErrInvalid
+	}
+	db, err := s.database()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT owner_id,node_id,client_id,key_id,public_key,status FROM trusted_clients
+		WHERE owner_id=? AND node_id=? ORDER BY client_id,key_id`, ownerID, nodeID)
+	if err != nil {
+		return nil, internal("trusted clients read")
+	}
+	defer rows.Close()
+	var result []TrustedClientRecord
+	for rows.Next() {
+		var item TrustedClientRecord
+		if err := rows.Scan(&item.OwnerID, &item.NodeID, &item.ClientID, &item.KeyID, &item.PublicKey, &item.Status); err != nil {
+			return nil, internal("trusted clients read")
+		}
+		item.PublicKey = append([]byte(nil), item.PublicKey...)
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, internal("trusted clients read")
+	}
+	return result, nil
+}
+
 func (s *Store) PutTrustedKey(ctx context.Context, ref v1.KeyRef, key v1.TrustedKey) error {
 	if err := requireContext(ctx); err != nil {
 		return err
