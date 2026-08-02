@@ -6,6 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](#project-status)
+[![CI](https://github.com/yuanshu-ai/yuanshu/actions/workflows/ci.yml/badge.svg)](https://github.com/yuanshu-ai/yuanshu/actions/workflows/ci.yml)
 
 Yuanshu is being built for developers who want to control AI coding agents running on their own computers from a phone, tablet, or browser. It focuses on structured agent activity—threads, streaming output, commands, diffs, approvals, and task state—instead of forwarding an entire desktop.
 
@@ -108,7 +109,8 @@ yuanshu standalone   Server + Web + local Node in one deployment
 - [x] Windows DPAPI identity storage and local workspace policy boundary
 - [x] Node-managed Codex stdio Runtime, formal Adapter contract, and Thread/Turn ownership
 - [x] Bounded Node event journal, cursor replay, snapshots, and ambiguous recovery
-- [ ] Windows Yuanshu Node alpha
+- [x] Windows Yuanshu Node alpha
+- [x] Native three-platform CI, containerized Linux race, dependency/secret scanning, and SBOM
 - [ ] Linux Server and Standalone self-hosting preview
 - [ ] Self-hosted device and control-client pairing
 - [ ] Linux Yuanshu Node
@@ -186,7 +188,7 @@ go run ./cmd/yuanshu node --help
 go run ./cmd/yuanshu standalone --help
 ```
 
-The repository uses LF source files and supports these commands on Windows, macOS, and Linux. The base CI currently runs Go checks on Windows and Linux and Web checks on Ubuntu; broader release matrices belong to later tasks.
+The repository uses LF source files and supports these commands on Windows, macOS, and Linux. CI runs native Go checks on Ubuntu 24.04 x64, Windows Server 2025 x64, and macOS 15 arm64; Web/Protocol checks, a pinned-container Linux race suite, dependency and Secret scanning, and an SPDX SBOM are release gates. Successful runs retain unsigned Windows amd64, Linux amd64, and Darwin arm64 build artifacts for seven days. These are engineering artifacts, not installable releases; signed releases and product container images remain later milestones.
 
 ### M0 PoC (developers only)
 

@@ -6,6 +6,7 @@
 
 [![许可证](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![项目状态](https://img.shields.io/badge/status-pre--alpha-orange.svg)](#项目状态)
+[![CI](https://github.com/yuanshu-ai/yuanshu/actions/workflows/ci.yml/badge.svg)](https://github.com/yuanshu-ai/yuanshu/actions/workflows/ci.yml)
 
 远枢面向希望从手机、平板或浏览器控制自己电脑上 AI 编程 Agent 的开发者。它关注 Thread、流式输出、命令、Diff、审批和任务状态等结构化事件，而不是转发整个桌面画面。
 
@@ -108,7 +109,8 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [x] Windows DPAPI 身份存储与本地工作区策略边界
 - [x] Node 管理的 Codex stdio Runtime、正式 Adapter 合约与 Thread/Turn 所有权
 - [x] 有界 Node 事件日志、cursor 补发、Snapshot 与 ambiguous 恢复
-- [ ] Windows Yuanshu Node Alpha
+- [x] Windows Yuanshu Node Alpha
+- [x] 三平台原生 CI、容器化 Linux race、依赖/Secret 扫描与 SBOM
 - [ ] Linux Server 与 Standalone 自托管预览版
 - [ ] 自托管设备与控制端配对
 - [ ] Linux Yuanshu Node
@@ -175,7 +177,7 @@ go run ./cmd/yuanshu node --help
 go run ./cmd/yuanshu standalone --help
 ```
 
-仓库源文件统一使用 LF，以上命令面向 Windows、macOS 和 Linux。当前基础 CI 在 Windows 和 Linux 运行 Go 检查，在 Ubuntu 运行 Web 检查；更完整的发布矩阵由后续任务补充。
+仓库源文件统一使用 LF，以上命令面向 Windows、macOS 和 Linux。CI 在 Ubuntu 24.04 x64、Windows Server 2025 x64和 macOS 15 arm64原生运行 Go 门禁，并执行 Web/Protocol检查、固定容器中的 Linux race、依赖与 Secret扫描和 SPDX SBOM生成。成功的工作流会保留7天的 Windows amd64、Linux amd64和 Darwin arm64未签名构建工件；它们只是工程工件，不是可安装 Release，正式签名与产品容器镜像属于后续里程碑。
 
 ### M0 PoC（仅开发验证）
 

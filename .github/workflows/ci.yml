@@ -2,39 +2,220 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  go:
-    name: Go (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  go-native:
+    name: Go native (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - name: Ubuntu 24.04 x64
+            runner: ubuntu-24.04
+          - name: Windows Server 2025 x64
+            runner: windows-2025
+          - name: macOS 15 arm64
+            runner: macos-15
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-go@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .go-version
-          cache: false
-      - run: go test ./...
-      - run: go vet ./...
-      - run: go build ./...
+          cache-dependency-path: go.sum
+      - name: Check Go formatting
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mapfile -t go_files < <(git ls-files '*.go')
+          unformatted="$(gofmt -l "${go_files[@]}")"
+          if [ -n "$unformatted" ]; then
+            printf 'The following Go files need gofmt:\n%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Verify Go modules
+        if: runner.os == 'Linux'
+        run: go mod verify
+      - name: Check Git whitespace
+        if: runner.os == 'Linux'
+        run: git diff --check
+      - name: Run Go tests
+        run: go test ./...
+      - name: Run Go vet
+        run: go vet ./...
+      - name: Build Go packages
+        run: go build ./...
 
-  web:
-    name: Web (Ubuntu)
-    runs-on: ubuntu-latest
+  web-protocol:
+    name: Web and Protocol
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
-      - run: corepack enable
-      - run: corepack install --global pnpm@11.18.0
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack install --global pnpm@11.18.0
       - run: pnpm install --frozen-lockfile
+      - run: pnpm protocol:check
+      - run: pnpm protocol:test
       - run: pnpm --dir web test
       - run: pnpm --dir web build
+      - run: pnpm audit --audit-level high
+
+  linux-race-container:
+    name: Linux race (Go container)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run the full race suite in the pinned Go image
+        shell: bash
+        run: |
+          docker run --rm \
+            --mount "type=bind,source=${GITHUB_WORKSPACE},target=/src,readonly" \
+            --workdir /src \
+            golang:1.26.5@sha256:3aff6657219a4d9c14e27fb1d8976c49c29fddb70ba835014f477e1c70636647 \
+            go test -race ./...
+
+  security-sbom:
+    name: Security and SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+      - name: Validate GitHub Actions
+        shell: bash
+        run: |
+          docker run --rm \
+            --mount "type=bind,source=${GITHUB_WORKSPACE},target=/repo,readonly" \
+            --workdir /repo \
+            rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color
+      - name: Scan Git history for secrets
+        shell: bash
+        run: |
+          docker run --rm \
+            --mount "type=bind,source=${GITHUB_WORKSPACE},target=/src,readonly" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git /src --config /src/.gitleaks.toml --redact --exit-code 1 --no-banner
+      - name: Scan reachable Go code for vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - name: Generate and validate the source SBOM
+        shell: bash
+        run: |
+          mkdir -p "${RUNNER_TEMP}/sbom"
+          docker run --rm \
+            --mount "type=bind,source=${GITHUB_WORKSPACE},target=/src,readonly" \
+            anchore/syft:v1.50.0@sha256:1288ea4c8b38767b4e620c1e312c8cb26b6e887a99b4f07ab6cd19fc6f225026 \
+            dir:/src --source-name yuanshu-source --output spdx-json \
+            > "${RUNNER_TEMP}/sbom/yuanshu-source.spdx.json"
+          jq -e '
+            .spdxVersion == "SPDX-2.3" and
+            (.packages | tostring | contains("pkg:golang/")) and
+            (.packages | tostring | contains("pkg:npm/"))
+          ' "${RUNNER_TEMP}/sbom/yuanshu-source.spdx.json"
+          if grep -Fq "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}/sbom/yuanshu-source.spdx.json"; then
+            echo "SBOM contains the runner workspace path"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: yuanshu-source-sbom
+          path: ${{ runner.temp }}/sbom/yuanshu-source.spdx.json
+          if-no-files-found: error
+          retention-days: 7
+
+  build-targets:
+    name: Build (${{ matrix.id }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-amd64
+            goos: windows
+            goarch: amd64
+            executable: yuanshu.exe
+            archive: yuanshu-windows-amd64.zip
+            publish: true
+          - id: linux-amd64
+            goos: linux
+            goarch: amd64
+            executable: yuanshu
+            archive: yuanshu-linux-amd64.tar.gz
+            publish: true
+          - id: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            executable: yuanshu
+            archive: yuanshu-darwin-arm64.tar.gz
+            publish: true
+          - id: darwin-amd64
+            goos: darwin
+            goarch: amd64
+            executable: yuanshu
+            archive: unused
+            publish: false
+          - id: linux-arm64
+            goos: linux
+            goarch: arm64
+            executable: yuanshu
+            archive: unused
+            publish: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+      - name: Build target
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          output="${RUNNER_TEMP}/build/${{ matrix.id }}"
+          mkdir -p "$output"
+          go build -trimpath -o "$output/${{ matrix.executable }}" ./cmd/yuanshu
+      - name: Package target
+        if: matrix.publish
+        shell: bash
+        run: |
+          output="${RUNNER_TEMP}/build/${{ matrix.id }}"
+          archive="${RUNNER_TEMP}/${{ matrix.archive }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            (cd "$output" && zip -q "$archive" "${{ matrix.executable }}")
+          else
+            tar -C "$output" -czf "$archive" "${{ matrix.executable }}"
+          fi
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: matrix.publish
+        with:
+          name: yuanshu-${{ matrix.id }}
+          path: ${{ runner.temp }}/${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7

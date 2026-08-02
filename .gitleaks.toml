@@ -1,0 +1,12 @@
+title = "Yuanshu Gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deterministic M0 PoC test tokens"
+regexTarget = "secret"
+regexes = [
+  '''^0123456789abcdef0123456789abcdef$''',
+  '''^abcdef0123456789abcdef0123456789$''',
+]

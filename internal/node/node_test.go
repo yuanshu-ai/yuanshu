@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,5 +194,21 @@ func TestNodeFlagParsing(t *testing.T) {
 	}
 	if _, _, _, err := parseNodeFlags([]string{"--json"}, "default", false, false); !errors.Is(err, ErrUsage) {
 		t.Fatalf("unexpected flag error = %v", err)
+	}
+}
+
+func TestNodeSyntaxIsValidatedBeforePlatformCapabilities(t *testing.T) {
+	tests := [][]string{
+		{"unknown"},
+		{"status", "--background"},
+		{"stop", "extra"},
+		{"doctor", "--config", "relative.toml"},
+		{"autostart"},
+		{"autostart", "enable", "--json"},
+	}
+	for _, args := range tests {
+		if err := Command(context.Background(), args, io.Discard, io.Discard); !errors.Is(err, ErrUsage) {
+			t.Fatalf("Command(%q) error = %v, want ErrUsage", args, err)
+		}
 	}
 }

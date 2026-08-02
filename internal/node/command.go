@@ -34,6 +34,9 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		fmt.Fprint(stdout, Usage)
 		return nil
 	}
+	if err := validateNodeArguments(args); err != nil {
+		return err
+	}
 	defaults, err := defaultPaths()
 	if err != nil {
 		return err
@@ -85,6 +88,57 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return nil
 	case "autostart":
 		return commandAutostart(ctx, current, defaults, args, stdout)
+	default:
+		return ErrUsage
+	}
+}
+
+// validateNodeArguments keeps command syntax independent from platform
+// capability discovery. In particular, invalid invocations must remain usage
+// errors on platforms where the formal Node runtime is not yet available.
+func validateNodeArguments(args []string) error {
+	command := "run"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		command, args = args[0], args[1:]
+	}
+	switch command {
+	case "run":
+		_, _, _, err := parseNodeFlags(args, "", false, true)
+		return err
+	case "status":
+		_, _, _, err := parseNodeFlags(args, "", true, false)
+		return err
+	case "stop":
+		if len(args) != 0 {
+			return ErrUsage
+		}
+		return nil
+	case "doctor":
+		_, _, _, err := parseNodeFlags(args, "", true, false)
+		return err
+	case "autostart":
+		return validateAutostartArguments(args)
+	default:
+		return ErrUsage
+	}
+}
+
+func validateAutostartArguments(args []string) error {
+	if len(args) == 0 {
+		return ErrUsage
+	}
+	switch args[0] {
+	case "enable":
+		_, _, _, err := parseNodeFlags(args[1:], "", false, false)
+		return err
+	case "disable":
+		if len(args) != 1 {
+			return ErrUsage
+		}
+		return nil
+	case "status":
+		_, _, _, err := parseNodeFlags(args[1:], "", true, false)
+		return err
 	default:
 		return ErrUsage
 	}
