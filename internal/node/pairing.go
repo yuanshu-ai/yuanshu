@@ -216,10 +216,12 @@ func (m *pairingManager) Revoke(ctx context.Context, clientID, keyID string) err
 }
 
 func (m *pairingManager) RotateCredential(ctx context.Context) error {
-	newCredential := make([]byte, 32)
-	if _, err := io.ReadFull(m.random, newCredential); err != nil {
+	rawCredential := make([]byte, 32)
+	if _, err := io.ReadFull(m.random, rawCredential); err != nil {
 		return errors.New("credential rotation failed")
 	}
+	newCredential := []byte(base64.RawURLEncoding.EncodeToString(rawCredential))
+	clear(rawCredential)
 	defer clear(newCredential)
 	hash := sha256.Sum256(newCredential)
 	issued := m.clock().UTC().Format(time.RFC3339Nano)

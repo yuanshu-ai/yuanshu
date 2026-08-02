@@ -176,7 +176,16 @@ func (h *Hub) ControlHandler(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	defer h.release()
-	clientID := request.Header.Get("X-Yuanshu-Client-ID")
+	headerID := request.Header.Get("X-Yuanshu-Client-ID")
+	queryID := request.URL.Query().Get("clientId")
+	if headerID != "" && queryID != "" && headerID != queryID {
+		writeError(writer, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	clientID := headerID
+	if clientID == "" {
+		clientID = queryID
+	}
 	if !validOpaque(clientID, 128) {
 		writeError(writer, http.StatusUnauthorized, "unauthorized")
 		return

@@ -1,0 +1,36 @@
+config_version = 1
+
+[host]
+name = "Personal Standalone"
+
+[transport]
+mode = "standalone"
+
+[relay]
+url = ""
+proxy_url = ""
+connect_timeout_seconds = 15
+credential_ref = ""
+proxy_credential_ref = ""
+
+[identity]
+private_key_ref = "yuanshu/standalone/device-identity"
+
+[adapters.codex]
+enabled = true
+binary = "codex"
+runtime_mode = "stdio"
+home = "/codex-home"
+
+[events]
+max_age_hours = 168
+max_size_mib = 256
+
+[[workspaces]]
+id = "personal-workspace"
+display_name = "Personal Workspace"
+path = "/workspace"
+allowed_adapters = ["codex"]
+default_adapter = "codex"
+permission_profile = "workspace-write"
+allow_network = false

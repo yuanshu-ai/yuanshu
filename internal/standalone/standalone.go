@@ -11,9 +11,11 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
@@ -36,18 +38,26 @@ var (
 	ErrUnavailable = errors.New("standalone runtime is unavailable")
 )
 
+const standaloneCredentialRef = platform.SecretRef("yuanshu/standalone/node-credential")
+
 const Usage = `Usage:
-  yuanshu standalone [run] --data-dir <absolute-path> --config <absolute-path> [--listen 127.0.0.1:7444]
+  yuanshu standalone [run] --data-dir <absolute-path> --config <absolute-path> [--listen <ip:port>]
+    [--public-url https://host[:port] --tls-cert <absolute-path> --tls-key <absolute-path>]
+    [--master-key-file <absolute-path>]
 `
 
 type Options struct {
-	DataDir  string
-	Config   string
-	Listen   string
-	Stdout   io.Writer
-	Platform platform.Platform
-	Random   io.Reader
-	Clock    func() time.Time
+	DataDir       string
+	Config        string
+	Listen        string
+	PublicURL     string
+	TLSCertFile   string
+	TLSKeyFile    string
+	MasterKeyFile string
+	Stdout        io.Writer
+	Platform      platform.Platform
+	Random        io.Reader
+	Clock         func() time.Time
 }
 
 // Command runs the formal combined Server and local Node entry point.
@@ -71,9 +81,14 @@ func parseArguments(args []string) (Options, error) {
 		return Options{}, ErrUsage
 	}
 	options := Options{Listen: "127.0.0.1:7444"}
-	listenSet := false
+	seen := make(map[string]bool)
 	for index := 0; index < len(args); index++ {
-		switch args[index] {
+		name := args[index]
+		if seen[name] {
+			return Options{}, ErrUsage
+		}
+		seen[name] = true
+		switch name {
 		case "--data-dir":
 			index++
 			if index >= len(args) || options.DataDir != "" || !filepath.IsAbs(args[index]) {
@@ -88,16 +103,39 @@ func parseArguments(args []string) (Options, error) {
 			options.Config = filepath.Clean(args[index])
 		case "--listen":
 			index++
-			if index >= len(args) || listenSet {
+			if index >= len(args) {
 				return Options{}, ErrUsage
 			}
 			options.Listen = args[index]
-			listenSet = true
+		case "--public-url":
+			index++
+			if index >= len(args) {
+				return Options{}, ErrUsage
+			}
+			options.PublicURL = args[index]
+		case "--tls-cert":
+			index++
+			if index >= len(args) || !filepath.IsAbs(args[index]) {
+				return Options{}, ErrUsage
+			}
+			options.TLSCertFile = filepath.Clean(args[index])
+		case "--tls-key":
+			index++
+			if index >= len(args) || !filepath.IsAbs(args[index]) {
+				return Options{}, ErrUsage
+			}
+			options.TLSKeyFile = filepath.Clean(args[index])
+		case "--master-key-file":
+			index++
+			if index >= len(args) || !filepath.IsAbs(args[index]) {
+				return Options{}, ErrUsage
+			}
+			options.MasterKeyFile = filepath.Clean(args[index])
 		default:
 			return Options{}, ErrUsage
 		}
 	}
-	if options.DataDir == "" || options.Config == "" || !validListen(options.Listen) {
+	if options.DataDir == "" || options.Config == "" || !validListen(options.Listen) || !validPublicOptions(options) {
 		return Options{}, ErrUsage
 	}
 	return options, nil
@@ -105,11 +143,32 @@ func parseArguments(args []string) (Options, error) {
 
 func validListen(value string) bool {
 	host, port, err := net.SplitHostPort(value)
-	if err != nil || host != "127.0.0.1" && host != "::1" {
+	if err != nil || net.ParseIP(host) == nil {
 		return false
 	}
 	number, err := strconv.Atoi(port)
 	return err == nil && number > 0 && number <= 65535
+}
+
+func validPublicOptions(options Options) bool {
+	tlsCount := 0
+	for _, value := range []string{options.PublicURL, options.TLSCertFile, options.TLSKeyFile} {
+		if value != "" {
+			tlsCount++
+		}
+	}
+	if tlsCount != 0 && tlsCount != 3 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(options.Listen)
+	if err != nil || host != "127.0.0.1" && host != "::1" && tlsCount != 3 {
+		return false
+	}
+	if options.PublicURL == "" {
+		return true
+	}
+	parsed, err := url.Parse(options.PublicURL)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && (parsed.Path == "" || parsed.Path == "/")
 }
 
 // Run owns one formal Server, one local Node control session, and their
@@ -121,8 +180,16 @@ func Run(ctx context.Context, options Options) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	var platformCloser io.Closer
 	if options.Platform == nil {
-		options.Platform = platform.Current()
+		configured, closer, err := defaultStandalonePlatform(options.DataDir, options.MasterKeyFile)
+		if err != nil {
+			return errors.Join(ErrUnavailable, errors.New("standalone platform is unavailable"))
+		}
+		options.Platform, platformCloser = configured, closer
+		if platformCloser != nil {
+			defer platformCloser.Close()
+		}
 	}
 	if options.Random == nil {
 		options.Random = rand.Reader
@@ -136,7 +203,7 @@ func Run(ctx context.Context, options Options) error {
 	if options.Stdout == nil {
 		options.Stdout = io.Discard
 	}
-	if options.DataDir == "" || options.Config == "" || !filepath.IsAbs(options.DataDir) || !filepath.IsAbs(options.Config) || !validListen(options.Listen) || options.Platform == nil {
+	if options.DataDir == "" || options.Config == "" || !filepath.IsAbs(options.DataDir) || !filepath.IsAbs(options.Config) || !validListen(options.Listen) || !validPublicOptions(options) || options.Platform == nil {
 		return ErrUsage
 	}
 
@@ -178,10 +245,11 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("node identity is unavailable"))
 	}
-	nodeIdentity, err = ensureServerBinding(ctx, serverDir, loaded.Config.Host.Name, options.Platform.Family(), nodeIdentity, identityManager, options.Random, options.Clock)
+	nodeIdentity, credential, err := ensureServerBinding(ctx, serverDir, loaded.Config.Host.Name, options.Platform.Family(), nodeIdentity, identityManager, options.Platform.SecureStore(), options.Random, options.Clock)
 	if err != nil {
 		return err
 	}
+	defer clear(credential)
 
 	agent, err := codex.New(codex.Options{Config: loaded.Config.Adapters.Codex, Processes: options.Platform.Processes(), Workspaces: workspaceManager, Threads: local})
 	if err != nil {
@@ -221,11 +289,24 @@ func Run(ctx context.Context, options Options) error {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	var localManagement *node.StandaloneManagement
+	if options.PublicURL != "" {
+		relayURL := "wss" + strings.TrimPrefix(strings.TrimSuffix(options.PublicURL, "/"), "https") + "/node/connect"
+		localManagement, err = node.StartStandaloneManagement(runCtx, node.StandaloneManagementOptions{
+			IPC: options.Platform.IPC(), RelayURL: relayURL, Identity: nodeIdentity, Signer: identityManager, Local: local,
+			Secrets: options.Platform.SecureStore(), CredentialRef: standaloneCredentialRef, Credential: credential, Stop: cancel,
+		})
+		if err != nil {
+			return errors.Join(ErrUnavailable, errors.New("standalone local management is unavailable"))
+		}
+		defer localManagement.Close()
+	}
 	results := make(chan error, 2)
 	go func() { results <- session.Run(runCtx) }()
 	go func() {
 		results <- server.Run(runCtx, server.Options{
-			DataDir: serverDir, Listen: options.Listen, Stdout: options.Stdout, Random: options.Random, Clock: options.Clock,
+			DataDir: serverDir, Listen: options.Listen, PublicURL: options.PublicURL, TLSCertFile: options.TLSCertFile, TLSKeyFile: options.TLSKeyFile,
+			Stdout: options.Stdout, Random: options.Random, Clock: options.Clock,
 			LocalNode: &server.LocalNodeSession{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID, Transport: serverSide},
 		})
 	}()
@@ -243,35 +324,58 @@ func Run(ctx context.Context, options Options) error {
 	return second
 }
 
-func ensureServerBinding(ctx context.Context, serverDir, name string, family platform.Family, current identity.Identity, manager *identity.Manager, random io.Reader, clock func() time.Time) (identity.Identity, error) {
+func ensureServerBinding(ctx context.Context, serverDir, name string, family platform.Family, current identity.Identity, manager *identity.Manager, secrets platform.SecureStore, random io.Reader, clock func() time.Time) (identity.Identity, []byte, error) {
 	database, err := serverstore.Open(ctx, filepath.Join(serverDir, "server.db"), serverstore.Options{Clock: clock})
 	if err != nil {
-		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("server database is unavailable"))
+		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("server database is unavailable"))
 	}
 	defer database.Close()
 	if current.OwnerID != "" || current.NodeID != "" {
 		record, err := database.NodeSession(ctx, current.NodeID)
 		if err != nil || record.OwnerID != current.OwnerID || !bytes.Equal(record.PublicKey, current.PublicKey) || record.Status != "active" {
-			return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone identity binding does not match server metadata"))
+			return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone identity binding does not match server metadata"))
 		}
-		return current, nil
+		credential, secretErr := secrets.Get(ctx, standaloneCredentialRef)
+		if secretErr == nil && validStandaloneCredential(credential) {
+			return current, credential, nil
+		}
+		clear(credential)
+		credential, err = newStandaloneCredential(random)
+		if err != nil {
+			return identity.Identity{}, nil, err
+		}
+		if err := secrets.Put(ctx, standaloneCredentialRef, credential); err != nil {
+			clear(credential)
+			return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone credential storage failed"))
+		}
+		digest := sha256.Sum256(credential)
+		if err := database.RotateNodeCredential(ctx, current.OwnerID, current.NodeID, digest[:], clock().UTC()); err != nil {
+			_ = secrets.Delete(ctx, standaloneCredentialRef)
+			clear(credential)
+			return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone credential reconciliation failed"))
+		}
+		return current, credential, nil
 	}
 	service, err := server.NewBootstrapService(database, server.BootstrapOptions{Random: random, Clock: clock})
 	if err != nil {
-		return identity.Identity{}, ErrUnavailable
+		return identity.Identity{}, nil, ErrUnavailable
 	}
 	secret, issued, err := service.Rotate(ctx)
 	if err != nil || !issued {
-		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone server is already claimed"))
+		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone server is already claimed"))
 	}
-	credential := make([]byte, 32)
+	credential, err := newStandaloneCredential(random)
+	if err != nil {
+		return identity.Identity{}, nil, err
+	}
 	requestID := make([]byte, 16)
-	if _, err := io.ReadFull(random, credential); err != nil {
-		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
-	}
-	defer clear(credential)
 	if _, err := io.ReadFull(random, requestID); err != nil {
-		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
+		clear(credential)
+		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
+	}
+	if err := secrets.Put(ctx, standaloneCredentialRef, credential); err != nil {
+		clear(credential)
+		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone credential storage failed"))
 	}
 	digest := sha256.Sum256(credential)
 	response, _, err := service.Claim(ctx, secret, server.ClaimRequest{
@@ -279,13 +383,34 @@ func ensureServerBinding(ctx context.Context, serverDir, name string, family pla
 		PublicKey: base64.RawURLEncoding.EncodeToString(current.PublicKey), CredentialHash: base64.RawURLEncoding.EncodeToString(digest[:]),
 	})
 	if err != nil {
-		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
+		_ = secrets.Delete(ctx, standaloneCredentialRef)
+		clear(credential)
+		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
 	}
 	bound, err := manager.Bind(ctx, response.OwnerID, response.NodeID)
 	if err != nil {
-		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone identity binding failed"))
+		clear(credential)
+		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone identity binding failed"))
 	}
-	return bound, nil
+	return bound, credential, nil
+}
+
+func newStandaloneCredential(random io.Reader) ([]byte, error) {
+	raw := make([]byte, 32)
+	if _, err := io.ReadFull(random, raw); err != nil {
+		clear(raw)
+		return nil, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
+	}
+	credential := []byte(base64.RawURLEncoding.EncodeToString(raw))
+	clear(raw)
+	return credential, nil
+}
+
+func validStandaloneCredential(credential []byte) bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(string(credential))
+	valid := err == nil && len(decoded) == 32 && base64.RawURLEncoding.EncodeToString(decoded) == string(credential)
+	clear(decoded)
+	return valid
 }
 
 func prepareDirectory(path string) error {

@@ -6,4 +6,5 @@ const (
 	expectedCurrentFamily      = FamilyLinux
 	expectedProcessAvailable   = false
 	expectedWorkspaceAvailable = false
+	expectedIPCAvailable       = true
 )

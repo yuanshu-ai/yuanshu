@@ -51,10 +51,6 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if err := validateNodeArguments(args); err != nil {
 		return err
 	}
-	defaults, err := defaultPaths()
-	if err != nil {
-		return err
-	}
 	current := platform.Current()
 	command := "run"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -62,13 +58,17 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	switch command {
 	case "run":
+		defaults, err := defaultPaths()
+		if err != nil {
+			return err
+		}
 		configPath, background, _, err := parseNodeFlags(args, defaults.config, false, true)
 		if err != nil {
 			return err
 		}
 		return runHost(ctx, runOptions{paths: defaults, configPath: configPath, background: background, platform: current})
 	case "status":
-		_, _, jsonOutput, err := parseNodeFlags(args, defaults.config, true, false)
+		_, _, jsonOutput, err := parseNodeFlags(args, "", true, false)
 		if err != nil {
 			return err
 		}
@@ -88,6 +88,10 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		return err
 	case "doctor":
+		defaults, err := defaultPaths()
+		if err != nil {
+			return err
+		}
 		configPath, _, jsonOutput, err := parseNodeFlags(args, defaults.config, true, false)
 		if err != nil {
 			return err
@@ -101,6 +105,10 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		return nil
 	case "autostart":
+		defaults, err := defaultPaths()
+		if err != nil {
+			return err
+		}
 		return commandAutostart(ctx, current, defaults, args, stdout)
 	case "pairing", "clients", "credential", "enrollment", "devices":
 		return commandLocalManagement(ctx, current.IPC(), command, args, stdout)

@@ -6,4 +6,5 @@ const (
 	expectedCurrentFamily      = FamilyWindows
 	expectedProcessAvailable   = true
 	expectedWorkspaceAvailable = true
+	expectedIPCAvailable       = true
 )

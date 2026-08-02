@@ -1,0 +1,8 @@
+{
+  "name": "yuanshu-codex-runtime",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "@openai/codex": "0.144.6"
+  }
+}

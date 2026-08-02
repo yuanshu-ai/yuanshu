@@ -102,6 +102,34 @@ func (f hubFixture) dialControl(t *testing.T) transport.Transport {
 	return result
 }
 
+func TestHubControlBrowserQueryAuthenticationAndConflict(t *testing.T) {
+	fixture := newHubFixture(t)
+	header := make(http.Header)
+	header.Set("Origin", fixture.origin)
+	control, _, err := transport.DialRelay(context.Background(), wssURL(fixture.server.URL)+"/web/connect?clientId="+fixture.store.control.ClientID, transport.RelayDialOptions{
+		HTTPClient: fixture.server.Client(), Header: header, Role: transport.SessionRoleControl, SubjectID: fixture.store.control.ClientID,
+		Sign: func(_ context.Context, input []byte) ([]byte, error) {
+			return ed25519.Sign(fixture.controlPrivate, input), nil
+		},
+		Relay: transport.RelayOptions{MaxSendBytes: 256 << 10, MaxReceiveBytes: 1 << 20},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = control.Close()
+
+	header.Set("X-Yuanshu-Client-ID", "cli_conflict")
+	_, response, err := transport.DialRelay(context.Background(), wssURL(fixture.server.URL)+"/web/connect?clientId="+fixture.store.control.ClientID, transport.RelayDialOptions{
+		HTTPClient: fixture.server.Client(), Header: header, Role: transport.SessionRoleControl, SubjectID: fixture.store.control.ClientID,
+		Sign: func(_ context.Context, input []byte) ([]byte, error) {
+			return ed25519.Sign(fixture.controlPrivate, input), nil
+		},
+	})
+	if err == nil || response == nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("conflict response=%v error=%v", response, err)
+	}
+}
+
 func TestHubRoutesRawFramesInBothDirections(t *testing.T) {
 	fixture := newHubFixture(t)
 	node := fixture.dialNode(t)

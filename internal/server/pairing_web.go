@@ -23,6 +23,11 @@ func PairingPageHandler() http.Handler {
 		raw, _ := pairingWeb.ReadFile("pairing-web/app.js")
 		_, _ = w.Write(raw)
 	})
+	mux.HandleFunc("GET /pair/session.js", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		raw, _ := pairingWeb.ReadFile("pairing-web/session.js")
+		_, _ = w.Write(raw)
+	})
 	mux.HandleFunc("GET /pair/style.css", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		raw, _ := pairingWeb.ReadFile("pairing-web/style.css")

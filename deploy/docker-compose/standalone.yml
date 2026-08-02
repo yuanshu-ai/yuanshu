@@ -1,0 +1,45 @@
+services:
+  standalone:
+    image: yuanshu-standalone:dev
+    container_name: yuanshu-standalone
+    restart: unless-stopped
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      SSL_CERT_FILE: /run/yuanshu/tls/ca.crt
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
+    ports:
+      - "7444:7444"
+    volumes:
+      - standalone-data:/data
+      - codex-home:/codex-home
+      - ${YUANSHU_WORKSPACE:-../workspace}:/workspace
+      - ${YUANSHU_CONFIG:-../config/standalone.toml}:/run/yuanshu/config.toml:ro
+      - ${YUANSHU_MASTER_KEY:-../secrets/master.key}:/run/yuanshu/master.key:ro
+      - ${YUANSHU_CERT_DIR:-../certs}:/run/yuanshu/tls:ro
+    command:
+      - standalone
+      - run
+      - --data-dir
+      - /data
+      - --config
+      - /run/yuanshu/config.toml
+      - --listen
+      - 0.0.0.0:7444
+      - --public-url
+      - ${YUANSHU_PUBLIC_URL:-https://localhost:7444}
+      - --tls-cert
+      - /run/yuanshu/tls/server.crt
+      - --tls-key
+      - /run/yuanshu/tls/server.key
+      - --master-key-file
+      - /run/yuanshu/master.key
+    stop_grace_period: 20s
+
+volumes:
+  standalone-data:
+  codex-home:

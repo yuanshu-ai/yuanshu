@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
+import { sessionSigningInput } from "../internal/server/pairing-web/session.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixtureRoot = resolve(root, "schemas", "yuanshu", "v1", "fixtures");
@@ -33,6 +34,32 @@ const byType = {
 };
 
 let failures = 0;
+
+const sessionChallenge = {
+  nonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  subjectId: "cli_vector",
+  version: "1",
+  expiresAt: "2026-08-03T12:00:30Z",
+  role: "control",
+  connectionId: "con_vector",
+  type: "challenge",
+};
+const expectedSessionInput = "yuanshu-relay-session-v1\0{\"connectionId\":\"con_vector\",\"expiresAt\":\"2026-08-03T12:00:30Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"role\":\"control\",\"subjectId\":\"cli_vector\",\"type\":\"challenge\",\"version\":\"1\"}";
+if (new TextDecoder().decode(sessionSigningInput(sessionChallenge)) !== expectedSessionInput) {
+  process.stderr.write("browser session challenge vector mismatch\n");
+  failures += 1;
+}
+const sessionSeed = Uint8Array.from({ length: 32 }, (_, index) => index);
+const pkcs8Prefix = Uint8Array.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
+const pkcs8 = new Uint8Array(pkcs8Prefix.length + sessionSeed.length);
+pkcs8.set(pkcs8Prefix);
+pkcs8.set(sessionSeed, pkcs8Prefix.length);
+const sessionKey = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, ["sign"]);
+const sessionSignature = Buffer.from(await crypto.subtle.sign("Ed25519", sessionKey, sessionSigningInput(sessionChallenge))).toString("base64url");
+if (sessionSignature !== "0FR-S7Q2mo5bprvUYmPY9f4uFNCAL8KWKoheSQRMNpcoFCKYqD125F4fUh4KSTdyTK-NXOzezBw_YgCP_FnlAw") {
+  process.stderr.write("browser Ed25519 session vector mismatch\n");
+  failures += 1;
+}
 for (const message of [...controls, ...events, ...forwardEvents]) {
   if (!validate(message)) {
     process.stderr.write(`expected valid ${message.type}: ${ajv.errorsText(validate.errors)}\n`);

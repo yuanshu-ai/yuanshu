@@ -24,8 +24,8 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 		t.Fatalf("Processes().Available() = %v, want %v", current.Processes().Available(), expectedProcessAvailable)
 	}
 	wantWindowsUserCapabilities := expectedCurrentFamily == FamilyWindows
-	if current.IPC().Available() != wantWindowsUserCapabilities {
-		t.Fatalf("IPC().Available() = %v, want %v", current.IPC().Available(), wantWindowsUserCapabilities)
+	if current.IPC().Available() != expectedIPCAvailable {
+		t.Fatalf("IPC().Available() = %v, want %v", current.IPC().Available(), expectedIPCAvailable)
 	}
 	if current.Autostart().Available() != wantWindowsUserCapabilities {
 		t.Fatalf("Autostart().Available() = %v, want %v", current.Autostart().Available(), wantWindowsUserCapabilities)
@@ -37,7 +37,7 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 		available bool
 		call      func() error
 	}{}
-	if !wantWindowsUserCapabilities {
+	if !expectedIPCAvailable {
 		tests = append(tests, struct {
 			name      string
 			available bool
@@ -52,7 +52,10 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 		}{"ipc dial", current.IPC().Available(), func() error {
 			_, err := current.IPC().Dial(context.Background(), IPCName(canary))
 			return err
-		}}, struct {
+		}})
+	}
+	if !wantWindowsUserCapabilities {
+		tests = append(tests, struct {
 			name      string
 			available bool
 			call      func() error

@@ -124,6 +124,34 @@ func TestSessionSigningInputIsDeterministicAndBound(t *testing.T) {
 	}
 }
 
+func TestSessionSigningInputMatchesBrowserVector(t *testing.T) {
+	challenge := SessionChallenge{
+		Version: "1", Type: "challenge", Role: SessionRoleControl, ConnectionID: "con_vector", SubjectID: "cli_vector",
+		Nonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ExpiresAt: "2026-08-03T12:00:30Z",
+	}
+	input, err := SessionSigningInput(challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := "yuanshu-relay-session-v1\x00{\"connectionId\":\"con_vector\",\"expiresAt\":\"2026-08-03T12:00:30Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"role\":\"control\",\"subjectId\":\"cli_vector\",\"type\":\"challenge\",\"version\":\"1\"}"
+	if string(input) != expected {
+		t.Fatalf("SessionSigningInput() = %q", input)
+	}
+	seed := make([]byte, ed25519.SeedSize)
+	for index := range seed {
+		seed[index] = byte(index)
+	}
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	if base64.RawURLEncoding.EncodeToString(publicKey) != "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg" {
+		t.Fatal("Ed25519 public key vector mismatch")
+	}
+	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, input))
+	if signature != "0FR-S7Q2mo5bprvUYmPY9f4uFNCAL8KWKoheSQRMNpcoFCKYqD125F4fUh4KSTdyTK-NXOzezBw_YgCP_FnlAw" {
+		t.Fatal("Ed25519 signature vector mismatch")
+	}
+}
+
 func newAuthenticatedEchoServer(t *testing.T, public ed25519.PublicKey) *httptest.Server {
 	t.Helper()
 	return httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

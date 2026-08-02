@@ -3,6 +3,8 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
@@ -26,6 +29,9 @@ type LocalNodeSession struct {
 type Options struct {
 	DataDir         string
 	Listen          string
+	PublicURL       string
+	TLSCertFile     string
+	TLSKeyFile      string
 	Stdout          io.Writer
 	Random          io.Reader
 	Clock           func() time.Time
@@ -57,6 +63,10 @@ func Run(ctx context.Context, options Options) error {
 		return err
 	}
 	defer local.Close()
+	tlsConfig, err := loadTLSConfig(options)
+	if err != nil {
+		return err
+	}
 	listener := options.Listener
 	if listener == nil {
 		listener, err = net.Listen("tcp", options.Listen)
@@ -65,7 +75,7 @@ func Run(ctx context.Context, options Options) error {
 		}
 	}
 	defer listener.Close()
-	if err := validateListener(listener); err != nil {
+	if err := validateListener(listener, tlsConfig != nil); err != nil {
 		return err
 	}
 	service, err := NewBootstrapService(local, BootstrapOptions{Random: options.Random, Clock: options.Clock})
@@ -85,7 +95,11 @@ func Run(ctx context.Context, options Options) error {
 			return errors.New("server bootstrap output failed")
 		}
 	}
-	hub, err := NewHub(local, HubOptions{Random: options.Random, Clock: options.Clock})
+	origins := []string(nil)
+	if options.PublicURL != "" {
+		origins = []string{strings.TrimSuffix(options.PublicURL, "/")}
+	}
+	hub, err := NewHub(local, HubOptions{Random: options.Random, Clock: options.Clock, AllowedControlOrigins: origins})
 	if err != nil {
 		return err
 	}
@@ -124,7 +138,11 @@ func Run(ctx context.Context, options Options) error {
 		defer cancel()
 		_ = httpServer.Shutdown(shutdownCtx)
 	}()
-	err = httpServer.Serve(listener)
+	serveListener := listener
+	if tlsConfig != nil {
+		serveListener = tls.NewListener(listener, tlsConfig)
+	}
+	err = httpServer.Serve(serveListener)
 	close(done)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -133,18 +151,15 @@ func Run(ctx context.Context, options Options) error {
 }
 
 func validateRunOptions(options Options) error {
-	if options.DataDir == "" || !filepath.IsAbs(options.DataDir) || options.Listen == "" || options.ShutdownTimeout < 0 {
+	if options.DataDir == "" || !filepath.IsAbs(options.DataDir) || options.Listen == "" || options.ShutdownTimeout < 0 || !validPublicOptions(options) {
 		return ErrInvalid
 	}
-	host, port, err := net.SplitHostPort(options.Listen)
+	_, port, err := net.SplitHostPort(options.Listen)
 	if err != nil || port == "" {
 		return ErrInvalid
 	}
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return ErrInvalid
-	}
-	if host != "127.0.0.1" && host != "::1" {
 		return ErrInvalid
 	}
 	if options.LocalNode != nil && (options.LocalNode.Transport == nil || options.LocalNode.OwnerID == "" || options.LocalNode.NodeID == "") {
@@ -153,7 +168,7 @@ func validateRunOptions(options Options) error {
 	return nil
 }
 
-func validateListener(listener net.Listener) error {
+func validateListener(listener net.Listener, public bool) error {
 	if listener == nil {
 		return ErrInvalid
 	}
@@ -161,10 +176,43 @@ func validateListener(listener net.Listener) error {
 	if err != nil {
 		return ErrInvalid
 	}
-	if host != "127.0.0.1" && host != "::1" {
+	if net.ParseIP(host) == nil || (!public && host != "127.0.0.1" && host != "::1") {
 		return ErrInvalid
 	}
 	return nil
+}
+
+func loadTLSConfig(options Options) (*tls.Config, error) {
+	if options.PublicURL == "" {
+		return nil, nil
+	}
+	for _, path := range []string{options.TLSCertFile, options.TLSKeyFile} {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, errors.New("server TLS material is unavailable")
+		}
+	}
+	if err := validatePrivateKeyPermissions(options.TLSKeyFile); err != nil {
+		return nil, err
+	}
+	pair, err := tls.LoadX509KeyPair(options.TLSCertFile, options.TLSKeyFile)
+	if err != nil || len(pair.Certificate) == 0 {
+		return nil, errors.New("server TLS material is invalid")
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil, errors.New("server TLS certificate is invalid")
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+		return nil, errors.New("server TLS certificate is not currently valid")
+	}
+	host := publicURLHost(options.PublicURL)
+	if host == "" || leaf.VerifyHostname(host) != nil {
+		return nil, errors.New("server TLS certificate does not match public URL")
+	}
+	pair.Leaf = leaf
+	return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13}, nil
 }
 
 func prepareDataDir(path string) error {

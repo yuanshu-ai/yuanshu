@@ -2,6 +2,13 @@
 
 package platform
 
-func Current() Platform {
-	return newUnavailablePlatform(FamilyLinux)
+type linuxCurrentPlatform struct {
+	unavailablePlatform
+	ipc LocalIPC
 }
+
+func Current() Platform {
+	return &linuxCurrentPlatform{unavailablePlatform: unavailablePlatform{family: FamilyLinux}, ipc: newLinuxLocalIPC()}
+}
+
+func (p *linuxCurrentPlatform) IPC() LocalIPC { return p.ipc }

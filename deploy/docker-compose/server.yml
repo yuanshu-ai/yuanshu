@@ -1,0 +1,34 @@
+services:
+  server:
+    image: yuanshu-server:dev
+    container_name: yuanshu-server
+    restart: unless-stopped
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    ports:
+      - "7444:7444"
+    volumes:
+      - server-data:/data
+      - ${YUANSHU_CERT_DIR:-../certs}:/run/yuanshu/tls:ro
+    command:
+      - server
+      - run
+      - --data-dir
+      - /data
+      - --listen
+      - 0.0.0.0:7444
+      - --public-url
+      - ${YUANSHU_PUBLIC_URL:-https://localhost:7444}
+      - --tls-cert
+      - /run/yuanshu/tls/server.crt
+      - --tls-key
+      - /run/yuanshu/tls/server.key
+    stop_grace_period: 15s
+
+volumes:
+  server-data:

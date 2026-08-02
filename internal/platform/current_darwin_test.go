@@ -6,4 +6,5 @@ const (
 	expectedCurrentFamily      = FamilyDarwin
 	expectedProcessAvailable   = false
 	expectedWorkspaceAvailable = false
+	expectedIPCAvailable       = false
 )

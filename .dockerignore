@@ -1,0 +1,16 @@
+.git
+.github
+.gitleaks.toml
+docs
+.tmp
+web/node_modules
+web/dist
+node_modules
+coverage
+*.log
+*.db
+*.db-*
+*.key
+*.pem
+deploy/certs
+deploy/secrets
