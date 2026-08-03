@@ -60,6 +60,8 @@ type pairingManagerOptions struct {
 	Clock         func() time.Time
 }
 
+var errRelayRevoked = errors.New("node relay credential is revoked")
+
 func newPairingManager(options pairingManagerOptions) (*pairingManager, error) {
 	parsed, err := url.Parse(options.RelayURL)
 	if err != nil || parsed.Scheme != "wss" || parsed.Host == "" || options.Signer == nil || options.Local == nil || options.Secrets == nil || options.Identity.OwnerID == "" || options.Identity.NodeID == "" || len(options.Identity.PublicKey) != ed25519.PublicKeySize || len(options.Credential) < 32 || options.CredentialRef == "" {
@@ -96,8 +98,11 @@ func (m *pairingManager) Connect(ctx context.Context) (transport.Transport, erro
 	header := make(http.Header)
 	header.Set("X-Yuanshu-Node-ID", m.identity.NodeID)
 	header.Set("Authorization", "Bearer "+string(credential))
-	connection, _, err := transport.DialRelay(ctx, m.relayURL, transport.RelayDialOptions{HTTPClient: m.httpClient, Header: header, Role: transport.SessionRoleNode, SubjectID: m.identity.NodeID, Sign: m.signer.Sign, Relay: transport.RelayOptions{MaxSendBytes: protocolv1.EventFrameMaxBytes, MaxReceiveBytes: protocolv1.ControlFrameMaxBytes}})
+	connection, response, err := transport.DialRelay(ctx, m.relayURL, transport.RelayDialOptions{HTTPClient: m.httpClient, Header: header, Role: transport.SessionRoleNode, SubjectID: m.identity.NodeID, Sign: m.signer.Sign, Relay: transport.RelayOptions{MaxSendBytes: protocolv1.EventFrameMaxBytes, MaxReceiveBytes: protocolv1.ControlFrameMaxBytes}})
 	if err != nil {
+		if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
+			return nil, errRelayRevoked
+		}
 		return nil, errors.New("node relay connection failed")
 	}
 	return connection, nil

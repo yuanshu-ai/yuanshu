@@ -17,7 +17,6 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
 	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
-	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
 
 const autostartID = "yuanshu-node"
@@ -42,8 +41,8 @@ type host struct {
 	pairing          *pairingManager
 	joiner           *nodeEnrollmentJoiner
 	trustCancel      context.CancelFunc
-	relay            transport.Transport
-	sessionCancel    context.CancelFunc
+	controlSession   *ControlSession
+	relaySupervisor  *relaySupervisor
 	controlEvents    *eventlog.Manager
 	controlValidator *protocolv1.Validator
 	controlTarget    protocolv1.Target
@@ -131,6 +130,7 @@ func (h *host) reload(ctx context.Context) error {
 	h.status.update(func(value *Status) {
 		value.State, value.Config, value.Identity, value.Database = "recovering", "checking", "unchecked", "unchecked"
 		value.Workspaces, value.Codex, value.Authentication, value.Recovery = 0, "unchecked", "unchecked", "not_required"
+		value.RemoteControl = "not_available"
 	})
 	h.options.trayUpdate(h.status.snapshot())
 	configurationStore, err := config.NewFileStore(h.options.configPath)
@@ -193,13 +193,7 @@ func (h *host) reload(ctx context.Context) error {
 			if managerErr == nil {
 				h.pairing = manager
 				_ = manager.SyncTrust(ctx)
-				relay, relayErr := manager.Connect(ctx)
-				if relayErr == nil {
-					h.relay = relay
-					h.status.update(func(value *Status) { value.RemoteControl = "online" })
-				} else {
-					h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
-				}
+				h.status.update(func(value *Status) { value.RemoteControl = "connecting" })
 				trustCtx, trustCancel := context.WithCancel(h.runCtx)
 				h.trustCancel = trustCancel
 				go func(value *pairingManager) {
@@ -275,7 +269,7 @@ func (h *host) reload(ctx context.Context) error {
 	} else if needsRecovery {
 		h.status.update(func(value *Status) { value.Recovery = "deferred_unpaired" })
 	}
-	if bound && h.relay != nil {
+	if bound && loaded.Config.Transport.Mode == config.TransportRelay {
 		runtime, err := adapterInstance.StartRuntime(ctx)
 		if err != nil {
 			return h.fail("codex_unavailable")
@@ -298,8 +292,12 @@ func (h *host) reload(ctx context.Context) error {
 		h.controlEvents, h.controlValidator = manager, validator
 		h.controlTarget = protocolv1.Target{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID}
 		h.controlName = loaded.Config.Host.Name
-		if err := h.startControlSessionLocked(); err != nil {
-			return h.fail("recovery_unavailable")
+		if h.pairing != nil {
+			if err := h.startControlSessionLocked(); err != nil {
+				return h.fail("recovery_unavailable")
+			}
+		} else {
+			h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
 		}
 	}
 	state := "ready"
@@ -352,18 +350,18 @@ func (h *host) close() error {
 
 func (h *host) closeResourcesLocked() error {
 	var result error
-	if h.sessionCancel != nil {
-		h.sessionCancel()
-		h.sessionCancel = nil
+	if h.relaySupervisor != nil {
+		h.relaySupervisor.Close()
+		h.relaySupervisor = nil
+	}
+	if h.controlSession != nil {
+		if err := h.controlSession.Close(); err != nil {
+			result = errors.New("control session close failed")
+		}
+		h.controlSession = nil
 	}
 	h.controlEvents, h.controlValidator = nil, nil
 	h.controlTarget, h.controlName = protocolv1.Target{}, ""
-	if h.relay != nil {
-		if err := h.relay.Close(); err != nil {
-			result = errors.New("relay close failed")
-		}
-		h.relay = nil
-	}
 	if h.trustCancel != nil {
 		h.trustCancel()
 		h.trustCancel = nil
@@ -453,24 +451,11 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 		}
 	case "credential_rotate":
 		if err := h.pairing.RotateCredential(ctx); err == nil {
-			if h.sessionCancel != nil {
-				h.sessionCancel()
-				h.sessionCancel = nil
-			}
-			if h.relay != nil {
-				_ = h.relay.Close()
-				h.relay = nil
-			}
-			if relay, connectErr := h.pairing.Connect(ctx); connectErr == nil {
-				h.relay = relay
-				if sessionErr := h.startControlSessionLocked(); sessionErr == nil {
-					h.status.update(func(value *Status) { value.RemoteControl = "online" })
-					response.OK = true
-				} else {
-					response.Error = "rotation_failed"
-				}
+			if h.relaySupervisor != nil {
+				h.status.update(func(value *Status) { value.RemoteControl = "reconnecting" })
+				h.relaySupervisor.Reconnect()
+				response.OK = true
 			} else {
-				h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
 				response.Error = "rotation_failed"
 			}
 		} else {
@@ -520,28 +505,46 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 }
 
 func (h *host) startControlSessionLocked() error {
-	if h.relay == nil || h.runtime == nil || h.controlEvents == nil || h.controlValidator == nil || h.local == nil || h.runCtx == nil {
+	if h.pairing == nil || h.runtime == nil || h.controlEvents == nil || h.controlValidator == nil || h.local == nil || h.runCtx == nil {
 		return errors.New("node control session is unavailable")
 	}
-	if h.sessionCancel != nil {
-		h.sessionCancel()
+	if h.controlSession != nil || h.relaySupervisor != nil {
+		return nil
 	}
+	var supervisor *relaySupervisor
 	session, err := NewControlSession(ControlSessionOptions{
-		Transport: h.relay, Validator: h.controlValidator, Target: h.controlTarget,
+		Validator: h.controlValidator, Target: h.controlTarget,
 		Events: h.controlEvents, Store: h.local, Runtime: h.runtime, DeviceName: h.controlName, RefreshTrust: h.pairing.SyncTrust,
+		EventFailure: func(error) {
+			if supervisor != nil {
+				supervisor.Close()
+			}
+			h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
+			h.options.trayUpdate(h.status.snapshot())
+			h.log.write("node_error", "eventlog_failure", 0)
+		},
 	})
 	if err != nil {
 		return err
 	}
-	sessionCtx, cancel := context.WithCancel(h.runCtx)
-	h.sessionCancel = cancel
-	go func() {
-		if err := session.Run(sessionCtx); err != nil && sessionCtx.Err() == nil {
-			h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
+	if err := session.Start(h.runCtx); err != nil {
+		return err
+	}
+	supervisor, err = newRelaySupervisor(h.runCtx, relaySupervisorOptions{
+		Connect: h.pairing.Connect,
+		Serve:  session.Serve,
+		OnState: func(value string) {
+			h.status.update(func(status *Status) { status.RemoteControl = value })
 			h.options.trayUpdate(h.status.snapshot())
-			h.log.write("node_error", "control_session_unavailable", 0)
-		}
-	}()
+		},
+	})
+	if err != nil {
+		_ = session.Close()
+		return err
+	}
+	h.controlSession = session
+	h.relaySupervisor = supervisor
+	supervisor.Start()
 	return nil
 }
 

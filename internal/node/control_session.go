@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/node/eventlog"
@@ -30,11 +31,15 @@ type ControlSessionOptions struct {
 	Runtime      adapter.Runtime
 	DeviceName   string
 	RefreshTrust func(context.Context) error
+	// EventFailure is called once when the persistent event pump can no longer
+	// append Runtime.Events to the local event log. It is intentionally a
+	// callback so the host can make the remote control state unavailable
+	// without coupling this protocol boundary to host lifecycle code.
+	EventFailure func(error)
 }
 
 // ControlSession is the formal Node-side Protocol v1 control boundary.
 type ControlSession struct {
-	transport    transport.Transport
 	validator    *protocol.Validator
 	target       protocol.Target
 	events       *eventlog.Manager
@@ -42,64 +47,186 @@ type ControlSession struct {
 	runtime      adapter.Runtime
 	deviceName   string
 	refreshTrust func(context.Context) error
+	eventFailure func(error)
+
+	transportMu sync.RWMutex
+	active      *sessionTransport
+	deliveryMu  sync.Mutex
+
+	lifecycleMu sync.Mutex
+	started     bool
+	closed      bool
+	eventCancel context.CancelFunc
+	eventDone   chan struct{}
+	eventErr    error
+}
+
+type sessionTransport struct {
+	value transport.Transport
 }
 
 func NewControlSession(options ControlSessionOptions) (*ControlSession, error) {
-	if options.Transport == nil || options.Validator == nil || options.Events == nil || options.Store == nil || options.Runtime == nil ||
+	if options.Validator == nil || options.Events == nil || options.Store == nil || options.Runtime == nil ||
 		options.Target.OwnerID == "" || options.Target.NodeID == "" {
 		return nil, ErrControlSessionInvalid
 	}
 	return &ControlSession{
-		transport: options.Transport, validator: options.Validator, target: options.Target,
+		validator: options.Validator, target: options.Target,
 		events: options.Events, store: options.Store, runtime: options.Runtime, deviceName: options.DeviceName, refreshTrust: options.RefreshTrust,
+		active: func() *sessionTransport {
+			if options.Transport == nil {
+				return nil
+			}
+			return &sessionTransport{value: options.Transport}
+		}(),
+		eventFailure: options.EventFailure,
 	}, nil
 }
 
-// Run receives immutable raw control frames, validates them locally, dispatches
-// through the AgentAdapter boundary, and returns durable Protocol v1 events.
+// Start begins the persistent Runtime event pump. The pump is deliberately
+// independent from any one Relay connection so a disconnected Node keeps
+// draining Runtime.Events into the durable local event log.
+func (s *ControlSession) Start(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return transport.ErrClosed
+	}
+	if s.started {
+		return nil
+	}
+	eventCtx, cancel := context.WithCancel(ctx)
+	s.eventCancel = cancel
+	s.eventDone = make(chan struct{})
+	s.started = true
+	go s.runEventPump(eventCtx)
+	return nil
+}
+
+// Serve receives immutable raw control frames on one authenticated transport.
+// The same ControlSession may serve multiple sequential transports.
+func (s *ControlSession) Serve(ctx context.Context, endpoint transport.Transport) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if endpoint == nil {
+		return errNoTransport
+	}
+	if err := s.Start(ctx); err != nil {
+		return err
+	}
+	binding := s.bind(endpoint)
+	defer func() {
+		s.unbind(binding)
+		_ = endpoint.Close()
+	}()
+	for {
+		frame, err := endpoint.Receive(ctx)
+		if err != nil {
+			if errors.Is(err, transport.ErrClosed) || errors.Is(err, context.Canceled) && ctx.Err() != nil {
+				return nil
+			}
+			return errors.New("node control transport failed")
+		}
+		if err := s.handle(ctx, frame.Bytes()); err != nil {
+			if errors.Is(err, errNoTransport) || errors.Is(err, transport.ErrClosed) {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+// Close stops the persistent event pump and the currently bound transport.
+// Runtime and the local Store remain owned by the caller.
+func (s *ControlSession) Close() error {
+	s.lifecycleMu.Lock()
+	if s.closed {
+		s.lifecycleMu.Unlock()
+		return nil
+	}
+	s.closed = true
+	cancel := s.eventCancel
+	done := s.eventDone
+	s.eventCancel = nil
+	s.lifecycleMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if active := s.current(); active != nil {
+		_ = active.Close()
+	}
+	if done != nil {
+		<-done
+	}
+	return nil
+}
+
+// Run preserves the original one-transport API used by Standalone and tests.
+// Node reconnect callers use Start and Serve separately.
 func (s *ControlSession) Run(ctx context.Context) error {
 	if ctx == nil {
 		return context.Canceled
 	}
-	defer s.transport.Close()
-	type receivedFrame struct {
-		frame transport.Frame
-		err   error
+	if err := s.Start(ctx); err != nil {
+		return err
 	}
-	frames := make(chan receivedFrame, 1)
-	go func() {
-		for {
-			frame, err := s.transport.Receive(ctx)
-			select {
-			case frames <- receivedFrame{frame: frame, err: err}:
-			case <-ctx.Done():
-				return
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
+	defer s.Close()
+	endpoint := s.current()
+	if endpoint == nil {
+		return errNoTransport
+	}
+	return s.Serve(ctx, endpoint)
+}
+
+var errNoTransport = errors.New("node control transport is unavailable")
+
+func (s *ControlSession) bind(endpoint transport.Transport) *sessionTransport {
+	binding := &sessionTransport{value: endpoint}
+	s.transportMu.Lock()
+	s.active = binding
+	s.transportMu.Unlock()
+	return binding
+}
+
+func (s *ControlSession) unbind(binding *sessionTransport) {
+	s.transportMu.Lock()
+	if s.active == binding {
+		s.active = nil
+	}
+	s.transportMu.Unlock()
+}
+
+func (s *ControlSession) current() transport.Transport {
+	s.transportMu.RLock()
+	defer s.transportMu.RUnlock()
+	if s.active == nil {
+		return nil
+	}
+	return s.active.value
+}
+
+func (s *ControlSession) runEventPump(ctx context.Context) {
+	defer close(s.eventDone)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case event, ok := <-s.runtime.Events():
 			if !ok {
-				return nil
+				return
 			}
 			if err := s.publish(ctx, event); err != nil {
-				return err
-			}
-		case result := <-frames:
-			if result.err != nil {
-				if errors.Is(result.err, transport.ErrClosed) || errors.Is(result.err, context.Canceled) && ctx.Err() != nil {
-					return nil
+				s.lifecycleMu.Lock()
+				s.eventErr = err
+				s.lifecycleMu.Unlock()
+				if s.eventFailure != nil {
+					s.eventFailure(err)
 				}
-				return errors.New("node control transport failed")
-			}
-			if err := s.handle(ctx, result.frame.Bytes()); err != nil {
-				return err
+				return
 			}
 		}
 	}
@@ -123,6 +250,9 @@ func (s *ControlSession) handle(ctx context.Context, raw []byte) error {
 	if _, err := s.events.MarkDispatching(ctx, message.MessageID); err != nil {
 		return errors.New("node control persistence failed")
 	}
+	if protocol.ControlType(message.Type) == protocol.ControlEventsReplay {
+		return s.handleReplay(ctx, message)
+	}
 	status, code := protocol.ControlResultConfirmed, protocol.ErrorCode("")
 	if err := s.dispatch(ctx, message); err != nil {
 		status, code = classifyControlFailure(err)
@@ -132,6 +262,42 @@ func (s *ControlSession) handle(ctx context.Context, raw []byte) error {
 		return errors.New("node control result persistence failed")
 	}
 	return s.send(ctx, result.Frame)
+}
+
+func (s *ControlSession) handleReplay(ctx context.Context, message protocol.YuanshuMessage) error {
+	// Hold the delivery read/write gate for the complete replay batch and its
+	// control.result. Runtime events are still persisted while this lock is held
+	// but cannot be inserted between replay records.
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	batch, replayErr := s.events.Replay(ctx, int64Payload(message.Payload, "afterSequence"), eventlog.DefaultReplayLimit)
+	status, code := protocol.ControlResultConfirmed, protocol.ErrorCode("")
+	if replayErr == nil && batch.Gap {
+		workspaceID, threadID := value(message.WorkspaceID), value(message.ThreadID)
+		if workspaceID == "" || threadID == "" {
+			replayErr = eventlog.ErrHistoryGap
+		} else {
+			batch, replayErr = s.events.Recover(ctx, s.runtime, eventlog.SnapshotTarget{WorkspaceID: workspaceID, ThreadID: threadID}, int64Payload(message.Payload, "afterSequence"), eventlog.DefaultReplayLimit)
+		}
+	}
+	if replayErr != nil {
+		status, code = classifyControlFailure(replayErr)
+	} else {
+		for _, record := range batch.Records {
+			if err := s.sendFrameLocked(ctx, record.Frame); err != nil && !errors.Is(err, errNoTransport) {
+				status, code = protocol.ControlResultRejected, protocol.ErrorRuntimeUnavailable
+				break
+			}
+		}
+	}
+	result, err := s.events.CompleteControl(ctx, message.MessageID, status, code, "")
+	if err != nil {
+		return errors.New("node control result persistence failed")
+	}
+	if sendErr := s.sendFrameLocked(ctx, result.Frame); sendErr != nil {
+		return sendErr
+	}
+	return nil
 }
 
 func (s *ControlSession) dispatch(ctx context.Context, message protocol.YuanshuMessage) error {
@@ -265,15 +431,39 @@ func (s *ControlSession) publish(ctx context.Context, event adapter.AgentEvent) 
 		return errors.New("node event persistence failed")
 	}
 	for _, record := range records {
-		if err := s.send(ctx, record.Frame); err != nil {
-			return err
-		}
+		_ = s.sendFrame(ctx, record.Frame)
 	}
 	return nil
 }
 
+func (s *ControlSession) sendFrame(ctx context.Context, raw []byte) error {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	return s.sendFrameLocked(ctx, raw)
+}
+
+// send preserves the small internal helper used by dispatch paths while all
+// outbound frames now pass through the delivery serializer.
 func (s *ControlSession) send(ctx context.Context, raw []byte) error {
-	if err := s.transport.Send(ctx, transport.NewFrame(raw)); err != nil {
+	return s.sendFrame(ctx, raw)
+}
+
+func (s *ControlSession) sendFrameLocked(ctx context.Context, raw []byte) error {
+	s.transportMu.RLock()
+	binding := s.active
+	s.transportMu.RUnlock()
+	if binding == nil || binding.value == nil {
+		return errNoTransport
+	}
+	if err := binding.value.Send(ctx, transport.NewFrame(raw)); err != nil {
+		s.transportMu.Lock()
+		if s.active == binding {
+			s.active = nil
+		}
+		s.transportMu.Unlock()
+		if errors.Is(err, transport.ErrClosed) || errors.Is(err, transport.ErrBackpressure) {
+			return errNoTransport
+		}
 		return errors.New("node event transport failed")
 	}
 	return nil
@@ -293,6 +483,10 @@ func classifyControlFailure(err error) (protocol.ControlResultStatus, protocol.E
 		return protocol.ControlResultRejected, protocol.ErrorConflict
 	case errors.Is(err, adapter.ErrUnsupported):
 		return protocol.ControlResultRejected, protocol.ErrorUnsupportedControl
+	case errors.Is(err, eventlog.ErrHistoryGap):
+		return protocol.ControlResultRejected, protocol.ErrorHistoryGap
+	case errors.Is(err, eventlog.ErrSequenceExhausted):
+		return protocol.ControlResultRejected, protocol.ErrorConflict
 	case errors.Is(err, adapter.ErrUnavailable), errors.Is(err, adapter.ErrClosed):
 		return protocol.ControlResultRejected, protocol.ErrorRuntimeUnavailable
 	default:
