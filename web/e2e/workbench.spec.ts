@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 
 const OWNER_ID = "owner-e2e";
 const CLIENT_ID = "client-e2e";
@@ -17,12 +19,12 @@ test("opens a running task directly and safely controls its Turn", async ({ page
   await expect(page.getByText("Remote workbench ready")).toBeVisible();
 
   await page.getByRole("button", { name: "获取控制权" }).click();
-  await expect(page.getByText("可操作")).toBeVisible();
+  await expect(page.locator(".lease-badge.held").getByText("可操作", { exact: true })).toBeVisible();
 
   const composer = page.getByLabel("任务指令");
   await composer.fill("Continue the release checks");
   await composer.press(process.platform === "darwin" ? "Meta+Enter" : "Control+Enter");
-  await expect(page.getByText("源头已确认请求")).toBeVisible();
+  await expect(page.getByText("设备已确认请求")).toBeVisible();
   await expect(page.getByText("Streaming follow-up received")).toBeVisible();
 });
 
@@ -35,27 +37,84 @@ test("uses application dialogs for high-risk approval and loads Diff on demand",
   await page.getByRole("button", { name: "继续确认" }).click();
   await expect(page.getByRole("dialog", { name: "确认批准操作" })).toBeVisible();
   await page.getByRole("button", { name: "发送批准" }).click();
-  await expect(page.getByText("批准已由源头确认")).toBeVisible();
+  await expect(page.getByText("批准已由设备确认")).toBeVisible();
 
   await page.getByText("src/app.ts").last().click();
   await expect(page.getByText("+const ready = true;")).toBeVisible();
 });
 
 test("keeps two Nodes isolated and exposes task-first mobile navigation", async ({ page }) => {
-  const usesMobileNavigation = (page.viewportSize()?.width ?? 1280) <= 800;
+  const usesMobileNavigation = (page.viewportSize()?.width ?? 1280) < 768;
   const navigation = usesMobileNavigation ? page.locator(".mobile-nav") : page.locator(".desktop-nav");
   await navigation.getByRole("button", { name: "任务" }).click();
-  await expect(page.getByRole("heading", { name: "所有上下文" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "全部任务" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Office release/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Home maintenance/ })).toBeVisible();
 
-  await page.getByLabel("筛选 Node").selectOption("node-home");
+  await page.getByLabel("筛选设备").selectOption("node-home");
   await expect(page.getByRole("button", { name: /Office release/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Home maintenance/ })).toBeVisible();
 
   if (usesMobileNavigation) {
-    await expect(page.getByRole("navigation", { name: "工作台导航" }).last()).toBeVisible();
+    await expect(page.locator(".mobile-nav")).toBeVisible();
   }
+});
+
+test("uses phone, tablet and desktop layout contracts", async ({ page }) => {
+  const width = page.viewportSize()?.width ?? 1280;
+  const contextRail = page.getByRole("complementary", { name: "设备和工作区" });
+  const mobileNavigation = page.locator(".mobile-nav");
+  if (width < 768) {
+    await expect(contextRail).toBeHidden();
+    await expect(mobileNavigation).toBeVisible();
+  } else if (width < 1200) {
+    await expect(contextRail).toBeHidden();
+    await expect(mobileNavigation).toBeHidden();
+    await expect(page.locator(".task-pane")).toBeVisible();
+    await expect(page.getByRole("region", { name: "任务详情" })).toBeVisible();
+  } else {
+    await expect(contextRail).toBeVisible();
+    await expect(mobileNavigation).toBeHidden();
+  }
+  if (width < 1200) {
+    const selector = width < 768
+      ? ".mobile-nav button, .topbar-attention"
+      : ".desktop-nav button, .topbar-attention, .connection-state";
+    const touchTargets = await page.locator(selector).evaluateAll((elements) =>
+      elements.map((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { width: bounds.width, height: bounds.height };
+      }),
+    );
+    expect(touchTargets.length).toBeGreaterThan(0);
+    for (const target of touchTargets) {
+      expect(target.width).toBeGreaterThanOrEqual(44);
+      expect(target.height).toBeGreaterThanOrEqual(44);
+    }
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test("captures the three product-design baselines", async ({ page }, testInfo) => {
+  test.skip(process.env.YUANSHU_CAPTURE_WORKBENCH !== "1", "visual artifacts are updated explicitly");
+  const output = path.join(process.cwd(), "..", "docs", "design", "web-workbench");
+  await mkdir(output, { recursive: true });
+  if (testInfo.project.name === "mobile-390-chromium") {
+    await page.screenshot({ path: path.join(output, "mobile-home.png") });
+    await page.getByRole("button", { name: /继续任务 Office release/ }).click();
+    await expect(page.getByRole("heading", { name: "Office release" })).toBeVisible();
+    await expect(page.getByText("Remote workbench ready")).toBeVisible();
+    await page.screenshot({ path: path.join(output, "mobile-task-detail.png") });
+    return;
+  }
+  if (testInfo.project.name === "ipad-landscape-webkit") {
+    await page.getByRole("button", { name: /继续任务 Office release/ }).click();
+    await expect(page.getByRole("heading", { name: "Office release" })).toBeVisible();
+    await expect(page.getByText("Remote workbench ready")).toBeVisible();
+    await page.screenshot({ path: path.join(output, "ipad-workbench.png") });
+    return;
+  }
+  test.skip(true, "this project does not own a baseline artifact");
 });
 
 async function seedBrowserIdentity(page: Page): Promise<void> {

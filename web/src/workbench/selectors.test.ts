@@ -10,10 +10,28 @@ describe("workbench task selectors", () => {
     const tasks = selectTasks(state());
     const groups = selectHomeGroups(tasks);
     expect(tasks.map((task) => task.thread.nodeId)).toEqual(["node-a", "node-b"]);
-    expect(groups.active.map((task) => task.thread.threadId)).toEqual(["thread-a"]);
-    expect(groups.approvals.map((task) => task.thread.threadId)).toEqual(["thread-a"]);
+    expect(groups.continuation?.thread.threadId).toBe("thread-a");
+    expect(groups.active).toEqual([]);
+    expect(groups.approvals).toEqual([]);
+    expect(groups.issues.map((task) => task.thread.threadId)).toEqual(["thread-b"]);
     expect(filterTasks(tasks, "failed", "", "node-b").map((task) => task.thread.threadId)).toEqual(["thread-b"]);
     expect(filterTasks(tasks, "all", "office").map((task) => task.thread.threadId)).toEqual(["thread-a"]);
+  });
+
+  it("prioritizes approvals and reports only progress after the local read marker", () => {
+    const value = state();
+    const tasks = selectTasks(value, { "node-a\u001fworkspace-a\u001fthread-a": 1 });
+    expect(tasks[0].unreadCount).toBe(1);
+    expect(selectHomeGroups(tasks).continuation?.pendingApprovals).toBe(1);
+  });
+
+  it("uses the task-list approval count before detailed approval records are loaded", () => {
+    const value = state();
+    value.threads["node-a\u001fworkspace-a\u001fthread-a"].pendingApprovals = 2;
+    value.approvals = {};
+    const task = selectTasks(value).find((candidate) => candidate.thread.threadId === "thread-a");
+    expect(task?.pendingApprovals).toBe(2);
+    expect(selectHomeGroups(selectTasks(value)).continuation?.thread.threadId).toBe("thread-a");
   });
 });
 

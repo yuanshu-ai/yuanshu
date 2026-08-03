@@ -15,9 +15,11 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
   },
   projects: [
-    { name: "desktop-chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "desktop-chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1000 } } },
+    { name: "mobile-390-chromium", use: { ...devices["Pixel 7"], viewport: { width: 390, height: 844 } } },
     { name: "iphone-webkit", use: { ...devices["iPhone 13"] } },
     { name: "android-chromium", use: { ...devices["Pixel 7"] } },
     { name: "ipad-webkit", use: { ...devices["iPad Pro 11"] } },
+    { name: "ipad-landscape-webkit", use: { ...devices["iPad Pro 11 landscape"], viewport: { width: 1194, height: 834 } } },
   ],
 });
