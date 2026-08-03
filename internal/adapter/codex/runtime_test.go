@@ -270,7 +270,7 @@ func TestApprovalExpiresAndCannotBeResolvedTwice(t *testing.T) {
 	}
 }
 
-func TestAdapterRejectsWorkspaceAndVersionExpansion(t *testing.T) {
+func TestAdapterAllowsUnknownVersionAndDefersCompatibilityToRuntime(t *testing.T) {
 	threads := newMemoryThreadStore()
 	resolver := &fakeWorkspaceResolver{resolveErr: workspace.ErrStale}
 	server := &syntheticServer{version: "9.9.9"}
@@ -281,9 +281,15 @@ func TestAdapterRejectsWorkspaceAndVersionExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := formal.Detect(context.Background()); !errors.Is(err, adapterpkg.ErrUnsupported) {
-		t.Fatalf("unsupported version error = %v", err)
+	installation, err := formal.Detect(context.Background())
+	if err != nil || installation.Version != "9.9.9" {
+		t.Fatalf("unknown version detection = %#v, %v", installation, err)
 	}
+	runtimeValue, err := formal.StartRuntime(context.Background())
+	if err != nil {
+		t.Fatalf("unknown version runtime start = %v", err)
+	}
+	_ = runtimeValue.Close(context.Background())
 }
 
 func waitForEvent(t *testing.T, events <-chan adapterpkg.AgentEvent, eventType protocol.EventType) adapterpkg.AgentEvent {

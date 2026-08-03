@@ -67,9 +67,6 @@ func newRuntime(options Options, installation adapter.Installation) *Runtime {
 }
 
 func (r *Runtime) startClient(ctx context.Context) error {
-	if _, compatible := compatibilityForVersion(r.installation.Version); !compatible {
-		return adapter.ErrUnsupported
-	}
 	executable, prefix, err := resolveConfiguredCommand(r.options.Config.Binary)
 	if err != nil {
 		return adapter.ErrUnavailable
@@ -86,12 +83,9 @@ func (r *Runtime) startClient(ctx context.Context) error {
 		return adapter.ErrUnavailable
 	}
 	title := "Yuanshu Codex Adapter"
-	initialized, err := client.Initialize(ctx, appserver.ClientInfo{Name: "yuanshu", Title: &title, Version: "0.0.0"})
-	if err != nil || !strings.Contains(initialized.UserAgent, r.installation.Version) {
+	_, err = client.Initialize(ctx, appserver.ClientInfo{Name: "yuanshu", Title: &title, Version: "0.0.0"})
+	if err != nil {
 		_ = client.Close()
-		if err == nil {
-			return adapter.ErrUnsupported
-		}
 		return mapCallError(err)
 	}
 	var account json.RawMessage

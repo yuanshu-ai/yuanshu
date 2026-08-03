@@ -32,7 +32,7 @@ func TestCredentialLiveBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Codex version: %v", err)
 	}
-	version := requireCompatibleCodexVersion(t, versionOutput)
+	version := requireKnownCodexVersion(t, versionOutput)
 
 	client, err := startLiveClient(ctx, workspace)
 	if err != nil {

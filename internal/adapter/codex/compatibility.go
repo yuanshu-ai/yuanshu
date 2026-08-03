@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// compatibilityProfile describes an app-server contract accepted by Yuanshu.
-// The upper bound is exclusive so a new minor release cannot be accepted
-// accidentally.
+// compatibilityProfile describes an app-server contract that has been
+// exercised by Yuanshu. It is used for diagnostics and public guidance only;
+// it is not a runtime allowlist.
 type compatibilityProfile struct {
 	ID       string
 	Minimum  string
@@ -57,10 +57,10 @@ func compatibilityForVersion(value string) (compatibilityProfile, bool) {
 	return compatibilityProfile{}, false
 }
 
-// IsVersionCompatible reports whether a detected Codex CLI version is in a
-// accepted compatibility profile. Unknown versions remain unsupported until
-// their app-server behavior is tested and added to the matrix.
-func IsVersionCompatible(value string) bool {
+// IsVersionKnown reports whether a detected Codex CLI version is covered by a
+// tested compatibility profile. Unknown versions are still attempted by the
+// adapter and may expose fewer capabilities at runtime.
+func IsVersionKnown(value string) bool {
 	_, ok := compatibilityForVersion(value)
 	return ok
 }

@@ -129,17 +129,23 @@ The roadmap establishes a reliable daily-use loop for one developer first, then 
 
 The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. Node SQLite now also provides monotonic event sequences, bounded retention, outbox cursor acknowledgement, replay, snapshots, and conservative reconciliation of uncertain Turns. The TLS-only Hub supports one personal Owner with up to five isolated Nodes; an existing Node signs five-minute enrollment decisions, and Owner-wide Control Client trust is revalidated independently by every Node. The full task PWA remains a later milestone.
 
-Prerequisites:
+Reference development toolchain (recommendation only; not enforced by the repository):
 
 - Go 1.26.5;
 - Node.js 24.18.1;
 - pnpm 11.18.0 through Corepack.
 
+Other versions may be used when they can run the Go and Web toolchains. The
+Codex compatibility matrix is a record of tested combinations and public
+guidance, not a runtime version allowlist. Yuanshu detects the installed
+Codex version and attempts app-server initialization; unsupported methods or
+payloads are reported as runtime capability errors.
+
 Install the Web dependencies from the repository root:
 
 ```shell
 corepack enable
-corepack install --global pnpm@11.18.0
+corepack install --global pnpm@11.18.0 # optional: use the tested pnpm version
 pnpm install --frozen-lockfile
 ```
 

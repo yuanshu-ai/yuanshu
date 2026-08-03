@@ -92,7 +92,7 @@ func TestLiveAppServerProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Codex version: %v", err)
 	}
-	version := requireCompatibleCodexVersion(t, versionOutput)
+	version := requireKnownCodexVersion(t, versionOutput)
 
 	scenarios := []approvalScenario{
 		{

@@ -16,12 +16,12 @@ import (
 
 const schemaVersion = "0.144.6"
 
-func requireCompatibleCodexVersion(t *testing.T, raw []byte) string {
+func requireKnownCodexVersion(t *testing.T, raw []byte) string {
 	t.Helper()
 	output := strings.TrimSpace(string(raw))
 	version, ok := strings.CutPrefix(output, "codex-cli ")
-	if !ok || !codex.IsVersionCompatible(version) {
-		t.Fatalf("Codex version = %q, no compatible Yuanshu profile", output)
+	if !ok || !codex.IsVersionKnown(version) {
+		t.Fatalf("Codex version = %q, no tested Yuanshu profile", output)
 	}
 	return version
 }

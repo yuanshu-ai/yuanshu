@@ -86,15 +86,28 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Installation, error) {
 	if err != nil {
 		return adapter.Installation{}, err
 	}
-	version, ok := strings.CutPrefix(strings.TrimSpace(output), "codex-cli ")
-	if !ok || version == "" {
+	version := normalizeDetectedVersion(output)
+	if version == "" {
 		return adapter.Installation{}, adapter.ErrUnavailable
 	}
-	profile, compatible := compatibilityForVersion(version)
-	if !compatible {
-		return adapter.Installation{Detected: true, Version: version, Protocol: ProtocolVersion}, adapter.ErrUnsupported
+	protocol := ProtocolVersion
+	if profile, known := compatibilityForVersion(version); known && profile.Protocol != "" {
+		protocol = profile.Protocol
 	}
-	return adapter.Installation{Detected: true, Version: version, Protocol: profile.Protocol}, nil
+	// The compatibility matrix is intentionally informational. Codex evolves
+	// independently of Yuanshu, so an unknown version is allowed to proceed to
+	// app-server initialization and capability probing.
+	return adapter.Installation{Detected: true, Version: version, Protocol: protocol}, nil
+}
+
+func normalizeDetectedVersion(output string) string {
+	line := strings.TrimSpace(strings.SplitN(output, "\n", 2)[0])
+	for _, prefix := range []string{"codex-cli ", "codex "} {
+		if version, ok := strings.CutPrefix(line, prefix); ok {
+			return strings.TrimSpace(version)
+		}
+	}
+	return line
 }
 
 func (a *Adapter) StartRuntime(ctx context.Context) (adapter.Runtime, error) {

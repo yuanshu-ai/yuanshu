@@ -28,8 +28,8 @@ func TestCodexCompatibilityMatrix(t *testing.T) {
 		if got && profile.ID != test.profile {
 			t.Fatalf("compatibilityForVersion(%q) profile = %q, want %q", test.version, profile.ID, test.profile)
 		}
-		if IsVersionCompatible(test.version) != test.want {
-			t.Fatalf("IsVersionCompatible(%q) mismatch", test.version)
+		if IsVersionKnown(test.version) != test.want {
+			t.Fatalf("IsVersionKnown(%q) mismatch", test.version)
 		}
 	}
 }
@@ -42,5 +42,14 @@ func TestCodexVersionOrderingHandlesPrereleases(t *testing.T) {
 		if !leftOK || !rightOK || compareCodexVersions(left, right) >= 0 {
 			t.Fatalf("version order is incorrect: %q before %q", ordered[index-1], ordered[index])
 		}
+	}
+}
+
+func TestVersionDetectionAcceptsUnprefixedOutput(t *testing.T) {
+	if got := normalizeDetectedVersion("9.9.9\n"); got != "9.9.9" {
+		t.Fatalf("normalizeDetectedVersion = %q", got)
+	}
+	if got := normalizeDetectedVersion("codex 9.9.9\n"); got != "9.9.9" {
+		t.Fatalf("normalizeDetectedVersion with codex prefix = %q", got)
 	}
 }

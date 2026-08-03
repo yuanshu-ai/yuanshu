@@ -98,7 +98,8 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 		status.Codex = "unavailable"
 		return status, false
 	}
-	if _, err := adapterInstance.Detect(ctx); err != nil {
+	installation, err := adapterInstance.Detect(ctx)
+	if err != nil {
 		if errors.Is(err, adapter.ErrUnsupported) {
 			status.Codex = "unsupported"
 			status.Compatibility = "unsupported"
@@ -109,7 +110,11 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 		return status, false
 	}
 	status.Codex = "ready"
-	status.Compatibility = "supported"
+	if codex.IsVersionKnown(installation.Version) {
+		status.Compatibility = "known"
+	} else {
+		status.Compatibility = "unverified"
+	}
 	runtime, err := adapterInstance.StartRuntime(ctx)
 	if err != nil {
 		status.Authentication = "unavailable"

@@ -129,17 +129,22 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 
 仓库同时包含保持隔离的 `m0-poc-1` Gate G0 实现和正式的内部 CodexAdapter 基础。正式 Adapter 使用 Node 管理的 stdio app-server、本地 workspace ID、有界事件、一次性审批和持久 Thread 所有权。Node SQLite 现已支持单调事件序号、有界保留、outbox cursor确认、补发、Snapshot，以及对不确定 Turn 的保守对账；仅TLS Hub已支持单个个人 Owner 下最多五台隔离 Node，由现有 Node签名批准五分钟 enrollment，并由每台 Node独立复核Owner全局Control Client信任。完整任务 PWA 仍在后续任务中。
 
-环境要求：
+参考开发工具链（仅作为建议，仓库不会强制锁定）：
 
 - Go 1.26.5；
 - Node.js 24.18.1；
 - 通过 Corepack 使用 pnpm 11.18.0。
 
+只要能够运行 Go 和 Web 工具链，也可以使用其它版本。Codex 兼容矩阵只
+记录已经验证的组合并提供公开建议，不是运行时版本白名单。Yuanshu 会先
+探测本机 Codex 版本并尝试初始化 app-server；如果实际协议或能力不匹配，
+再以运行时能力错误明确报告。
+
 在仓库根目录安装 Web 依赖：
 
 ```shell
 corepack enable
-corepack install --global pnpm@11.18.0
+corepack install --global pnpm@11.18.0 # 可选：使用已验证的 pnpm 版本
 pnpm install --frozen-lockfile
 ```
 
