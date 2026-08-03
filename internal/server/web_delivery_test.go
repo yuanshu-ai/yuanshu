@@ -60,6 +60,23 @@ func TestEmbeddedWebDeliveryServesWorkbenchRuntimeConfigAndAssets(t *testing.T) 
 	if spa.Code != http.StatusOK || spa.Body.String() != page.Body.String() {
 		t.Fatalf("SPA fallback status=%d", spa.Code)
 	}
+	adminDisabled := httptest.NewRecorder()
+	handler.ServeHTTP(adminDisabled, httptest.NewRequest(http.MethodGet, "/admin", nil))
+	if adminDisabled.Code != http.StatusNotFound {
+		t.Fatalf("disabled admin status=%d", adminDisabled.Code)
+	}
+}
+
+func TestEmbeddedWebDeliveryServesAdminOnlyWhenEnabled(t *testing.T) {
+	handler, err := newWebDeliveryHandler(http.NotFoundHandler(), webDeliveryOptions{Enabled: true, AdminEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/admin", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Yuanshu") {
+		t.Fatalf("admin status=%d body=%q", response.Code, response.Body.String())
+	}
 }
 
 func TestEmbeddedWebDeliveryCanBeDisabled(t *testing.T) {

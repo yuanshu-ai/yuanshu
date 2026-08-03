@@ -266,6 +266,12 @@ allowed_control_origins = ["https://192.168.1.20:7444"]
 
 [web]
 enabled = true
+
+[admin]
+enabled = true
+session_idle_minutes = 30
+session_max_hours = 8
+audit_retention_days = 90
 ```
 
 ```shell
@@ -273,11 +279,21 @@ yuanshu server --config /absolute/path/server.toml
 yuanshu server doctor --config /absolute/path/server.toml --json
 ```
 
-The production Server serves the embedded personal workbench at `/` and
-generates `/yuanshu.config.json` from `public_url`. Starting `yuanshu server`
-therefore gives one process, port, certificate, and container for the Server,
-pairing page, Relay, and Web UI. It prints the access URL but does not launch a
-browser automatically.
+The production Server serves the embedded personal workbench at `/`, the
+same-origin Server administration console at `/admin`, and pairing at `/pair`.
+It generates `/yuanshu.config.json` from `public_url`. Starting
+`yuanshu server` therefore gives one process, port, certificate, and container
+for the Server, pairing page, Relay, workbench, and administration UI. It prints
+the access URL but does not launch a browser automatically.
+
+The administration console authenticates with an active paired control-client
+identity held in browser IndexedDB. Short-lived HttpOnly sessions, strict
+same-origin checks, CSRF protection, idempotency keys, and one-time signatures
+for destructive actions protect its HTTP API. It can inspect redacted Server
+health, Nodes, control clients, access requests, leases, and audit records; it
+can revoke credentials, cancel pending requests, release a lease, and close new
+admission. It cannot approve pairing or enrollment, read task content, control
+Codex, edit TLS material, or revoke the final active Node/control client.
 
 The user may still override the generated addresses in the connection settings
 page:

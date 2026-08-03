@@ -30,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, string) {
 
 func TestOpenCreatesServerSchemaAndReopens(t *testing.T) {
 	local, path := openTestStore(t)
-	for _, table := range []string{"bootstrap", "control_clients", "node_credentials", "node_enrollments", "nodes", "owners", "pairings", "control_leases", "notifications", "schema_migrations"} {
+	for _, table := range []string{"admin_audit_logs", "bootstrap", "control_clients", "node_credentials", "node_enrollments", "nodes", "owners", "pairings", "control_leases", "notifications", "schema_migrations", "server_security_settings"} {
 		var count int
 		if err := local.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("table %s count=%d err=%v", table, count, err)
@@ -325,6 +325,55 @@ func TestSessionLookupsReturnDetachedActiveAndRevokedRecords(t *testing.T) {
 	}
 	if _, err := local.NodeSession(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing node error=%v", err)
+	}
+}
+
+func TestAdminSafetyRevisionAndAuditRetention(t *testing.T) {
+	local, _ := openTestStore(t)
+	secret := bytes.Repeat([]byte{0x61}, 32)
+	_, _ = local.RotateBootstrap(context.Background(), secret, testNow)
+	claim := syntheticClaim(secret, bytes.Repeat([]byte{0x62}, 32), testNow)
+	if _, err := local.ClaimBootstrap(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.db.Exec(`INSERT INTO control_clients(id, owner_id, public_key, name, status, created_at)
+		VALUES ('cli_admin_only', ?, ?, 'Only Admin', 'active', ?)`, claim.OwnerID, bytes.Repeat([]byte{0x63}, 32), timestamp(testNow)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := local.AdminRevokeNode(context.Background(), claim.OwnerID, claim.NodeID, testNow); !errors.Is(err, ErrConflict) {
+		t.Fatalf("last node revoke error=%v", err)
+	}
+	if err := local.AdminRevokeControlClient(context.Background(), claim.OwnerID, "cli_admin_only", testNow); !errors.Is(err, ErrConflict) {
+		t.Fatalf("last client revoke error=%v", err)
+	}
+
+	settings, err := local.SecuritySettings(context.Background(), claim.OwnerID)
+	if err != nil || settings.Revision != 1 || !settings.ControlPairingEnabled || !settings.NodeEnrollmentEnabled {
+		t.Fatalf("initial settings=%+v err=%v", settings, err)
+	}
+	updated, err := local.UpdateSecuritySettings(context.Background(), claim.OwnerID, "cli_admin_only", false, true, settings.Revision, testNow.Add(time.Second))
+	if err != nil || updated.Revision != 2 || updated.ControlPairingEnabled {
+		t.Fatalf("updated settings=%+v err=%v", updated, err)
+	}
+	if _, err := local.UpdateSecuritySettings(context.Background(), claim.OwnerID, "cli_admin_only", true, true, settings.Revision, testNow.Add(2*time.Second)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale settings update error=%v", err)
+	}
+
+	audit := AdminAudit{ID: "aud_test", OwnerID: claim.OwnerID, ActorClientID: "cli_admin_only", Action: "security.admission.update", ResourceType: "security", ResourceRef: "admission", Result: "succeeded", CorrelationID: "cor_test", CreatedAt: testNow}
+	if err := local.SaveAdminAudit(context.Background(), audit); err != nil {
+		t.Fatal(err)
+	}
+	items, err := local.ListAdminAudit(context.Background(), claim.OwnerID, 10)
+	if err != nil || len(items) != 1 || items[0].OwnerID != claim.OwnerID || items[0].Action != audit.Action {
+		t.Fatalf("audit=%+v err=%v", items, err)
+	}
+	if err := local.PurgeAdminAudit(context.Background(), testNow.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	items, err = local.ListAdminAudit(context.Background(), claim.OwnerID, 10)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("purged audit=%+v err=%v", items, err)
 	}
 }
 

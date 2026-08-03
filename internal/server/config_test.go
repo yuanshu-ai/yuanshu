@@ -17,6 +17,7 @@ func TestServerConfigValidatesIPTLSAndOrigins(t *testing.T) {
 		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "127.0.0.1:7444"},
 		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "0.0.0.0:7444", PublicURL: "https://192.168.1.20:7444", TLSCertFile: "/tmp/server.crt", TLSKeyFile: "/tmp/server.key", AllowedControlOrigins: []string{"https://192.168.1.20:4173"}, Web: WebConfig{Enabled: &enabled}},
 		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "[::]:7444", PublicURL: "https://[fd00::20]:7444", TLSCertFile: "/tmp/server.crt", TLSKeyFile: "/tmp/server.key", Web: WebConfig{Enabled: &disabled}},
+		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "127.0.0.1:7444", Admin: AdminConfig{Enabled: &enabled, SessionIdleMinutes: 15, SessionMaxHours: 4, AuditRetentionDays: 30}},
 	}
 	for _, value := range valid {
 		if err := ValidateConfigFile(value); err != nil {
@@ -27,6 +28,7 @@ func TestServerConfigValidatesIPTLSAndOrigins(t *testing.T) {
 		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "0.0.0.0:7444"},
 		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "127.0.0.1:7444", PublicURL: "http://127.0.0.1:7444", TLSCertFile: "/tmp/server.crt", TLSKeyFile: "/tmp/server.key"},
 		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "127.0.0.1:7444", AllowedControlOrigins: []string{"http://web.example.test"}},
+		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "127.0.0.1:7444", Admin: AdminConfig{SessionIdleMinutes: 2}},
 	}
 	for _, value := range invalid {
 		if err := ValidateConfigFile(value); err == nil {

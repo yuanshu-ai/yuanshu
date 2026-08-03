@@ -15,14 +15,15 @@ describe("runtime connection settings", () => {
   it("prefers persisted settings over runtime deployment settings", async () => {
     const storage = new MemoryControlStorage();
     await storage.putRuntimeSettings({ relayUrl: "wss://stored.example.test/web/connect", pairingUrl: "/pair" });
-    const settings = await loadRuntimeSettings(storage, async () => new Response(JSON.stringify({ relayUrl: "wss://runtime.example.test/web/connect", pairingUrl: "https://runtime.example.test/pair" })));
+    const settings = await loadRuntimeSettings(storage, async () => new Response(JSON.stringify({ relayUrl: "wss://runtime.example.test/web/connect", pairingUrl: "https://runtime.example.test/pair", adminEnabled: true, adminUrl: "/admin" })));
     expect(settings.relayUrl).toBe("wss://stored.example.test/web/connect");
     expect(settings.pairingUrl).toBe("/pair");
+    expect(settings.adminEnabled).toBe(true);
   });
 
   it("loads deployment JSON when no browser override exists", async () => {
-    const settings = await loadRuntimeSettings(new MemoryControlStorage(), async () => new Response(JSON.stringify({ relayUrl: "wss://192.168.1.20:7444/web/connect", pairingUrl: "https://192.168.1.20:7444/pair" })));
-    expect(settings).toEqual({ relayUrl: "wss://192.168.1.20:7444/web/connect", pairingUrl: "https://192.168.1.20:7444/pair" });
+    const settings = await loadRuntimeSettings(new MemoryControlStorage(), async () => new Response(JSON.stringify({ relayUrl: "wss://192.168.1.20:7444/web/connect", pairingUrl: "https://192.168.1.20:7444/pair", adminEnabled: true, adminUrl: "/admin" })));
+    expect(settings).toEqual({ relayUrl: "wss://192.168.1.20:7444/web/connect", pairingUrl: "https://192.168.1.20:7444/pair", adminEnabled: true, adminUrl: "/admin" });
   });
 
   it("does not accept credentials or query strings in settings", () => {

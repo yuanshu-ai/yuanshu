@@ -190,6 +190,7 @@ type doctorStatus struct {
 	AllowedControlOrigins []string `json:"allowedControlOrigins,omitempty"`
 	Revision              string   `json:"revision,omitempty"`
 	Web                   string   `json:"web"`
+	Admin                 string   `json:"admin"`
 }
 
 func doctor(ctx context.Context, args []string, stdout io.Writer) error {
@@ -212,7 +213,7 @@ func doctor(ctx context.Context, args []string, stdout io.Writer) error {
 			return ErrUsage
 		}
 	}
-	status := doctorStatus{Version: 1, State: "needs_attention", Config: "unavailable", TLS: "not_configured", Web: "enabled"}
+	status := doctorStatus{Version: 1, State: "needs_attention", Config: "unavailable", TLS: "not_configured", Web: "enabled", Admin: "enabled"}
 	if configPath == "" {
 		status.Config = "not_configured"
 		return writeDoctorStatus(stdout, status, jsonOutput, false)
@@ -229,6 +230,9 @@ func doctor(ctx context.Context, args []string, stdout io.Writer) error {
 	status.Revision = configRevision(value)
 	if !embeddedWebEnabled(value.Web.Enabled) {
 		status.Web = "disabled"
+	}
+	if !adminEnabled(value.Admin.Enabled) {
+		status.Admin = "disabled"
 	}
 	if value.PublicURL != "" {
 		tlsConfig, tlsErr := loadTLSConfig(Options{PublicURL: value.PublicURL, TLSCertFile: value.TLSCertFile, TLSKeyFile: value.TLSKeyFile})
@@ -256,7 +260,7 @@ func writeDoctorStatus(stdout io.Writer, status doctorStatus, jsonOutput, health
 			return err
 		}
 	} else {
-		_, _ = fmt.Fprintf(stdout, "Yuanshu Server: %s\nConfig: %s\nListen: %s\nPublic URL: %s\nTLS: %s\nWeb: %s\n", status.State, status.Config, status.Listen, status.PublicURL, status.TLS, status.Web)
+		_, _ = fmt.Fprintf(stdout, "Yuanshu Server: %s\nConfig: %s\nListen: %s\nPublic URL: %s\nTLS: %s\nWeb: %s\nAdmin: %s\n", status.State, status.Config, status.Listen, status.PublicURL, status.TLS, status.Web, status.Admin)
 	}
 	if !healthy {
 		return errors.New("server requires attention")

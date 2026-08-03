@@ -13,6 +13,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -90,6 +92,15 @@ type adminSession struct {
 	expiresAt time.Time
 }
 
+type cachedAdminResponse struct {
+	bodyDigest [sha256.Size]byte
+	status     int
+	header     http.Header
+	body       []byte
+	expiresAt  time.Time
+	ready      chan struct{}
+}
+
 type adminService struct {
 	store            *serverstore.Store
 	hub              *Hub
@@ -100,6 +111,7 @@ type adminService struct {
 	challenges       map[string]pendingAdminChallenge
 	actionChallenges map[string]pendingActionChallenge
 	sessions         map[string]*adminSession
+	idempotency      map[string]*cachedAdminResponse
 	loginLimiter     *attemptLimiter
 }
 
@@ -127,7 +139,7 @@ func newAdminService(store *serverstore.Store, hub *Hub, options adminHandlerOpt
 	if clock == nil {
 		clock = time.Now
 	}
-	return &adminService{store: store, hub: hub, options: options, random: randomSource, clock: clock, challenges: map[string]pendingAdminChallenge{}, actionChallenges: map[string]pendingActionChallenge{}, sessions: map[string]*adminSession{}, loginLimiter: newAttemptLimiter(clock)}, nil
+	return &adminService{store: store, hub: hub, options: options, random: randomSource, clock: clock, challenges: map[string]pendingAdminChallenge{}, actionChallenges: map[string]pendingActionChallenge{}, sessions: map[string]*adminSession{}, idempotency: map[string]*cachedAdminResponse{}, loginLimiter: newAttemptLimiter(clock)}, nil
 }
 
 func (s *adminService) Handler() http.Handler {
@@ -151,7 +163,116 @@ func (s *adminService) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/admin/node-enrollments/{id}/cancel", s.cancelEnrollment)
 	mux.HandleFunc("POST /v1/admin/leases/release", s.releaseLease)
 	mux.HandleFunc("PUT /v1/admin/security/admission", s.updateAdmission)
-	return noStore(mux)
+	return s.idempotencyMiddleware(noStore(mux))
+}
+
+func (s *adminService) idempotencyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !adminMutationPath(r.Method, r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		session, ok := s.requireMutation(w, r)
+		if !ok {
+			return
+		}
+		raw, err := io.ReadAll(io.LimitReader(r.Body, maxAdminBody+1))
+		if err != nil || len(raw) > maxAdminBody {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large")
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		digest := sha256.Sum256(raw)
+		cacheKey := session.ownerID + "\x00" + session.clientID + "\x00" + r.Header.Get("Idempotency-Key")
+		now := s.clock().UTC()
+		s.mu.Lock()
+		s.cleanupLocked(now)
+		cached, found := s.idempotency[cacheKey]
+		if found {
+			if cached.bodyDigest != digest {
+				s.mu.Unlock()
+				writeError(w, http.StatusConflict, "idempotency_conflict")
+				return
+			}
+			ready := cached.ready
+			s.mu.Unlock()
+			if ready != nil {
+				select {
+				case <-ready:
+				case <-r.Context().Done():
+					writeError(w, http.StatusRequestTimeout, "request_canceled")
+					return
+				}
+			}
+			s.mu.Lock()
+			cached, found = s.idempotency[cacheKey]
+			if !found {
+				s.mu.Unlock()
+				writeError(w, http.StatusServiceUnavailable, "operation_unknown")
+				return
+			}
+			status, header, body := cached.status, cached.header.Clone(), append([]byte(nil), cached.body...)
+			s.mu.Unlock()
+			copyHeaders(w.Header(), header)
+			w.WriteHeader(status)
+			_, _ = w.Write(body)
+			return
+		}
+		cached = &cachedAdminResponse{bodyDigest: digest, expiresAt: now.Add(10 * time.Minute), ready: make(chan struct{})}
+		s.idempotency[cacheKey] = cached
+		s.mu.Unlock()
+		capture := &adminResponseCapture{header: make(http.Header), status: http.StatusOK}
+		next.ServeHTTP(capture, r)
+		s.mu.Lock()
+		if capture.status < http.StatusInternalServerError {
+			cached.status = capture.status
+			cached.header = capture.header.Clone()
+			cached.body = append([]byte(nil), capture.body.Bytes()...)
+			close(cached.ready)
+			cached.ready = nil
+		} else {
+			delete(s.idempotency, cacheKey)
+			close(cached.ready)
+		}
+		s.mu.Unlock()
+		copyHeaders(w.Header(), capture.header)
+		w.WriteHeader(capture.status)
+		_, _ = w.Write(capture.body.Bytes())
+	})
+}
+
+type adminResponseCapture struct {
+	header      http.Header
+	body        bytes.Buffer
+	status      int
+	wroteHeader bool
+}
+
+func (w *adminResponseCapture) Header() http.Header { return w.header }
+func (w *adminResponseCapture) WriteHeader(status int) {
+	if !w.wroteHeader {
+		w.status, w.wroteHeader = status, true
+	}
+}
+func (w *adminResponseCapture) Write(value []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.body.Write(value)
+}
+func copyHeaders(target, source http.Header) {
+	for key, values := range source {
+		target[key] = append([]string(nil), values...)
+	}
+}
+func adminMutationPath(method, path string) bool {
+	if method == http.MethodPut && path == "/v1/admin/security/admission" {
+		return true
+	}
+	if method != http.MethodPost {
+		return false
+	}
+	return strings.HasPrefix(path, "/v1/admin/nodes/") || strings.HasPrefix(path, "/v1/admin/control-clients/") || strings.HasPrefix(path, "/v1/admin/pairings/") || strings.HasPrefix(path, "/v1/admin/node-enrollments/") || path == "/v1/admin/leases/release"
 }
 
 func (s *adminService) issueChallenge(w http.ResponseWriter, r *http.Request) {
@@ -168,8 +289,13 @@ func (s *adminService) issueChallenge(w http.ResponseWriter, r *http.Request) {
 		ClientID string `json:"clientId"`
 		KeyID    string `json:"keyId"`
 	}
-	if !decodeAdminJSON(w, r, &request) || !validOpaque(request.ClientID, 128) || !validOpaque(request.KeyID, 128) {
+	if !decodeAdminJSON(w, r, &request) {
 		s.loginLimiter.failure()
+		return
+	}
+	if !validOpaque(request.ClientID, 128) || !validOpaque(request.KeyID, 128) {
+		s.loginLimiter.failure()
+		writeError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
 	record, err := s.store.ControlClientSession(r.Context(), request.ClientID)
@@ -323,7 +449,7 @@ func (s *adminService) overview(w http.ResponseWriter, r *http.Request) {
 	if info, err := os.Stat(s.options.DatabasePath); err == nil {
 		size = info.Size()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "uptimeSeconds": int64(s.clock().UTC().Sub(s.options.StartedAt).Seconds()), "database": map[string]any{"schemaVersion": serverstore.CurrentSchemaVersion, "quickCheck": "ok", "sizeBytes": size}, "connections": map[string]int{"nodes": nodes, "controlClients": controls}, "counts": counts, "tls": s.tlsView()})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "uptimeSeconds": int64(s.clock().UTC().Sub(s.options.StartedAt).Seconds()), "build": serverBuildMetadata(), "database": map[string]any{"schemaVersion": serverstore.CurrentSchemaVersion, "quickCheck": "ok", "sizeBytes": size}, "connections": map[string]int{"nodes": nodes, "controlClients": controls}, "counts": counts, "tls": s.tlsView()})
 }
 
 func (s *adminService) nodes(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +486,7 @@ func (s *adminService) controlClients(w http.ResponseWriter, r *http.Request) {
 		if item.OwnerID != session.ownerID {
 			continue
 		}
-		result = append(result, map[string]any{"id": item.ID, "keyId": item.KeyID, "name": item.Name, "status": item.Status, "online": online[item.ID], "current": item.ID == session.clientID, "createdAt": item.CreatedAt.Format(time.RFC3339Nano), "lastSeenAt": timeValue(item.LastSeenAt), "revokedAt": timeValue(item.RevokedAt)})
+		result = append(result, map[string]any{"id": item.ID, "name": item.Name, "status": item.Status, "online": online[item.ID], "current": item.ID == session.clientID, "createdAt": item.CreatedAt.Format(time.RFC3339Nano), "lastSeenAt": timeValue(item.LastSeenAt), "revokedAt": timeValue(item.RevokedAt)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"controlClients": result})
 }
@@ -425,7 +551,27 @@ func (s *adminService) diagnostics(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"state": "ready", "schemaVersion": serverstore.CurrentSchemaVersion, "quickCheck": "ok", "uptimeSeconds": int64(s.clock().UTC().Sub(s.options.StartedAt).Seconds()), "webEnabled": s.options.WebEnabled, "adminEnabled": s.options.Enabled, "tls": s.tlsView(), "counts": counts, "configRevision": s.options.ConfigRevision})
+	writeJSON(w, http.StatusOK, map[string]any{"state": "ready", "build": serverBuildMetadata(), "schemaVersion": serverstore.CurrentSchemaVersion, "quickCheck": "ok", "uptimeSeconds": int64(s.clock().UTC().Sub(s.options.StartedAt).Seconds()), "webEnabled": s.options.WebEnabled, "adminEnabled": s.options.Enabled, "tls": s.tlsView(), "counts": counts, "configRevision": s.options.ConfigRevision})
+}
+
+func serverBuildMetadata() map[string]string {
+	result := map[string]string{"goVersion": runtime.Version()}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			result["version"] = info.Main.Version
+		}
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				if setting.Value != "" {
+					result["revision"] = setting.Value
+				}
+			case "vcs.modified":
+				result["modified"] = setting.Value
+			}
+		}
+	}
+	return result
 }
 
 type actionProof struct {
@@ -637,6 +783,9 @@ func (s *adminService) writeAudit(ctx context.Context, session *adminSession, ac
 	if err != nil {
 		return err
 	}
+	if resource != "admission" && !strings.HasPrefix(resource, "sha256:") {
+		resource = digestResource(resource)
+	}
 	item := serverstore.AdminAudit{ID: "aud_" + id, OwnerID: session.ownerID, ActorClientID: session.clientID, Action: action, ResourceType: resourceType, ResourceRef: resource, Result: result, ErrorCode: code, CorrelationID: correlationIDFromContext(), CreatedAt: s.clock().UTC()}
 	if err := s.store.SaveAdminAudit(ctx, item); err != nil {
 		return err
@@ -701,7 +850,10 @@ func (s *adminService) validOrigin(r *http.Request) bool {
 	if origin == "" {
 		return false
 	}
-	expected := controlOrigin(s.options.PublicURL)
+	expected := ""
+	if s.options.PublicURL != "" {
+		expected = controlOrigin(s.options.PublicURL)
+	}
 	if expected == "" {
 		scheme := "http"
 		if r.TLS != nil {
@@ -732,6 +884,11 @@ func (s *adminService) cleanupLocked(now time.Time) {
 	for id, item := range s.actionChallenges {
 		if !now.Before(mustParseTime(item.value.ExpiresAt)) {
 			delete(s.actionChallenges, id)
+		}
+	}
+	for key, item := range s.idempotency {
+		if item.ready == nil && !now.Before(item.expiresAt) {
+			delete(s.idempotency, key)
 		}
 	}
 }
