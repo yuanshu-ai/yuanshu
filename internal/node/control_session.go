@@ -18,6 +18,8 @@ var ErrControlSessionInvalid = errors.New("node control session configuration is
 type controlWorkspaceStore interface {
 	Workspaces(context.Context) ([]store.WorkspaceRecord, error)
 	Approval(context.Context, string) (store.ApprovalRecord, error)
+	ClaimApproval(context.Context, store.ApprovalClaim) (store.ApprovalRecord, error)
+	MarkApprovalAmbiguous(context.Context, string) error
 }
 
 // ControlSessionOptions binds one authenticated transport to the Node's
@@ -37,6 +39,7 @@ type ControlSessionOptions struct {
 	// callback so the host can make the remote control state unavailable
 	// without coupling this protocol boundary to host lifecycle code.
 	EventFailure func(error)
+	Now          func() time.Time
 }
 
 // ControlSession is the formal Node-side Protocol v1 control boundary.
@@ -49,6 +52,7 @@ type ControlSession struct {
 	deviceName   string
 	refreshTrust func(context.Context) error
 	eventFailure func(error)
+	now          func() time.Time
 
 	transportMu sync.RWMutex
 	active      *sessionTransport
@@ -81,6 +85,12 @@ func NewControlSession(options ControlSessionOptions) (*ControlSession, error) {
 			return &sessionTransport{value: options.Transport}
 		}(),
 		eventFailure: options.EventFailure,
+		now: func() time.Time {
+			if options.Now != nil {
+				return options.Now()
+			}
+			return time.Now()
+		},
 	}, nil
 }
 
@@ -336,7 +346,11 @@ func (s *ControlSession) dispatch(ctx context.Context, message protocol.YuanshuM
 		if workspaceID == "" || threadID == "" {
 			return adapter.ErrInvalid
 		}
-		snapshot, err := s.runtime.ReadThread(ctx, adapter.ReadThreadRequest{WorkspaceID: workspaceID, ThreadID: threadID, IncludeTurns: boolPayload(message.Payload, "includeTurns")})
+		includeDiffs := true
+		if _, exists := message.Payload["includeDiffs"]; exists {
+			includeDiffs = boolPayload(message.Payload, "includeDiffs")
+		}
+		snapshot, err := s.runtime.ReadThread(ctx, adapter.ReadThreadRequest{WorkspaceID: workspaceID, ThreadID: threadID, IncludeTurns: boolPayload(message.Payload, "includeTurns"), IncludeDiffs: includeDiffs, DiffPath: stringPayload(message.Payload, "diffPath"), MaxDiffBytes: intPayload(message.Payload, "maxDiffBytes")})
 		if err != nil {
 			return err
 		}
@@ -387,12 +401,19 @@ func (s *ControlSession) dispatch(ctx context.Context, message protocol.YuanshuM
 		return s.runtime.InterruptTurn(ctx, adapter.InterruptTurnRequest{WorkspaceID: workspaceID, ThreadID: threadID, TurnID: turnID})
 	case protocol.ControlApprovalResolve:
 		approvalID := stringPayload(message.Payload, "approvalId")
-		approval, err := s.store.Approval(ctx, approvalID)
-		if err != nil || approval.Status != store.ApprovalPending || approval.OperationDigest != stringPayload(message.Payload, "operationDigest") ||
-			approval.WorkspaceID != workspaceID || approval.ThreadID != threadID || approval.TurnID != turnID || approval.ItemID != itemID {
-			return adapter.ErrConflict
+		decision := stringPayload(message.Payload, "decision")
+		claimed, err := s.store.ClaimApproval(ctx, store.ApprovalClaim{
+			ApprovalID: approvalID, WorkspaceID: workspaceID, ThreadID: threadID, TurnID: turnID, ItemID: itemID,
+			OperationDigest: stringPayload(message.Payload, "operationDigest"), Decision: decision, Now: s.now().UTC(),
+		})
+		if err != nil {
+			return err
 		}
-		return s.runtime.ResolveApproval(ctx, adapter.ApprovalDecision{WorkspaceID: workspaceID, ThreadID: threadID, TurnID: turnID, ItemID: itemID, ApprovalID: approvalID, Decision: stringPayload(message.Payload, "decision")})
+		err = s.runtime.ResolveApproval(ctx, adapter.ApprovalDecision{WorkspaceID: workspaceID, ThreadID: threadID, TurnID: turnID, ItemID: itemID, ApprovalID: approvalID, Decision: decision})
+		if err != nil {
+			_ = s.store.MarkApprovalAmbiguous(ctx, claimed.ApprovalID)
+		}
+		return err
 	case protocol.ControlEventsReplay:
 		batch, err := s.events.Replay(ctx, int64Payload(message.Payload, "afterSequence"), eventlog.DefaultReplayLimit)
 		if err != nil {
@@ -490,6 +511,12 @@ func threadItemPayload(item adapter.ThreadItem) map[string]any {
 	}
 	if item.Truncated {
 		payload["truncated"] = true
+	}
+	if item.DiffTotalBytes > 0 {
+		payload["totalBytes"] = item.DiffTotalBytes
+	}
+	if item.DiffDigest != "" {
+		payload["digest"] = item.DiffDigest
 	}
 	return payload
 }

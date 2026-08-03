@@ -78,6 +78,9 @@ type ReadThreadRequest struct {
 	WorkspaceID  string
 	ThreadID     string
 	IncludeTurns bool
+	IncludeDiffs bool
+	DiffPath     string
+	MaxDiffBytes int
 }
 
 type StartThreadRequest struct{ WorkspaceID string }
@@ -147,21 +150,23 @@ type Turn struct {
 // ThreadItem is the stable, deliberately small history projection exposed to
 // remote clients. Codex-specific item JSON must never cross this boundary.
 type ThreadItem struct {
-	ID           string
-	Kind         string
-	Status       string
-	Text         string
-	Command      string
-	Output       string
-	ToolName     string
-	Path         string
-	ChangeType   string
-	Diff         string
-	ExitCode     *int
-	ErrorCode    string
-	ErrorMessage string
-	Partial      bool
-	Truncated    bool
+	ID             string
+	Kind           string
+	Status         string
+	Text           string
+	Command        string
+	Output         string
+	ToolName       string
+	Path           string
+	ChangeType     string
+	Diff           string
+	DiffTotalBytes int
+	DiffDigest     string
+	ExitCode       *int
+	ErrorCode      string
+	ErrorMessage   string
+	Partial        bool
+	Truncated      bool
 }
 
 type Approval struct {

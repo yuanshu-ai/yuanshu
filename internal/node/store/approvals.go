@@ -8,9 +8,13 @@ import (
 )
 
 const (
-	ApprovalPending   = "pending"
-	ApprovalResolved  = "resolved"
-	ApprovalAmbiguous = "ambiguous"
+	ApprovalPending    = "pending"
+	ApprovalProcessing = "processing"
+	ApprovalAccepted   = "accepted"
+	ApprovalDeclined   = "declined"
+	ApprovalResolved   = "resolved"
+	ApprovalExpired    = "expired"
+	ApprovalAmbiguous  = "ambiguous"
 )
 
 type ApprovalRecord struct {
@@ -24,6 +28,17 @@ type ApprovalRecord struct {
 	Payload         []byte
 	ExpiresAt       time.Time
 	UpdatedAt       time.Time
+}
+
+type ApprovalClaim struct {
+	ApprovalID      string
+	WorkspaceID     string
+	ThreadID        string
+	TurnID          string
+	ItemID          string
+	OperationDigest string
+	Decision        string
+	Now             time.Time
 }
 
 func (s *Store) SaveApproval(ctx context.Context, record ApprovalRecord) error {
@@ -62,6 +77,72 @@ func (s *Store) Approval(ctx context.Context, approvalID string) (ApprovalRecord
 		return ApprovalRecord{}, err
 	}
 	return scanApproval(db.QueryRowContext(ctx, `SELECT approval_id,workspace_id,thread_id,turn_id,item_id,status,operation_digest,payload,expires_at,updated_at FROM approval_state WHERE approval_id=?`, approvalID))
+}
+
+// ClaimApproval atomically moves a pending approval to processing. The
+// transition is deliberately separate from runtime execution: once claimed,
+// a crashed Node will reconcile it as ambiguous instead of executing a second
+// approval after the browser retries.
+func (s *Store) ClaimApproval(ctx context.Context, claim ApprovalClaim) (ApprovalRecord, error) {
+	if err := requireContext(ctx); err != nil {
+		return ApprovalRecord{}, err
+	}
+	if !validApprovalClaim(claim) {
+		return ApprovalRecord{}, ErrInvalid
+	}
+	db, err := s.database()
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return ApprovalRecord{}, internal("approval claim")
+	}
+	defer tx.Rollback()
+	record, err := scanApproval(tx.QueryRowContext(ctx, `SELECT approval_id,workspace_id,thread_id,turn_id,item_id,status,operation_digest,payload,expires_at,updated_at FROM approval_state WHERE approval_id=?`, claim.ApprovalID))
+	if err != nil {
+		return ApprovalRecord{}, err
+	}
+	if record.Status != ApprovalPending || record.OperationDigest != claim.OperationDigest || record.WorkspaceID != claim.WorkspaceID || record.ThreadID != claim.ThreadID || record.TurnID != claim.TurnID || record.ItemID != claim.ItemID {
+		return record, ErrConflict
+	}
+	if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(claim.Now) {
+		record.Status = ApprovalExpired
+		record.UpdatedAt = claim.Now.UTC()
+		if _, err := tx.ExecContext(ctx, `UPDATE approval_state SET status=?,updated_at=? WHERE approval_id=? AND status=?`, ApprovalExpired, timestamp(record.UpdatedAt), claim.ApprovalID, ApprovalPending); err != nil {
+			return ApprovalRecord{}, internal("approval expire")
+		}
+		if err := tx.Commit(); err != nil {
+			return ApprovalRecord{}, internal("approval expire")
+		}
+		return record, ErrExpired
+	}
+	record.Status = ApprovalProcessing
+	record.UpdatedAt = claim.Now.UTC()
+	if _, err := tx.ExecContext(ctx, `UPDATE approval_state SET status=?,updated_at=? WHERE approval_id=? AND status=?`, ApprovalProcessing, timestamp(record.UpdatedAt), claim.ApprovalID, ApprovalPending); err != nil {
+		return ApprovalRecord{}, internal("approval claim")
+	}
+	if err := tx.Commit(); err != nil {
+		return ApprovalRecord{}, internal("approval claim")
+	}
+	return record, nil
+}
+
+func (s *Store) MarkApprovalAmbiguous(ctx context.Context, approvalID string) error {
+	if err := requireContext(ctx); err != nil {
+		return err
+	}
+	if !validWorkspaceText(approvalID, 128) {
+		return ErrInvalid
+	}
+	db, err := s.database()
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE approval_state SET status=?,updated_at=? WHERE approval_id=? AND status=?`, ApprovalAmbiguous, timestamp(s.clock()), approvalID, ApprovalProcessing); err != nil {
+		return internal("approval reconcile")
+	}
+	return nil
 }
 
 func (s *Store) PendingApprovals(ctx context.Context, threadID string) ([]ApprovalRecord, error) {
@@ -105,7 +186,7 @@ func (s *Store) MarkThreadApprovalsAmbiguous(ctx context.Context, threadID strin
 	if err != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, `UPDATE approval_state SET status='ambiguous',updated_at=? WHERE thread_id=? AND status='pending'`, timestamp(s.clock()), threadID)
+	_, err = db.ExecContext(ctx, `UPDATE approval_state SET status='ambiguous',updated_at=? WHERE thread_id=? AND status IN ('pending','processing')`, timestamp(s.clock()), threadID)
 	if err != nil {
 		return internal("approval reconcile")
 	}
@@ -147,7 +228,11 @@ func validApprovalRecord(record ApprovalRecord) bool {
 	if record.OperationDigest != "" && len(record.OperationDigest) != 43 {
 		return false
 	}
-	return record.Status == ApprovalPending || record.Status == ApprovalResolved || record.Status == ApprovalAmbiguous
+	return record.Status == ApprovalPending || record.Status == ApprovalProcessing || record.Status == ApprovalAccepted || record.Status == ApprovalDeclined || record.Status == ApprovalResolved || record.Status == ApprovalExpired || record.Status == ApprovalAmbiguous
+}
+
+func validApprovalClaim(claim ApprovalClaim) bool {
+	return validWorkspaceText(claim.ApprovalID, 128) && validWorkspaceText(claim.WorkspaceID, 128) && validWorkspaceText(claim.ThreadID, 128) && validWorkspaceText(claim.TurnID, 128) && validWorkspaceText(claim.ItemID, 128) && len(claim.OperationDigest) == 43 && (claim.Decision == "accept" || claim.Decision == "decline") && !claim.Now.IsZero()
 }
 
 func nullTime(value time.Time) any {

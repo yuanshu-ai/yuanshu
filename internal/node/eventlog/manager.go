@@ -320,7 +320,15 @@ func (m *Manager) updateApproval(ctx context.Context, record Record, payload map
 	if err != nil {
 		return err
 	}
-	existing.Status, existing.Payload, existing.UpdatedAt = store.ApprovalResolved, raw, record.CreatedAt
+	decision := firstString(payload, "decision", "")
+	if decision == "accept" {
+		existing.Status = store.ApprovalAccepted
+	} else if decision == "decline" {
+		existing.Status = store.ApprovalDeclined
+	} else {
+		existing.Status = store.ApprovalResolved
+	}
+	existing.Payload, existing.UpdatedAt = raw, record.CreatedAt
 	return m.store.SaveApproval(ctx, existing)
 }
 

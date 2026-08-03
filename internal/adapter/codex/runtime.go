@@ -2,6 +2,8 @@ package codex
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -190,10 +192,11 @@ func (r *Runtime) ReadThread(ctx context.Context, request adapter.ReadThreadRequ
 	if err != nil {
 		return adapter.ThreadSnapshot{}, err
 	}
-	return r.readThread(ctx, resolved, request.ThreadID, request.IncludeTurns)
+	return r.readThread(ctx, resolved, request)
 }
 
-func (r *Runtime) readThread(ctx context.Context, resolved workspace.ResolvedWorkspace, threadID string, includeTurns bool) (adapter.ThreadSnapshot, error) {
+func (r *Runtime) readThread(ctx context.Context, resolved workspace.ResolvedWorkspace, request adapter.ReadThreadRequest) (adapter.ThreadSnapshot, error) {
+	threadID := request.ThreadID
 	if !validID(threadID) {
 		return adapter.ThreadSnapshot{}, adapter.ErrInvalid
 	}
@@ -204,13 +207,15 @@ func (r *Runtime) readThread(ctx context.Context, resolved workspace.ResolvedWor
 	var response struct {
 		Thread codexThread `json:"thread"`
 	}
-	if err := client.Call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": includeTurns}, &response); err != nil {
+	if err := client.Call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": request.IncludeTurns}, &response); err != nil {
 		return adapter.ThreadSnapshot{}, mapCallError(err)
 	}
 	if response.Thread.ID != threadID || !sameLocalPath(response.Thread.Cwd, resolved.CanonicalPath) {
 		return adapter.ThreadSnapshot{}, adapter.ErrForbidden
 	}
-	return publicSnapshot(response.Thread, resolved.ID), nil
+	snapshot := publicSnapshot(response.Thread, resolved.ID)
+	applyReadOptions(&snapshot, request)
+	return snapshot, nil
 }
 
 func (r *Runtime) StartThread(ctx context.Context, request adapter.StartThreadRequest) (adapter.Thread, error) {
@@ -250,7 +255,7 @@ func (r *Runtime) ResumeThread(ctx context.Context, request adapter.ResumeThread
 	if err != nil {
 		return adapter.Thread{}, err
 	}
-	snapshot, err := r.readThread(ctx, resolved, request.ThreadID, true)
+	snapshot, err := r.readThread(ctx, resolved, adapter.ReadThreadRequest{WorkspaceID: request.WorkspaceID, ThreadID: request.ThreadID, IncludeTurns: true, IncludeDiffs: true})
 	if err != nil {
 		return adapter.Thread{}, err
 	}
@@ -788,8 +793,53 @@ func publicFileChangeItem(id, status string, change codexFileChange, root string
 	}
 	item.Path = logical
 	item.ChangeType = normalizeChangeKind(change.Kind)
-	item.Diff, item.Truncated = boundedHistory(redactHistory(change.Diff, root))
+	redacted := redactHistory(change.Diff, root)
+	item.Diff, item.Truncated, item.DiffTotalBytes, item.DiffDigest = boundedDiff(redacted)
 	return item
+}
+
+func applyReadOptions(snapshot *adapter.ThreadSnapshot, request adapter.ReadThreadRequest) {
+	maxBytes := request.MaxDiffBytes
+	if maxBytes <= 0 || maxBytes > 64<<10 {
+		maxBytes = 64 << 10
+	}
+	for turnIndex := range snapshot.Turns {
+		for itemIndex := range snapshot.Turns[turnIndex].Items {
+			item := &snapshot.Turns[turnIndex].Items[itemIndex]
+			if item.Kind != "file_change" && item.Kind != "diff" {
+				continue
+			}
+			if request.DiffPath != "" && item.Path != request.DiffPath {
+				item.Diff = ""
+				continue
+			}
+			if !request.IncludeDiffs {
+				item.Diff = ""
+				continue
+			}
+			if len(item.Diff) > maxBytes {
+				item.Diff = truncateBytesUTF8(item.Diff, maxBytes)
+				item.Truncated = true
+			}
+		}
+	}
+}
+
+func boundedDiff(value string) (string, bool, int, string) {
+	bytesValue := []byte(value)
+	digest := sha256.Sum256(bytesValue)
+	bounded, truncated := boundedHistory(value)
+	return bounded, truncated, len(bytesValue), base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+func truncateBytesUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	for limit > 0 && !utf8.ValidString(value[:limit]) {
+		limit--
+	}
+	return value[:limit]
 }
 
 func contentText(content []json.RawMessage) string {

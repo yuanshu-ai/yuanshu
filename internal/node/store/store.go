@@ -15,7 +15,7 @@ import (
 	_ "github.com/ncruces/go-sqlite3/embed"
 )
 
-const CurrentSchemaVersion = 5
+const CurrentSchemaVersion = 6
 
 type Inspection struct {
 	SchemaVersion int

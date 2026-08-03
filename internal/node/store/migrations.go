@@ -205,6 +205,30 @@ var nodeMigrations = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 6,
+		name:    "approval_resolution_state_machine",
+		statements: []string{
+			`DROP INDEX approval_state_thread`,
+			`ALTER TABLE approval_state RENAME TO approval_state_legacy`,
+			`CREATE TABLE approval_state (
+				approval_id TEXT PRIMARY KEY CHECK (length(approval_id) BETWEEN 1 AND 128),
+				workspace_id TEXT NOT NULL CHECK (length(workspace_id) BETWEEN 1 AND 128),
+				thread_id TEXT NOT NULL CHECK (length(thread_id) BETWEEN 1 AND 128),
+				turn_id TEXT NOT NULL CHECK (length(turn_id) BETWEEN 1 AND 128),
+				item_id TEXT NOT NULL CHECK (length(item_id) BETWEEN 1 AND 128),
+				status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'accepted', 'declined', 'resolved', 'expired', 'ambiguous')),
+				operation_digest TEXT CHECK (operation_digest IS NULL OR length(operation_digest) = 43),
+				payload BLOB NOT NULL CHECK (length(payload) <= 786432),
+				expires_at TEXT,
+				updated_at TEXT NOT NULL
+			) STRICT`,
+			`INSERT INTO approval_state(approval_id,workspace_id,thread_id,turn_id,item_id,status,operation_digest,payload,expires_at,updated_at)
+				SELECT approval_id,workspace_id,thread_id,turn_id,item_id,status,operation_digest,payload,expires_at,updated_at FROM approval_state_legacy`,
+			`DROP TABLE approval_state_legacy`,
+			`CREATE INDEX approval_state_thread ON approval_state(thread_id, turn_id, status)`,
+		},
+	},
 }
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -271,6 +295,8 @@ func sqlLiteralInt(value int) string {
 		return "4"
 	case 5:
 		return "5"
+	case 6:
+		return "6"
 	default:
 		panic(errors.New("unsupported schema version"))
 	}

@@ -6,6 +6,7 @@ import "errors"
 var (
 	ErrNotFound     = errors.New("node store record was not found")
 	ErrConflict     = errors.New("node store record conflicts with existing state")
+	ErrExpired      = errors.New("node store record has expired")
 	ErrInvalid      = errors.New("node store argument is invalid")
 	ErrFutureSchema = errors.New("node store schema is newer than this binary")
 	ErrCorrupt      = errors.New("node store is invalid or corrupt")
