@@ -4,7 +4,8 @@ package platform
 
 const (
 	expectedCurrentFamily      = FamilyDarwin
-	expectedProcessAvailable   = false
-	expectedWorkspaceAvailable = false
-	expectedIPCAvailable       = false
+	expectedAutostartAvailable = true
+	expectedProcessAvailable   = true
+	expectedWorkspaceAvailable = true
+	expectedIPCAvailable       = true
 )

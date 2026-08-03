@@ -54,7 +54,10 @@ func runHost(ctx context.Context, options runOptions) error {
 	if ctx == nil {
 		return context.Canceled
 	}
-	if options.platform == nil || options.platform.Family() != platform.FamilyWindows {
+	if options.platform == nil || options.platform.IPC() == nil || !options.platform.IPC().Available() ||
+		options.platform.SecureStore() == nil || !options.platform.SecureStore().Available() ||
+		options.platform.Processes() == nil || !options.platform.Processes().Available() ||
+		options.platform.Workspaces() == nil || !options.platform.Workspaces().Available() {
 		return platform.ErrUnavailable
 	}
 	if options.configPath == "" {
@@ -63,7 +66,11 @@ func runHost(ctx context.Context, options runOptions) error {
 	if !filepath.IsAbs(options.configPath) {
 		return platform.ErrInvalidArgument
 	}
-	if err := os.MkdirAll(options.paths.root, 0o700); err != nil {
+	if options.platform.Family() == platform.FamilyDarwin {
+		if err := prepareDarwinNodeRoot(options.paths.root); err != nil {
+			return errors.New("node data directory is unavailable")
+		}
+	} else if err := os.MkdirAll(options.paths.root, 0o700); err != nil {
 		return errors.New("node data directory is unavailable")
 	}
 	runCtx, cancel := context.WithCancel(ctx)

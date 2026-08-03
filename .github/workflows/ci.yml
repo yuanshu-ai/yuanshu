@@ -149,37 +149,47 @@ jobs:
 
   build-targets:
     name: Build (${{ matrix.id }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
           - id: windows-amd64
+            runner: ubuntu-24.04
+            cgo: "0"
             goos: windows
             goarch: amd64
             executable: yuanshu.exe
             archive: yuanshu-windows-amd64.zip
             publish: true
           - id: linux-amd64
+            runner: ubuntu-24.04
+            cgo: "0"
             goos: linux
             goarch: amd64
             executable: yuanshu
             archive: yuanshu-linux-amd64.tar.gz
             publish: true
           - id: darwin-arm64
+            runner: macos-15
+            cgo: "1"
             goos: darwin
             goarch: arm64
             executable: yuanshu
             archive: yuanshu-darwin-arm64.tar.gz
             publish: true
           - id: darwin-amd64
+            runner: macos-15
+            cgo: "1"
             goos: darwin
             goarch: amd64
             executable: yuanshu
             archive: unused
             publish: false
           - id: linux-arm64
+            runner: ubuntu-24.04
+            cgo: "0"
             goos: linux
             goarch: arm64
             executable: yuanshu
@@ -194,7 +204,7 @@ jobs:
       - name: Build target
         shell: bash
         env:
-          CGO_ENABLED: "0"
+          CGO_ENABLED: ${{ matrix.cgo }}
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |

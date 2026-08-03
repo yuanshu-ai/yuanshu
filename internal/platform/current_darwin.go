@@ -2,6 +2,27 @@
 
 package platform
 
-func Current() Platform {
-	return newUnavailablePlatform(FamilyDarwin)
+type darwinPlatform struct {
+	secure     SecureStore
+	processes  ProcessManager
+	ipc        LocalIPC
+	autostart  AutostartManager
+	workspaces WorkspaceInspector
 }
+
+func Current() Platform {
+	return &darwinPlatform{
+		secure:     newDarwinKeychain(),
+		processes:  newDarwinProcessManager(),
+		ipc:        newDarwinLocalIPC(),
+		autostart:  newDarwinAutostartManager(),
+		workspaces: newDarwinWorkspaceInspector(),
+	}
+}
+
+func (p *darwinPlatform) Family() Family                 { return FamilyDarwin }
+func (p *darwinPlatform) SecureStore() SecureStore       { return p.secure }
+func (p *darwinPlatform) Processes() ProcessManager      { return p.processes }
+func (p *darwinPlatform) IPC() LocalIPC                  { return p.ipc }
+func (p *darwinPlatform) Autostart() AutostartManager    { return p.autostart }
+func (p *darwinPlatform) Workspaces() WorkspaceInspector { return p.workspaces }

@@ -13,7 +13,7 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 		t.Fatalf("Family() = %q, want %q", current.Family(), expectedCurrentFamily)
 	}
 
-	wantSecureStore := expectedCurrentFamily == FamilyWindows
+	wantSecureStore := expectedSecureStoreAvailable
 	if current.SecureStore().Available() != wantSecureStore {
 		t.Fatalf("SecureStore().Available() = %v, want %v", current.SecureStore().Available(), wantSecureStore)
 	}
@@ -23,12 +23,11 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 	if current.Processes().Available() != expectedProcessAvailable {
 		t.Fatalf("Processes().Available() = %v, want %v", current.Processes().Available(), expectedProcessAvailable)
 	}
-	wantWindowsUserCapabilities := expectedCurrentFamily == FamilyWindows
 	if current.IPC().Available() != expectedIPCAvailable {
 		t.Fatalf("IPC().Available() = %v, want %v", current.IPC().Available(), expectedIPCAvailable)
 	}
-	if current.Autostart().Available() != wantWindowsUserCapabilities {
-		t.Fatalf("Autostart().Available() = %v, want %v", current.Autostart().Available(), wantWindowsUserCapabilities)
+	if current.Autostart().Available() != expectedAutostartAvailable {
+		t.Fatalf("Autostart().Available() = %v, want %v", current.Autostart().Available(), expectedAutostartAvailable)
 	}
 
 	const canary = "platform-sensitive-canary"
@@ -54,7 +53,7 @@ func TestCurrentPlatformFailsClosed(t *testing.T) {
 			return err
 		}})
 	}
-	if !wantWindowsUserCapabilities {
+	if !expectedAutostartAvailable {
 		tests = append(tests, struct {
 			name      string
 			available bool

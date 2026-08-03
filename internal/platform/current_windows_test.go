@@ -3,8 +3,10 @@
 package platform
 
 const (
-	expectedCurrentFamily      = FamilyWindows
-	expectedProcessAvailable   = true
-	expectedWorkspaceAvailable = true
-	expectedIPCAvailable       = true
+	expectedCurrentFamily        = FamilyWindows
+	expectedSecureStoreAvailable = true
+	expectedAutostartAvailable   = true
+	expectedProcessAvailable     = true
+	expectedWorkspaceAvailable   = true
+	expectedIPCAvailable         = true
 )
