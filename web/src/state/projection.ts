@@ -23,6 +23,7 @@ export interface WorkspaceProjection {
   name?: string;
   adapter?: string;
   permissionProfile?: string;
+  allowNetwork?: boolean;
 }
 
 export interface ThreadProjection {
@@ -351,6 +352,7 @@ export class DataProjection {
         name: stringValue(raw.name),
         adapter: stringValue(raw.adapter),
         permissionProfile: stringValue(raw.permissionProfile),
+        allowNetwork: booleanValue(raw.allowNetwork),
       });
       if (!node.workspaceIds.includes(workspace.workspaceId)) node.workspaceIds.push(workspace.workspaceId);
     }
@@ -649,6 +651,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function numberValue(value: unknown): number | undefined {

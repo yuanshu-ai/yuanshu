@@ -4,7 +4,7 @@ import { formatTime, ResourceMessage, SkeletonRows, statusLabel, StatusPill } fr
 import type { ResourceState } from "./session";
 
 export type DeviceSummary = { nodeId: string; name?: string; online: boolean; runtimeStatus?: string };
-export type WorkspaceSummary = { key: string; nodeId: string; workspaceId: string; name?: string; permissionProfile?: string };
+export type WorkspaceSummary = { key: string; nodeId: string; workspaceId: string; name?: string; permissionProfile?: string; allowNetwork?: boolean };
 
 export function ContextRail({ nodes, workspaces, selectedNodeId, selectedWorkspaceId, resources, onNode, onWorkspace }: { nodes: DeviceSummary[]; workspaces: WorkspaceSummary[]; selectedNodeId: string; selectedWorkspaceId: string; resources: Readonly<Record<string, ResourceState>>; onNode: (value: string) => void; onWorkspace: (value: string) => void }) {
   const nodeResource = selectedNodeId ? resources[`node:${selectedNodeId}`] : undefined;
@@ -49,10 +49,11 @@ export function TasksView({ tasks, allTasks, nodes, workspaces, filter, query, s
   </div>;
 }
 
-export function DevicesView({ nodes, workspaces, selectedNodeId, selectedWorkspaceId, onNode, onWorkspace, onShowTasks }: { nodes: DeviceSummary[]; workspaces: WorkspaceSummary[]; selectedNodeId: string; selectedWorkspaceId: string; onNode: (value: string) => void; onWorkspace: (nodeId: string, workspaceId: string) => void; onShowTasks: () => void }) {
+export function DevicesView({ nodes, workspaces, selectedNodeId, selectedWorkspaceId, onNode, onWorkspace, onNewTask, onShowTasks }: { nodes: DeviceSummary[]; workspaces: WorkspaceSummary[]; selectedNodeId: string; selectedWorkspaceId: string; onNode: (value: string) => void; onWorkspace: (nodeId: string, workspaceId: string) => void; onNewTask: (nodeId: string, workspaceId: string) => void; onShowTasks: () => void }) {
   return <section className="utility-view devices-view"><div className="utility-heading"><div><p>执行位置</p><h1>设备与工作区</h1></div></div><p className="utility-intro">选择设备和工作区后查看对应任务。工作区权限仍由设备本地配置决定。</p><div className="device-card-list">{nodes.map((node) => {
     const nodeWorkspaces = workspaces.filter((workspace) => workspace.nodeId === node.nodeId);
-    return <article className={`device-card ${node.nodeId === selectedNodeId ? "selected" : ""}`} key={node.nodeId}><button className="device-card-heading" type="button" onClick={() => onNode(node.nodeId)}><span className={`node-monogram ${node.online ? "online" : "offline"}`}>{(node.name ?? node.nodeId).slice(0, 1).toUpperCase()}</span><span><b>{node.name ?? "未命名设备"}</b><small>{node.online ? statusLabel(node.runtimeStatus) : "离线"}</small></span><StatusPill tone={node.online ? "accent" : "quiet"}>{node.online ? "在线" : "离线"}</StatusPill></button><div className="device-workspaces">{nodeWorkspaces.map((workspace) => <button type="button" className={workspace.nodeId === selectedNodeId && workspace.workspaceId === selectedWorkspaceId ? "selected" : ""} onClick={() => onWorkspace(node.nodeId, workspace.workspaceId)} key={workspace.key}><Icon name="folder" /><span><b>{workspace.name ?? workspace.workspaceId}</b><small>{permissionLabel(workspace.permissionProfile)}</small></span><Icon name="chevron" /></button>)}{!nodeWorkspaces.length && <p>该设备尚未同步工作区。</p>}</div></article>;
+    const available = node.online && !["unavailable", "not_available", "offline"].includes(node.runtimeStatus ?? "");
+    return <article className={`device-card ${node.nodeId === selectedNodeId ? "selected" : ""}`} key={node.nodeId}><button className="device-card-heading" type="button" onClick={() => onNode(node.nodeId)}><span className={`node-monogram ${available ? "online" : "offline"}`}>{(node.name ?? node.nodeId).slice(0, 1).toUpperCase()}</span><span><b>{node.name ?? "未命名设备"}</b><small>{node.online ? statusLabel(node.runtimeStatus) : "离线"}</small></span><StatusPill tone={available ? "accent" : "quiet"}>{available ? "可用" : "不可用"}</StatusPill></button><div className="device-workspaces">{nodeWorkspaces.map((workspace) => <div className={`device-workspace-row ${workspace.nodeId === selectedNodeId && workspace.workspaceId === selectedWorkspaceId ? "selected" : ""}`} key={workspace.key}><button type="button" className="workspace-select" onClick={() => onWorkspace(node.nodeId, workspace.workspaceId)}><Icon name="folder" /><span><b>{workspace.name ?? "未命名工作区"}</b><small>{permissionLabel(workspace.permissionProfile)} · {networkLabel(workspace.allowNetwork)}</small></span><Icon name="chevron" /></button><button type="button" className="workspace-new-task" disabled={!available} onClick={() => onNewTask(node.nodeId, workspace.workspaceId)} aria-label={`在 ${workspace.name ?? "未命名工作区"} 新建任务`}><Icon name="plus" />新建</button></div>)}{!nodeWorkspaces.length && <p>该设备尚未同步工作区。</p>}</div></article>;
   })}</div><button className="button primary devices-task-action" type="button" disabled={!selectedNodeId || !selectedWorkspaceId} onClick={onShowTasks}>查看所选工作区任务</button></section>;
 }
 
@@ -79,4 +80,8 @@ function filterLabel(value: TaskFilter) {
 
 function permissionLabel(value?: string) {
   return value === "workspace-write" || value === "workspaceWrite" ? "可修改工作区" : "只读";
+}
+
+function networkLabel(value?: boolean) {
+  return value === true ? "允许网络" : value === false ? "网络关闭" : "网络策略由本机控制";
 }

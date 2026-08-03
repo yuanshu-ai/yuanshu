@@ -14,7 +14,7 @@ type Confirmation =
   | { kind: "takeover" }
   | { kind: "approval"; approval: ApprovalProjection; decision: "accept" | "decline"; step: 1 | 2 };
 
-export function ThreadDetail({ session, snapshotRevision, connectionState, state, resource, selectedNodeId, selectedWorkspaceId, selectedThreadId, onBack, onRead }: { session: WorkbenchSession; snapshotRevision: number; connectionState: string; state: WorkbenchSession["projection"]["state"]; resource?: ResourceState; selectedNodeId: string; selectedWorkspaceId: string; selectedThreadId: string; onBack: () => void; onRead: (key: string, sequence: number) => void }) {
+export function ThreadDetail({ session, snapshotRevision, connectionState, state, resource, selectedNodeId, selectedWorkspaceId, selectedThreadId, onBack, onRead, onDraftChange }: { session: WorkbenchSession; snapshotRevision: number; connectionState: string; state: WorkbenchSession["projection"]["state"]; resource?: ResourceState; selectedNodeId: string; selectedWorkspaceId: string; selectedThreadId: string; onBack: () => void; onRead: (key: string, sequence: number) => void; onDraftChange?: (dirty: boolean) => void }) {
   const thread = selectedThreadId ? state.threads[threadKey(selectedNodeId, selectedWorkspaceId, selectedThreadId)] : undefined;
   const node = state.nodes[selectedNodeId];
   const workspace = state.workspaces[`${selectedNodeId}\u001f${selectedWorkspaceId}`];
@@ -74,6 +74,12 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
     textarea.current.style.height = `${Math.min(180, Math.max(72, textarea.current.scrollHeight))}px`;
   }, [input]);
 
+  useEffect(() => {
+    onDraftChange?.(input.trim().length > 0);
+  }, [input, onDraftChange]);
+
+  useEffect(() => () => onDraftChange?.(false), [onDraftChange]);
+
   const run = async (type: "thread.resume" | "turn.start" | "turn.steer" | "turn.interrupt", payload: Record<string, unknown>, target: { threadId?: string; turnId?: string }, clearInput = false) => {
     setBusy(true);
     setMessage("");
@@ -94,22 +100,6 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
     event?.preventDefault();
     const value = input.trim();
     if (!value || !selectedNodeId || !selectedWorkspaceId || busy) return;
-    if (!selectedThreadId) {
-      setBusy(true);
-      setMessage("");
-      try {
-        const handle = await session.startThread(selectedNodeId, selectedWorkspaceId, value);
-        const result = await handle.result;
-        if (result.payload.status !== "confirmed") throw new Error(typeof result.payload.errorCode === "string" ? result.payload.errorCode : "thread_start_rejected");
-        setInput("");
-        setMessage("任务已创建，正在同步上下文");
-      } catch (error) {
-        setMessage(error instanceof Error ? error.message : "创建结果不确定");
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
     if (!leaseHeld) {
       setMessage("当前是只读状态，请先获取任务控制权");
       return;
@@ -161,8 +151,12 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
 
   const visible = limitedTurns(turns, visibleItems);
   const hiddenCount = Math.max(0, itemCount - visibleItems);
-  const placeholder = !selectedThreadId ? "描述你想在这个工作区完成的任务" : activeTurn ? "补充要求或纠偏当前执行" : "继续这个任务";
+  const placeholder = activeTurn ? "补充要求或纠偏当前执行" : "继续这个任务";
   const taskStatus = activeTurn?.status ?? thread?.status;
+
+  if (!selectedThreadId) {
+    return <section className="thread-detail empty-detail" aria-label="任务详情"><EmptyState icon="tasks" title="选择一个任务查看详情" detail="新任务需要先明确选择设备、工作区并确认本地权限。" /></section>;
+  }
 
   return <section className="thread-detail" aria-label="任务详情">
     <div className="thread-detail-heading"><button className="mobile-back" type="button" onClick={onBack} aria-label="返回任务列表"><Icon name="back" /></button><div className="thread-heading-copy"><p>{node?.name ?? "未命名设备"} · {workspace?.name ?? "工作区"}</p><h1>{thread?.title || thread?.preview || (selectedThreadId ? `任务 ${selectedThreadId.slice(0, 10)}` : "开始新任务")}</h1><div className="thread-context-status"><StatusPill tone={connectionState === "connected" ? "accent" : "warning"}>{connectionLabel(connectionState)}</StatusPill>{thread && <StatusPill tone={taskStatus === "failed" ? "danger" : taskStatus === "running" ? "accent" : "quiet"}>{statusLabel(taskStatus)}</StatusPill>}<span>{leaseHeld ? "当前浏览器可操作" : "当前为只读查看"}</span></div></div>{thread && <div className="thread-heading-actions"><LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => scope && void session.releaseLease(scope).catch(() => undefined)} />{!activeTurn && <button className="button secondary" type="button" disabled={busy || connectionState !== "connected" || !leaseHeld} onClick={() => void run("thread.resume", {}, { threadId: selectedThreadId })}>继续执行</button>}</div>}</div>
@@ -172,7 +166,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
 
     <div className="thread-scroll" ref={timeline} onScroll={(event) => { const element = event.currentTarget; const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 64; setAtBottom(bottom); if (bottom) setNewItems(0); }}>
       {hiddenCount > 0 && <button className="older-button" type="button" onClick={() => setVisibleItems((value) => value + 100)}>显示更早的 {Math.min(100, hiddenCount)} 项</button>}
-      {resource?.state === "loading" && !turns.length ? <SkeletonTimeline /> : visible.length ? visible.map((turn) => <TurnCard turn={turn} key={turn.key} />) : <EmptyState icon="tasks" title={selectedThreadId ? "任务中还没有可展示内容" : "在当前工作区开始新任务"} detail="消息、命令、工具活动和文件变化会按顺序显示。" />}
+      {resource?.state === "loading" && !turns.length ? <SkeletonTimeline /> : visible.length ? visible.map((turn) => <TurnCard turn={turn} key={turn.key} />) : <EmptyState icon="tasks" title="任务中还没有可展示内容" detail="消息、命令、工具活动和文件变化会按顺序显示。" />}
       {approvals.length > 0 && <ApprovalPanel ref={approvalPanel} approvals={approvals} leaseHeld={leaseHeld} busy={busy} onResolve={(approval, decision) => setConfirmation({ kind: "approval", approval, decision, step: 1 })} />}
       {files.length > 0 && <FileChanges files={files} session={session} />}
       {newItems > 0 && <button className="new-items-button" type="button" onClick={revealLatest}>查看 {newItems} 条新内容</button>}
@@ -186,7 +180,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
       <form className="composer" onSubmit={(event) => void submit(event)}>
         <label className="sr-only" htmlFor="task-input">任务指令</label>
         <textarea ref={textarea} id="task-input" value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={onComposerKeyDown} placeholder={placeholder} disabled={busy || connectionState !== "connected" || !selectedWorkspaceId} rows={3} />
-        <div className="composer-actions"><span>{!selectedThreadId ? "新任务" : activeTurn ? "纠偏当前执行" : "追加本轮执行"}<small>Cmd/Ctrl + Enter</small></span><div>{activeTurn && <button className="button danger" type="button" disabled={busy || !leaseHeld} onClick={() => void run("turn.interrupt", {}, { threadId: selectedThreadId, turnId: activeTurn.turnId })}><Icon name="stop" />停止</button>}<button className="button primary" type="submit" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId || (Boolean(selectedThreadId) && !leaseHeld)}>{busy ? "发送中" : selectedThreadId && !leaseHeld ? "需要控制权" : "发送"}<Icon name="send" /></button></div></div>
+        <div className="composer-actions"><span>{activeTurn ? "纠偏当前执行" : "追加本轮执行"}<small>Cmd/Ctrl + Enter</small></span><div>{activeTurn && <button className="button danger" type="button" disabled={busy || !leaseHeld} onClick={() => void run("turn.interrupt", {}, { threadId: selectedThreadId, turnId: activeTurn.turnId })}><Icon name="stop" />停止</button>}<button className="button primary" type="submit" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId || !leaseHeld}>{busy ? "发送中" : !leaseHeld ? "需要控制权" : "发送"}<Icon name="send" /></button></div></div>
       </form>
     </div>
 

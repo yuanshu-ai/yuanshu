@@ -25,6 +25,12 @@ describe("personal data projection", () => {
     expect(projection.state.events[eventBucketKey({ nodeId: "node-b", workspaceId: "workspace", threadId: "thread", turnId: "turn" })].find((item) => item.event.payload.text === "home output")).toBeDefined();
   });
 
+  it("projects the workspace network policy advertised by the device", () => {
+    const projection = new DataProjection();
+    projection.apply(message("node-a", 1, "device.status", { status: "online", workspaces: [{ id: "workspace", permissionProfile: "workspace-write", allowNetwork: false }] }));
+    expect(projection.state.workspaces[workspaceKey("node-a", "workspace")]).toMatchObject({ permissionProfile: "workspace-write", allowNetwork: false });
+  });
+
   it("maps snapshots, approvals, gaps, and control results without treating sent as confirmed", () => {
     const projection = new DataProjection({ now: () => "2026-08-03T00:00:00Z" });
     projection.applyControlAction({ messageId: "control-1", nodeId: "node-a", type: "turn.start", state: "sent" });

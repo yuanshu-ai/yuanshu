@@ -95,6 +95,47 @@ test("uses phone, tablet and desktop layout contracts", async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
+test("starts a task only after explicitly confirming its device and workspace", async ({ page }) => {
+  await page.getByRole("button", { name: "新任务" }).click();
+  const dialog = page.getByRole("dialog", { name: "开始新任务" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "下一步" })).toBeDisabled();
+  await expect(dialog.getByLabel("你希望 Codex 完成什么？")).toHaveCount(0);
+
+  await dialog.getByRole("button", { name: /Office Mac.*Codex 可用/ }).click();
+  await dialog.getByRole("button", { name: /Release repo.*可修改工作区文件/ }).click();
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await dialog.getByLabel("你希望 Codex 完成什么？").fill("Create an explicit-target task");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await expect(dialog.getByRole("region", { name: "执行目标" })).toContainText("Office Mac");
+  await expect(dialog.getByRole("region", { name: "执行目标" })).toContainText("Release repo");
+  await dialog.getByRole("button", { name: "确认并启动" }).click();
+
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __yuanshuStartedTarget?: unknown }).__yuanshuStartedTarget)).toEqual({ nodeId: "node-office", workspaceId: "workspace-office", input: "Create an explicit-target task" });
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("heading", { name: "Explicit target task" })).toBeVisible();
+});
+
+test("protects an unsent task draft before leaving the detail", async ({ page }) => {
+  await page.getByRole("button", { name: /Office release/ }).first().click();
+  await page.getByLabel("任务指令").fill("Keep this unsent draft");
+  if ((page.viewportSize()?.width ?? 1280) < 768) {
+    await page.getByRole("button", { name: "返回任务列表" }).click();
+  } else {
+    await page.locator(".desktop-nav").getByRole("button", { name: "设置" }).click();
+  }
+  await expect(page.getByRole("dialog", { name: "放弃未发送的内容？" })).toBeVisible();
+  await page.getByRole("button", { name: "继续编辑" }).click();
+  await expect(page.getByLabel("任务指令")).toHaveValue("Keep this unsent draft");
+});
+
+test("guides a revoked browser back to pairing", async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem("yuanshu-e2e-reauth", "1"));
+  await page.reload();
+  await expect(page.getByRole("alert")).toContainText("当前浏览器需要重新配对", { timeout: 15_000 });
+  await expect(page.getByRole("link", { name: "重新配对" })).toHaveAttribute("href", "https://relay.test/pair");
+});
+
 test("captures the three product-design baselines", async ({ page }, testInfo) => {
   test.skip(process.env.YUANSHU_CAPTURE_WORKBENCH !== "1", "visual artifacts are updated explicitly");
   const output = path.join(process.cwd(), "..", "docs", "design", "web-workbench");
@@ -171,13 +212,18 @@ async function installFakeRelay(page: Page): Promise<void> {
         setTimeout(() => {
           this.readyState = FakeWebSocket.OPEN;
           this.onopen?.();
-          this.emit({ version: "1", type: "challenge", role: "control", connectionId: "connection-e2e", subjectId: clientId, nonce: "nonce-e2e", expiresAt: new Date(Date.now() + 120_000).toISOString() });
+          const rejected = localStorage.getItem("yuanshu-e2e-reauth") === "1";
+          this.emit({ version: "1", type: "challenge", role: "control", connectionId: "connection-e2e", subjectId: rejected ? "revoked-client" : clientId, nonce: "nonce-e2e", expiresAt: new Date(Date.now() + 120_000).toISOString() });
         });
       }
 
       send(data: string): void {
         const message = JSON.parse(data) as Record<string, unknown>;
         if (message.type === "authenticate") {
+          if (localStorage.getItem("yuanshu-e2e-reauth") === "1") {
+            this.close();
+            return;
+          }
           this.emit({ version: "1", type: "authenticated" });
           return;
         }
@@ -204,7 +250,7 @@ async function installFakeRelay(page: Page): Promise<void> {
         }
         if (type === "device.sync" || type === "workspace.list") {
           const office = nodeId === "node-office";
-          this.nodeEvent(control, "device.status", { status: "online", runtime: "ready", name: office ? "Office Mac" : "Home PC", workspaces: [{ id: office ? "workspace-office" : "workspace-home", name: office ? "Release repo" : "Home repo", permissionProfile: "workspace-write" }] });
+          this.nodeEvent(control, "device.status", { status: "online", runtime: "ready", name: office ? "Office Mac" : "Home PC", workspaces: [{ id: office ? "workspace-office" : "workspace-home", name: office ? "Release repo" : "Home repo", permissionProfile: "workspace-write", allowNetwork: false }] });
           this.nodeEvent(control, "control.result", { status: "confirmed" });
           return;
         }
@@ -220,6 +266,11 @@ async function installFakeRelay(page: Page): Promise<void> {
           return;
         }
         if (type === "thread.read") {
+          if (control.threadId === "thread-new") {
+            this.nodeEvent(control, "thread.snapshot", { title: "Explicit target task", status: "running", historyState: "complete", turns: [] });
+            this.nodeEvent(control, "control.result", { status: "confirmed" });
+            return;
+          }
           this.nodeEvent(control, "thread.snapshot", { title: "Office release", preview: "Ship the personal alpha", status: "running", historyState: "complete", turns: [{ id: "turn-release", status: "running", items: [{ id: "agent-1", kind: "agent_message", status: "completed", text: "Remote workbench ready" }, { id: "file-app", kind: "file_change", status: "completed", path: "src/app.ts", changeType: "modified" }] }], pendingApprovals: [{ approvalId: "approval-1", turnId: "turn-release", itemId: "command-1", operationDigest: "sha256-approval", kind: "command", risk: "high", summary: "Run release verification" }] });
           this.nodeEvent(control, "control.result", { status: "confirmed" });
           return;
@@ -242,6 +293,16 @@ async function installFakeRelay(page: Page): Promise<void> {
         }
         if (type === "notifications.read") {
           this.serverResult(control, { status: "confirmed" });
+          return;
+        }
+        if (type === "thread.start") {
+          (window as unknown as { __yuanshuStartedTarget?: unknown }).__yuanshuStartedTarget = { nodeId, workspaceId, input: payload.input };
+          setTimeout(() => {
+            const sequence = (sequences[nodeId] ?? 0) + 1;
+            sequences[nodeId] = sequence;
+            this.emit({ protocolVersion: "1.0", messageId: `event-${nodeId}-${sequence}`, type: "thread.started", ownerId, nodeId, workspaceId, threadId: "thread-new", streamId: "node-events-v1", sequence, correlationId: String(control.messageId), sentAt: new Date().toISOString(), payload: { status: "running", title: "Explicit target task" } });
+            this.nodeEvent(control, "control.result", { status: "confirmed" });
+          }, 0);
           return;
         }
         if (type === "turn.steer") {

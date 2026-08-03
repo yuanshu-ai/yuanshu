@@ -44,7 +44,72 @@ describe("personal workbench", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "设备" })[0]);
     expect(screen.getByRole("heading", { name: "设备与工作区" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Office repo/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Office repo/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "在 Office repo 新建任务" })).toBeEnabled();
+  });
+
+  it("requires an explicit target before starting a new task", async () => {
+    const fake = new FakeSession();
+    render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "新任务" }));
+    expect(screen.getByRole("dialog", { name: "开始新任务" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
+    expect(screen.queryByLabelText("你希望 Codex 完成什么？")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Office.*Codex 可用/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Office repo.*可修改工作区文件/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.change(screen.getByLabelText("你希望 Codex 完成什么？"), { target: { value: "Run the release checks" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("region", { name: "执行目标" })).toHaveTextContent("Office");
+    expect(screen.getByRole("region", { name: "执行目标" })).toHaveTextContent("Office repo");
+    fireEvent.click(screen.getByRole("button", { name: "确认并启动" }));
+    await waitFor(() => expect(fake.startThread).toHaveBeenCalledWith("node-a", "workspace-a", "Run the release checks"));
+  });
+
+  it("prefills only the workspace explicitly chosen from the device view", () => {
+    const fake = new FakeSession();
+    render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "设备" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "在 Office repo 新建任务" }));
+    expect(screen.getByLabelText("你希望 Codex 完成什么？")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "执行目标" })).toHaveTextContent("Office repo");
+  });
+
+  it("protects an unsent task draft during application and browser navigation", async () => {
+    const fake = new FakeSession();
+    render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "继续任务 Office task" }));
+    await screen.findByRole("heading", { name: "Office task" });
+    fireEvent.change(screen.getByLabelText("任务指令"), { target: { value: "unfinished guidance" } });
+
+    const leaving = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(leaving);
+    expect(leaving.defaultPrevented).toBe(true);
+    fireEvent.click(screen.getAllByRole("button", { name: "设置" })[0]);
+    expect(screen.getByRole("dialog", { name: "放弃未发送的内容？" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+    expect(screen.getByLabelText("任务指令")).toHaveValue("unfinished guidance");
+    fireEvent.click(screen.getAllByRole("button", { name: "设置" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "放弃草稿" }));
+    expect(screen.getByRole("heading", { name: "浏览器与安全" })).toBeInTheDocument();
+  });
+
+  it("layers settings and keeps re-pairing visible after authorization expires", () => {
+    const fake = new FakeSession("reauth_required");
+    render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair", adminEnabled: true, adminUrl: "/admin" }} onSettingsSaved={() => undefined} />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("当前浏览器需要重新配对");
+    expect(screen.getByRole("link", { name: "重新配对" })).toHaveAttribute("href", "https://relay.test/pair");
+    fireEvent.click(screen.getAllByRole("button", { name: "设置" })[0]);
+    expect(screen.getByRole("button", { name: "基础" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("button", { name: "安全" }));
+    expect(screen.getByRole("heading", { name: "控制端授权" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "管理已授权控制端" })).toHaveAttribute("href", "/admin");
+    fireEvent.click(screen.getByRole("button", { name: "高级" }));
+    expect(screen.getByRole("heading", { name: "Relay 与配对地址" })).toBeInTheDocument();
   });
 
   it("pauses live following while reading older content and exposes new progress", async () => {
@@ -69,12 +134,12 @@ class FakeSession {
   private snapshot: WorkbenchSnapshot;
   private listener?: () => void;
 
-  constructor() {
-    this.projection.apply(event(1, "device.status", { status: "online", name: "Office", workspaces: [{ id: "workspace-a", name: "Office repo", permissionProfile: "workspace-write" }] }));
+  constructor(connectionState: WorkbenchSnapshot["connectionState"] = "connected") {
+    this.projection.apply(event(1, "device.status", { status: "online", runtime: "ready", name: "Office", workspaces: [{ id: "workspace-a", name: "Office repo", permissionProfile: "workspace-write", allowNetwork: false }] }));
     this.projection.apply(event(2, "thread.snapshot", { threads: [{ id: "thread-a", title: "Office task", preview: "Continue release", status: "running", updatedAt: "2026-08-03T02:00:00Z" }] }, "workspace-a"));
     this.projection.apply(event(3, "turn.started", { status: "running" }, "workspace-a", "thread-a", "turn-a"));
     this.projection.applyServerControlResult({ ...event(4, "control.result", { status: "confirmed", notifications: [{ id: "notice", nodeId: "node-a", workspaceId: "workspace-a", threadId: "thread-a", type: "task.completed", summary: "任务已完成", sourceSequence: 3, createdAt: "2026-08-03T02:10:00Z", read: false }] }), streamId: "server-control-v1-client" });
-    this.snapshot = { revision: 1, connectionState: "connected", projection: this.projection.state, resources: {} };
+    this.snapshot = { revision: 1, connectionState, projection: this.projection.state, resources: {} };
   }
 
   subscribe = (listener: () => void) => { this.listener = listener; return () => { this.listener = undefined; }; };
@@ -88,7 +153,7 @@ class FakeSession {
   acquireLease = vi.fn(() => Promise.resolve({ state: "held" as const, leaseId: "lease", epoch: 1, expiresAt: "2099-01-01T00:00:00Z" }));
   releaseLease = vi.fn(() => Promise.resolve({ state: "none" as const, epoch: 2 }));
   request = vi.fn(() => Promise.resolve(event(10, "control.result", { status: "confirmed" })));
-  startThread = vi.fn();
+  startThread = vi.fn(() => Promise.resolve({ messageId: "start-thread", result: Promise.resolve(event(11, "control.result", { status: "confirmed" })) }));
   loadDiff = vi.fn(() => Promise.resolve());
 
   push(next: YuanshuMessage) {

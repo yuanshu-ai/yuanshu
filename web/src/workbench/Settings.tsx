@@ -6,18 +6,25 @@ import type { ControlStorage } from "../relay/storage";
 import { Icon } from "./Icon";
 import type { WorkbenchSession } from "./session";
 
-export function SettingsView({ session, storage, settings, selectedNodeId, onSettingsSaved }: { session: WorkbenchSession; storage: ControlStorage; settings: RuntimeSettings; selectedNodeId: string; onSettingsSaved: () => void }) {
+type SettingsSection = "basic" | "security" | "advanced";
+
+export function SettingsView({ session, storage, settings, connectionState, selectedNodeId, onSettingsSaved }: { session: WorkbenchSession; storage: ControlStorage; settings: RuntimeSettings; connectionState: string; selectedNodeId: string; onSettingsSaved: () => void }) {
+  const [section, setSection] = useState<SettingsSection>("basic");
   return <section className="utility-view" aria-labelledby="settings-title">
-    <div className="utility-heading"><div><p>设置</p><h1 id="settings-title">连接与本机边界</h1></div></div>
-    <div className="settings-columns">
-      <ConnectionSettings initial={settings} storage={storage} onSaved={onSettingsSaved} />
-      {selectedNodeId ? <NodeSettings session={session} nodeId={selectedNodeId} /> : <div className="state-panel"><Icon name="node" /><b>尚未选择 Node</b><p>配对并选择一台电脑后，可以读取脱敏的 Node 配置。</p></div>}
-    </div>
-    <div className="settings-links">
-      <a href={settings.pairingUrl}>配对新设备</a>
-      {settings.adminEnabled && <a href={settings.adminUrl ?? "/admin"}>Server 管理</a>}
-    </div>
+    <div className="utility-heading"><div><p>设置</p><h1 id="settings-title">浏览器与安全</h1></div></div>
+    <nav className="settings-sections" aria-label="设置分类">{(["basic", "security", "advanced"] as const).map((value) => <button type="button" className={section === value ? "active" : ""} aria-current={section === value ? "page" : undefined} onClick={() => setSection(value)} key={value}>{settingsSectionLabel(value)}</button>)}</nav>
+    {section === "basic" && <div className="settings-overview"><section className="settings-card"><div className="settings-card-heading"><div><p>当前浏览器</p><h2>{settings.displayName || "未命名浏览器"}</h2></div><Icon name="node" /></div><dl className="settings-facts"><div><dt>授权状态</dt><dd>{connectionState === "reauth_required" ? "需要重新配对" : "已保存控制端身份"}</dd></div><div><dt>实时连接</dt><dd>{connectionStateLabel(connectionState)}</dd></div><div><dt>显示偏好</dt><dd>跟随浏览器与系统设置</dd></div></dl><p className="settings-help">当前浏览器的控制端私钥保存在 IndexedDB 中，不会发送给 Server。</p></section><section className="settings-card"><div className="settings-card-heading"><div><p>下一步</p><h2>{connectionState === "connected" ? "工作台可以安全接续任务" : "检查当前连接"}</h2></div><Icon name={connectionState === "connected" ? "check" : "warning"} /></div><p className="settings-help">连接中断不会停止设备上正在执行的任务。恢复后会继续同步事件和控制结果。</p><div className="settings-links"><button className="button secondary" type="button" onClick={() => void session.refreshAll()}><Icon name="refresh" />刷新状态</button>{connectionState === "reauth_required" && <a className="button warning" href={settings.pairingUrl}>重新配对</a>}</div></section></div>}
+    {section === "security" && <div className="settings-overview"><section className="settings-card"><div className="settings-card-heading"><div><p>安全</p><h2>控制端授权</h2></div><Icon name="lock" /></div><p className="settings-help">查看任务不会取得控制权。发送、纠偏、停止和审批仍需要当前任务的控制权。</p><div className="settings-links"><a className="button primary" href={settings.pairingUrl}>配对新的浏览器</a>{settings.adminEnabled && <a className="button secondary" href={settings.adminUrl ?? "/admin"}>管理已授权控制端</a>}</div></section><section className="settings-card"><div className="settings-card-heading"><div><p>边界</p><h2>本地环境保持在设备内</h2></div><Icon name="node" /></div><p className="settings-help">工作区真实路径、Codex 凭据、SSH/Git 凭据和控制端私钥不会在普通工作台中展示。扩大工作区权限或开启网络仍需设备本地确认。</p></section></div>}
+    {section === "advanced" && <><div className="settings-columns"><ConnectionSettings initial={settings} storage={storage} onSaved={onSettingsSaved} />{selectedNodeId ? <NodeSettings session={session} nodeId={selectedNodeId} /> : <div className="state-panel"><Icon name="node" /><b>尚未选择设备</b><p>选择一台设备后，可以读取它的脱敏高级配置。</p></div>}</div><div className="settings-links">{settings.adminEnabled && <a href={settings.adminUrl ?? "/admin"}>打开 Server 管理</a>}</div></>}
   </section>;
+}
+
+function settingsSectionLabel(value: SettingsSection) {
+  return ({ basic: "基础", security: "安全", advanced: "高级" } as const)[value];
+}
+
+function connectionStateLabel(value: string) {
+  return ({ connected: "实时连接", connecting: "正在连接", authenticating: "正在安全认证", reconnecting: "正在重连", reauth_required: "需要重新配对", paused: "连接已暂停", closed: "连接已关闭", idle: "尚未连接" } as Record<string, string>)[value] ?? "状态未知";
 }
 
 export function ConnectionSettings({ initial, storage, compact = false, onSaved }: { initial: RuntimeSettings; storage: ControlStorage; compact?: boolean; onSaved: () => void }) {

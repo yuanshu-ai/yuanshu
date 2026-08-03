@@ -1,9 +1,14 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 
-export function Dialog({ title, children, actions, onClose, destructive = false }: { title: string; children: ReactNode; actions: ReactNode; onClose: () => void; destructive?: boolean }) {
+export function Dialog({ title, children, actions, onClose, destructive = false, className = "" }: { title: string; children: ReactNode; actions: ReactNode; onClose: () => void; destructive?: boolean; className?: string }) {
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
+  const closeRef = useRef(onClose);
+
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     restoreFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -15,7 +20,7 @@ export function Dialog({ title, children, actions, onClose, destructive = false 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        closeRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -37,10 +42,10 @@ export function Dialog({ title, children, actions, onClose, destructive = false 
       document.body.style.overflow = previousOverflow;
       restoreFocus.current?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return <div className="dialog-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div ref={panel} className={`dialog-panel ${destructive ? "destructive" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+    <div ref={panel} className={`dialog-panel ${destructive ? "destructive" : ""} ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <h2 id={titleId}>{title}</h2>
       <div className="dialog-content">{children}</div>
       <div className="dialog-actions">{actions}</div>
