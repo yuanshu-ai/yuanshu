@@ -26,6 +26,24 @@ func requireKnownCodexVersion(t *testing.T, raw []byte) string {
 	return version
 }
 
+func liveWorkspace(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve user home for live workspace: %v", err)
+	}
+	workspace, err := os.MkdirTemp(home, ".yuanshu-codex-live-")
+	if err != nil {
+		t.Fatalf("create live workspace: %v", err)
+	}
+	if err := os.Chmod(workspace, 0o700); err != nil {
+		_ = os.RemoveAll(workspace)
+		t.Fatalf("restrict live workspace: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workspace) })
+	return workspace
+}
+
 func TestSchemaSnapshotAndFixtures(t *testing.T) {
 	t.Parallel()
 

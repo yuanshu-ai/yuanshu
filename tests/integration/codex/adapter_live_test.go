@@ -64,15 +64,8 @@ func TestAdapterLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
 	defer cancel()
 
-	base := t.TempDir()
-	workspacePath := filepath.Join(base, "workspace")
-	dataPath := filepath.Join(base, "data")
-	if err := os.Mkdir(workspacePath, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(dataPath, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	workspacePath := liveWorkspace(t)
+	dataPath := t.TempDir()
 	nodeStore, err := store.Open(ctx, filepath.Join(dataPath, "node.db"), store.Options{})
 	if err != nil {
 		t.Fatal(err)

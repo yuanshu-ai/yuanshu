@@ -26,7 +26,7 @@ func TestCredentialLiveBoundary(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
 	defer cancel()
-	workspace := t.TempDir()
+	workspace := liveWorkspace(t)
 
 	versionOutput, err := exec.CommandContext(ctx, "codex", "--version").Output()
 	if err != nil {

@@ -125,7 +125,7 @@ func TestLiveAppServerProtocol(t *testing.T) {
 	var winner liveScenarioResult
 	var failures []error
 	for _, scenario := range scenarios {
-		result, retryable, err := runActiveApprovalScenario(ctx, t.TempDir(), scenario, budget)
+		result, retryable, err := runActiveApprovalScenario(ctx, liveWorkspace(t), scenario, budget)
 		if err == nil {
 			winner = result
 			break
@@ -180,8 +180,12 @@ func runActiveApprovalScenario(ctx context.Context, workspace string, scenario a
 	if err != nil {
 		return result, false, fmt.Errorf("classify authentication: %w", err)
 	}
-	if authMode != probe.AuthAPIKey {
-		return result, false, fmt.Errorf("authentication mode = %q, want %q", authMode, probe.AuthAPIKey)
+	switch authMode {
+	case probe.AuthAPIKey, probe.AuthChatGPT, probe.AuthCustomProvider:
+		// Any supported local authentication mode is valid for the live
+		// app-server probe. The adapter must not require one credential type.
+	default:
+		return result, false, fmt.Errorf("authentication mode = %q is unavailable", authMode)
 	}
 
 	var startResult struct {

@@ -32,7 +32,7 @@ func TestRuntimeModeLive(t *testing.T) {
 
 	assertRuntimeCLISurface(t, ctx)
 
-	workspace := t.TempDir()
+	workspace := liveWorkspace(t)
 	authModes := make([]probe.AuthMode, 0, 2)
 	for attempt := 1; attempt <= 2; attempt++ {
 		client, err := startRuntimeModeClient(ctx, workspace)
