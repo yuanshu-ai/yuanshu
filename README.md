@@ -56,7 +56,7 @@ Windows, macOS, and Linux are all first-class product targets. The order is phas
 
 The protocol, transports, adapters, configuration model, and event journal will share one Go implementation. Platform-specific code is limited to secure storage, IPC, process lifecycle, autostart, path validation, and release signing. The project prefers pure-Go dependencies; introducing CGO requires an explicit cross-platform build and supply-chain review.
 
-The shared Platform contract is established for all three target families. Windows now provides current-user DPAPI secure storage, handle-based workspace inspection, and direct user-process lifecycle management; other unimplemented production capabilities continue to fail closed. Stateful in-memory fakes cover secure storage, direct process lifecycle, logical local IPC, current-user autostart, and workspace facts. Keychain, Secret Service, Named Pipe, Unix socket, Job Object, LaunchAgent, and systemd integrations remain later platform tasks. Workspace inspection reports operating-system facts only—the Node policy layer makes every allow/deny decision.
+The shared Platform contract is established for all three target families. Windows provides current-user DPAPI, Named Pipe, Job Object process ownership, native tray, workspace inspection, and user-level autostart. macOS provides Security.framework Keychain storage, Unix socket IPC, process-group cleanup, LaunchAgent autostart, workspace inspection, and a native AppKit menu bar item. Linux Node secure storage and service integration remain later work. Workspace inspection reports operating-system facts only; the Node policy layer makes every allow or deny decision.
 
 ## Architecture direction
 
@@ -92,7 +92,7 @@ yuanshu node         Local bridge connecting an Agent Runtime to a Server
 yuanshu standalone   Server + Web + local Node in one deployment
 ```
 
-`yuanshu node` is the formal Windows user-session Alpha entry. It loads the versioned local configuration, owns Codex child processes, exposes a current-user-only management pipe, and provides a native tray icon. `yuanshu server` starts the formal metadata, pairing, and realtime routing service. `yuanshu standalone` now composes that Server with a local Node over the in-process `StandaloneTransport`; the Server never imports or calls an Agent Runtime. Codex app-server and other agent internals must never be exposed directly to the public internet.
+`yuanshu node` is the formal Windows and macOS user-session Alpha entry. It loads the versioned local configuration, owns Codex child processes, exposes current-user-only IPC, provides a native tray or menu bar item, and starts its loopback control center only when the user opens it. `yuanshu server` starts the formal metadata, embedded Web workbench, pairing, and realtime routing service. `yuanshu standalone` composes that Server with a local Node over the in-process `StandaloneTransport`; the Server never imports or calls an Agent Runtime. Codex app-server and other agent internals must never be exposed directly to the public internet.
 
 ## Project status
 
@@ -111,6 +111,8 @@ yuanshu standalone   Server + Web + local Node in one deployment
 - [x] Node-managed Codex stdio Runtime, formal Adapter contract, and Thread/Turn ownership
 - [x] Bounded Node event journal, cursor replay, snapshots, and ambiguous recovery
 - [x] Windows Yuanshu Node alpha
+- [x] macOS arm64 Node platform and native menu bar alpha
+- [x] On-demand loopback Node control center with native confirmation boundary
 - [x] Native three-platform CI, containerized Linux race, dependency/secret scanning, and SBOM
 - [x] Formal loopback Server bootstrap and SQLite metadata baseline
 - [x] TLS-only WSS Hub, authenticated RelayTransport, and Owner/Node routing
@@ -119,7 +121,7 @@ yuanshu standalone   Server + Web + local Node in one deployment
 - [ ] Linux Server and Standalone self-hosting preview
 - [ ] Linux Server and real-phone self-hosted deployment
 - [ ] Linux Yuanshu Node
-- [ ] macOS arm64 Yuanshu Node
+- [ ] macOS arm64 real-device Alpha acceptance
 - [ ] Mobile PWA task loop
 - [ ] Security hardening and first public preview
 
@@ -161,12 +163,14 @@ go vet ./...
 go build ./...
 pnpm --dir web test
 pnpm --dir web build
+pnpm --dir node-web test
+pnpm --dir node-web build
 ```
 
-The Web build writes the production bundle to
-`internal/server/webassets/dist`; those deterministic assets are embedded by
-ordinary Go builds. Use `pnpm --dir web dev` for the separate development
-server.
+The remote Web build writes to `internal/server/webassets/dist`. The local
+Node control center writes to `internal/node/webassets/dist`. Both deterministic
+bundles are embedded by ordinary Go builds. Use `pnpm --dir web dev` or
+`pnpm --dir node-web dev` for separate development servers.
 
 The formal Protocol v1 Schema is the sole wire-type source. Regenerate and verify the committed Go/TypeScript types with:
 
@@ -184,10 +188,11 @@ The versioned Node configuration contract uses strict TOML and is defined by `sc
 
 The configuration package supports atomic replacement, a last-known-good `.bak` file, explicit recovery status, and sanitized SecretRef health checks. On Windows, configured workspaces are reconciled into the Node's local SQLite policy store. Remote callers use only opaque workspace IDs; canonical paths, stable file identities, reparse-point checks, and read/write/network ceilings remain local. The formal CodexAdapter consumes that boundary, while mapped Protocol v1 events, cursor replay, snapshots, and conservative ambiguous recovery survive Node restarts.
 
-The Windows Alpha uses `%LOCALAPPDATA%\Yuanshu\config.toml` by default. It runs in the current user session, shows a native tray menu, uses a current-user-only Named Pipe, protects Agent process trees with a Job Object, and can be explicitly enabled at login through HKCU. A bound Relay Node establishes outbound WSS for online pairing; a new browser must be confirmed through the local CLI and cannot approve itself. The tray remains deliberately thin rather than becoming a second settings UI.
+The Windows Alpha uses `%LOCALAPPDATA%\Yuanshu\config.toml`; macOS uses `~/Library/Application Support/Yuanshu/config.toml`. Both run in the current user session with native tray or menu bar controls and user-level autostart. Run `yuanshu node ui` to open the on-demand local control center. It listens only on an ephemeral `127.0.0.1` port, exchanges a one-time fragment token for a memory-only session, and shuts down after idle expiry. It can display redacted status and manage safe settings. Relay targets and workspace permission changes become pending records and require the native review dialog or local CLI before application. Credentials, private keys, absolute workspace paths, Prompt content, and raw TOML are never exposed to this UI.
 
 ```powershell
 yuanshu node
+yuanshu node ui
 yuanshu node status --json
 yuanshu node doctor
 yuanshu node pairing create

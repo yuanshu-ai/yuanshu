@@ -3,8 +3,11 @@ package node
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
@@ -49,6 +52,10 @@ type host struct {
 	controlName      string
 	configController configController
 	controlCenter    *controlCenter
+	activeConfig     config.Config
+	workspaceManager *workspace.Manager
+	identityManager  *identity.Manager
+	nodeIdentity     identity.Identity
 }
 
 func runHost(ctx context.Context, options runOptions) error {
@@ -151,6 +158,7 @@ func (h *host) reload(ctx context.Context) error {
 		return h.fail("workspace_unavailable")
 	}
 	h.status.update(func(value *Status) { value.Workspaces = len(loaded.Config.Workspaces) })
+	h.workspaceManager = workspaceManager
 	identityManager, err := identity.NewManager(local, h.options.platform.SecureStore(), loaded.Config.Identity.PrivateKeyRef, identity.Options{})
 	if err != nil {
 		return h.fail("identity_invalid")
@@ -159,6 +167,7 @@ func (h *host) reload(ctx context.Context) error {
 	if err != nil {
 		return h.fail("identity_unavailable")
 	}
+	h.identityManager, h.nodeIdentity = identityManager, nodeIdentity
 	bound := nodeIdentity.OwnerID != "" && nodeIdentity.NodeID != ""
 	h.status.update(func(value *Status) {
 		if bound {
@@ -176,13 +185,15 @@ func (h *host) reload(ctx context.Context) error {
 	if bound && loaded.Config.Transport.Mode == config.TransportRelay {
 		credential, secretErr := h.options.platform.SecureStore().Get(ctx, loaded.Config.Relay.CredentialRef)
 		if secretErr == nil {
+			httpClient, clientErr := relayHTTPClient(loaded.Config.Relay.ProxyURL, time.Duration(loaded.Config.Relay.ConnectTimeoutSeconds)*time.Second)
 			manager, managerErr := newPairingManager(pairingManagerOptions{
 				RelayURL: loaded.Config.Relay.URL, Timeout: time.Duration(loaded.Config.Relay.ConnectTimeoutSeconds) * time.Second,
-				Identity: nodeIdentity, Signer: identityManager, Local: local, Secrets: h.options.platform.SecureStore(),
+				HTTPClient: httpClient,
+				Identity:   nodeIdentity, Signer: identityManager, Local: local, Secrets: h.options.platform.SecureStore(),
 				CredentialRef: loaded.Config.Relay.CredentialRef, Credential: credential,
 			})
 			clear(credential)
-			if managerErr == nil {
+			if clientErr == nil && managerErr == nil {
 				h.pairing = manager
 				_ = manager.SyncTrust(ctx)
 				h.status.update(func(value *Status) { value.RemoteControl = "connecting" })
@@ -297,9 +308,106 @@ func (h *host) reload(ctx context.Context) error {
 		state = "unpaired"
 	}
 	h.status.update(func(value *Status) { value.State = state })
+	h.activeConfig = loaded.Config
 	h.options.trayUpdate(h.status.snapshot())
 	h.log.write("node_ready", state, len(loaded.Config.Workspaces))
 	return nil
+}
+
+func (h *host) reloadConfiguration(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	configurationStore, err := config.NewFileStore(h.options.configPath)
+	if err != nil {
+		return errors.New("node configuration is unavailable")
+	}
+	loaded, err := configurationStore.Load(ctx)
+	if err != nil {
+		return errors.New("node configuration is unavailable")
+	}
+
+	h.mu.Lock()
+	if h.runtime == nil || h.controlSession == nil || h.workspaceManager == nil || h.controlEvents == nil || h.local == nil ||
+		!sameRuntimeBoundary(h.activeConfig, loaded.Config) {
+		h.mu.Unlock()
+		return h.reload(ctx)
+	}
+	previous := h.activeConfig
+	rollback := func() {
+		_ = configurationStore.Save(context.Background(), previous)
+		_ = h.workspaceManager.Reconcile(context.Background(), previous.Workspaces)
+		_ = h.controlEvents.UpdateRetention(time.Duration(previous.Events.MaxAgeHours)*time.Hour, int64(previous.Events.MaxSizeMiB)<<20)
+	}
+	if err := h.workspaceManager.Reconcile(ctx, loaded.Config.Workspaces); err != nil {
+		rollback()
+		h.mu.Unlock()
+		return errors.New("workspace configuration could not be applied")
+	}
+	if err := h.controlEvents.UpdateRetention(time.Duration(loaded.Config.Events.MaxAgeHours)*time.Hour, int64(loaded.Config.Events.MaxSizeMiB)<<20); err != nil {
+		rollback()
+		h.mu.Unlock()
+		return errors.New("event retention could not be applied")
+	}
+	if !reflect.DeepEqual(previous.Relay, loaded.Config.Relay) {
+		if err := h.replaceRelayLocked(ctx, loaded.Config); err != nil {
+			rollback()
+			h.mu.Unlock()
+			return errors.New("relay configuration could not be applied")
+		}
+	}
+	h.activeConfig = loaded.Config
+	h.controlName = loaded.Config.Host.Name
+	refreshTrust := func(context.Context) error { return errors.New("relay trust is unavailable") }
+	if h.pairing != nil {
+		refreshTrust = h.pairing.SyncTrust
+	}
+	h.controlSession.Reconfigure(h.controlName, refreshTrust, h.configController)
+	h.status.update(func(value *Status) {
+		if loaded.RecoveredFromBackup {
+			value.Config = "recovered"
+		} else {
+			value.Config = "ready"
+		}
+		value.Workspaces = len(loaded.Config.Workspaces)
+	})
+	status := h.status.snapshot()
+	h.mu.Unlock()
+	h.options.trayUpdate(status)
+	h.log.write("config_reloaded", "ready", len(loaded.Config.Workspaces))
+	return nil
+}
+
+func sameRuntimeBoundary(left, right config.Config) bool {
+	left.Workspaces = append([]config.WorkspaceConfig(nil), left.Workspaces...)
+	right.Workspaces = append([]config.WorkspaceConfig(nil), right.Workspaces...)
+	left.Host, right.Host = config.HostConfig{}, config.HostConfig{}
+	left.Relay, right.Relay = config.RelayConfig{}, config.RelayConfig{}
+	left.Events, right.Events = config.EventsConfig{}, config.EventsConfig{}
+	if len(left.Workspaces) != len(right.Workspaces) {
+		return false
+	}
+	for index := range left.Workspaces {
+		left.Workspaces[index].DisplayName, right.Workspaces[index].DisplayName = "", ""
+		left.Workspaces[index].PermissionProfile, right.Workspaces[index].PermissionProfile = "", ""
+		left.Workspaces[index].AllowNetwork, right.Workspaces[index].AllowNetwork = false, false
+	}
+	return reflect.DeepEqual(left, right)
+}
+
+func relayHTTPClient(proxyValue string, timeout time.Duration) (*http.Client, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if proxyValue != "" {
+		proxyURL, err := url.Parse(proxyValue)
+		if err != nil || proxyURL.Host == "" || proxyURL.User != nil {
+			return nil, errors.New("relay proxy is invalid")
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	return &http.Client{Transport: transport, Timeout: timeout}, nil
 }
 
 func (h *host) fail(code string) error {
@@ -355,6 +463,10 @@ func (h *host) closeResourcesLocked() error {
 	h.controlEvents, h.controlValidator = nil, nil
 	h.controlTarget, h.controlName = protocolv1.Target{}, ""
 	h.configController = nil
+	h.activeConfig = config.Config{}
+	h.workspaceManager = nil
+	h.identityManager = nil
+	h.nodeIdentity = identity.Identity{}
 	if h.trustCancel != nil {
 		h.trustCancel()
 		h.trustCancel = nil
@@ -398,11 +510,21 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 	}
 	if request.Command == "reload" {
 		response.OK = true
-		go func() { _ = h.reload(h.runCtx) }()
+		go func() { _ = h.reloadConfiguration(h.runCtx) }()
 		return response
 	}
 	if request.Command == "copy_diagnostics" {
 		response.OK = true
+		return response
+	}
+	if request.Command == "autostart_set" {
+		if request.Enabled == nil {
+			response.Error = "invalid_request"
+		} else if err := h.setAutostart(ctx, *request.Enabled); err != nil {
+			response.Error = "autostart_failed"
+		} else {
+			response.OK = true
+		}
 		return response
 	}
 	if request.Command == "enrollment_join" {
@@ -451,7 +573,7 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 		}
 		response.OK, response.Config = true, result.Payload
 		if result.Reload {
-			go func() { _ = h.reload(h.runCtx) }()
+			go func() { _ = h.reloadConfiguration(h.runCtx) }()
 		}
 	case "config_pending":
 		if h.configController == nil {
@@ -479,7 +601,7 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 		}
 		response.OK = true
 		if result.Reload {
-			go func() { _ = h.reload(h.runCtx) }()
+			go func() { _ = h.reloadConfiguration(h.runCtx) }()
 		}
 	case "config_reject":
 		if h.configController == nil {
@@ -590,20 +712,12 @@ func (h *host) startControlSessionLocked() error {
 	if h.controlSession != nil || h.relaySupervisor != nil {
 		return nil
 	}
-	var supervisor *relaySupervisor
 	session, err := NewControlSession(ControlSessionOptions{
 		Validator: h.controlValidator, Target: h.controlTarget,
 		Events: h.controlEvents, Store: h.local, Runtime: h.runtime, DeviceName: h.controlName, RefreshTrust: h.pairing.SyncTrust,
-		EventFailure: func(error) {
-			if supervisor != nil {
-				supervisor.Close()
-			}
-			h.status.update(func(value *Status) { value.RemoteControl, value.RelayLastError = "unavailable", "eventlog_failure" })
-			h.options.trayUpdate(h.status.snapshot())
-			h.log.write("node_error", "eventlog_failure", 0)
-		},
+		EventFailure: func(error) { go h.handleEventFailure() },
 		Config:       h.configController,
-		ConfigReload: func() { _ = h.reload(h.runCtx) },
+		ConfigReload: func() { _ = h.reloadConfiguration(h.runCtx) },
 	})
 	if err != nil {
 		return err
@@ -611,9 +725,25 @@ func (h *host) startControlSessionLocked() error {
 	if err := session.Start(h.runCtx); err != nil {
 		return err
 	}
-	supervisor, err = newRelaySupervisor(h.runCtx, relaySupervisorOptions{
-		Connect: h.pairing.Connect,
-		Serve:   session.Serve,
+	h.controlSession = session
+	supervisor, err := h.newRelaySupervisorLocked(h.pairing)
+	if err != nil {
+		h.controlSession = nil
+		_ = session.Close()
+		return err
+	}
+	h.relaySupervisor = supervisor
+	supervisor.Start()
+	return nil
+}
+
+func (h *host) newRelaySupervisorLocked(manager *pairingManager) (*relaySupervisor, error) {
+	if manager == nil || h.controlSession == nil {
+		return nil, errors.New("node relay supervisor is unavailable")
+	}
+	return newRelaySupervisor(h.runCtx, relaySupervisorOptions{
+		Connect: manager.Connect,
+		Serve:   h.controlSession.Serve,
 		OnState: func(value string) {
 			h.status.update(func(status *Status) {
 				status.RemoteControl = value
@@ -625,14 +755,80 @@ func (h *host) startControlSessionLocked() error {
 			h.options.trayUpdate(h.status.snapshot())
 		},
 	})
+}
+
+func (h *host) replaceRelayLocked(ctx context.Context, configuration config.Config) error {
+	if h.identityManager == nil || h.local == nil || h.controlSession == nil || h.nodeIdentity.OwnerID == "" || h.nodeIdentity.NodeID == "" {
+		return errors.New("node relay identity is unavailable")
+	}
+	credential, err := h.options.platform.SecureStore().Get(ctx, configuration.Relay.CredentialRef)
 	if err != nil {
-		_ = session.Close()
 		return err
 	}
-	h.controlSession = session
+	httpClient, err := relayHTTPClient(configuration.Relay.ProxyURL, time.Duration(configuration.Relay.ConnectTimeoutSeconds)*time.Second)
+	if err != nil {
+		clear(credential)
+		return err
+	}
+	manager, err := newPairingManager(pairingManagerOptions{
+		RelayURL: configuration.Relay.URL, Timeout: time.Duration(configuration.Relay.ConnectTimeoutSeconds) * time.Second,
+		HTTPClient: httpClient, Identity: h.nodeIdentity, Signer: h.identityManager, Local: h.local,
+		Secrets: h.options.platform.SecureStore(), CredentialRef: configuration.Relay.CredentialRef, Credential: credential,
+	})
+	clear(credential)
+	if err != nil {
+		return err
+	}
+	_ = manager.SyncTrust(ctx)
+	h.controlSession.Reconfigure(configuration.Host.Name, manager.SyncTrust, h.configController)
+	supervisor, err := h.newRelaySupervisorLocked(manager)
+	if err != nil {
+		manager.Close()
+		return err
+	}
+	if h.relaySupervisor != nil {
+		h.relaySupervisor.Close()
+	}
+	if h.trustCancel != nil {
+		h.trustCancel()
+	}
+	if h.pairing != nil {
+		h.pairing.Close()
+	}
+	h.pairing = manager
 	h.relaySupervisor = supervisor
+	h.startTrustSyncLocked(manager)
 	supervisor.Start()
 	return nil
+}
+
+func (h *host) startTrustSyncLocked(manager *pairingManager) {
+	trustCtx, trustCancel := context.WithCancel(h.runCtx)
+	h.trustCancel = trustCancel
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-trustCtx.Done():
+				return
+			case <-ticker.C:
+				_ = manager.SyncTrust(trustCtx)
+			}
+		}
+	}()
+}
+
+func (h *host) handleEventFailure() {
+	h.mu.Lock()
+	if h.relaySupervisor != nil {
+		h.relaySupervisor.Close()
+		h.relaySupervisor = nil
+	}
+	h.mu.Unlock()
+	h.status.update(func(value *Status) { value.RemoteControl, value.RelayLastError = "unavailable", "eventlog_failure" })
+	h.options.trayUpdate(h.status.snapshot())
+	h.log.write("node_error", "eventlog_failure", 0)
 }
 
 func (o runOptions) trayUpdate(status Status) {

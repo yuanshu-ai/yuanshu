@@ -96,6 +96,18 @@ func NewManager(local *store.Store, options Options) (*Manager, error) {
 	}, nil
 }
 
+// UpdateRetention changes the local event boundary without replacing the
+// Manager or interrupting the persistent Runtime event pump.
+func (m *Manager) UpdateRetention(maxAge time.Duration, maxBytes int64) error {
+	if maxAge <= 0 || maxBytes < store.MaxEventFrameBytes {
+		return ErrInvalid
+	}
+	m.mu.Lock()
+	m.retention = store.EventRetention{MaxAge: maxAge, MaxBytes: maxBytes}
+	m.mu.Unlock()
+	return nil
+}
+
 func (m *Manager) Publish(ctx context.Context, event adapter.AgentEvent) ([]Record, error) {
 	if ctx == nil || ctx.Err() != nil {
 		if ctx == nil {

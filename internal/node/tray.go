@@ -27,7 +27,7 @@ type tray interface {
 func (h *host) trayCallbacks(stop context.CancelFunc) trayCallbacks {
 	return trayCallbacks{
 		Status:      h.status.snapshot,
-		Reload:      h.reload,
+		Reload:      h.reloadConfiguration,
 		Diagnostics: func() ([]byte, error) { return marshalStatus(h.status.snapshot(), true) },
 		PendingConfig: func(ctx context.Context) ([]ConfigChangeSummary, error) {
 			response := h.handleLocalManagement(ctx, localRequest{Protocol: localProtocol, Command: "config_pending"})

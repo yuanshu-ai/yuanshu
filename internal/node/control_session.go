@@ -57,6 +57,7 @@ type ControlSession struct {
 	config       configController
 	configReload func()
 	now          func() time.Time
+	settingsMu   sync.RWMutex
 
 	transportMu sync.RWMutex
 	active      *sessionTransport
@@ -68,6 +69,22 @@ type ControlSession struct {
 	eventCancel context.CancelFunc
 	eventDone   chan struct{}
 	eventErr    error
+}
+
+// Reconfigure updates connection-scoped collaborators while preserving the
+// Runtime, event log, validator, and persistent event pump.
+func (s *ControlSession) Reconfigure(deviceName string, refreshTrust func(context.Context) error, configuration configController) {
+	s.settingsMu.Lock()
+	s.deviceName = deviceName
+	s.refreshTrust = refreshTrust
+	s.config = configuration
+	s.settingsMu.Unlock()
+}
+
+func (s *ControlSession) settings() (string, func(context.Context) error, configController) {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.deviceName, s.refreshTrust, s.config
 }
 
 type sessionTransport struct {
@@ -249,9 +266,10 @@ func (s *ControlSession) runEventPump(ctx context.Context) {
 
 func (s *ControlSession) handle(ctx context.Context, raw []byte) error {
 	validated, err := s.validator.Validate(ctx, raw, s.target)
+	_, refreshTrust, _ := s.settings()
 	var validation *protocol.ValidationError
-	if err != nil && s.refreshTrust != nil && errors.As(err, &validation) && validation.Stage == protocol.ValidationStageTrust && validation.Code == protocol.ErrorUnauthorized {
-		if refreshErr := s.refreshTrust(ctx); refreshErr == nil {
+	if err != nil && refreshTrust != nil && errors.As(err, &validation) && validation.Stage == protocol.ValidationStageTrust && validation.Code == protocol.ErrorUnauthorized {
+		if refreshErr := refreshTrust(ctx); refreshErr == nil {
 			validated, err = s.validator.Validate(ctx, raw, s.target)
 		}
 	}
@@ -294,17 +312,18 @@ func (s *ControlSession) handle(ctx context.Context, raw []byte) error {
 }
 
 func (s *ControlSession) dispatchConfig(ctx context.Context, message protocol.YuanshuMessage) (map[string]any, bool, error) {
-	if s.config == nil {
+	_, _, configuration := s.settings()
+	if configuration == nil {
 		return nil, false, adapter.ErrUnsupported
 	}
 	switch protocol.ControlType(message.Type) {
 	case protocol.ControlConfigRead:
-		value, err := s.config.Read(ctx)
+		value, err := configuration.Read(ctx)
 		return map[string]any{"config": value}, false, err
 	case protocol.ControlConfigUpdate:
 		baseRevision := stringPayload(message.Payload, "baseRevision")
 		changes := mapPayload(message.Payload, "changes")
-		result, err := s.config.Update(ctx, baseRevision, changes)
+		result, err := configuration.Update(ctx, baseRevision, changes)
 		return result.Payload, result.Reload, err
 	default:
 		return nil, false, adapter.ErrUnsupported
@@ -352,8 +371,9 @@ func (s *ControlSession) dispatch(ctx context.Context, message protocol.YuanshuM
 	switch protocol.ControlType(message.Type) {
 	case protocol.ControlDeviceSync:
 		health := s.runtime.Health()
+		deviceName, _, _ := s.settings()
 		return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventDeviceStatus, CorrelationID: message.MessageID, Payload: map[string]any{
-			"status": "online", "name": s.deviceName, "runtime": health.State, "version": health.CodexVersion, "protocol": health.Protocol,
+			"status": "online", "name": deviceName, "runtime": health.State, "version": health.CodexVersion, "protocol": health.Protocol,
 		}})
 	case protocol.ControlWorkspaceList:
 		items, err := s.store.Workspaces(ctx)

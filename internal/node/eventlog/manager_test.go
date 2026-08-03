@@ -199,6 +199,20 @@ func TestControlResultLifecycleIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestManagerUpdatesRetentionWithoutReplacement(t *testing.T) {
+	manager, local := newTestManager(t, store.MaxEventFrameBytes*4)
+	defer local.Close()
+	if err := manager.UpdateRetention(48*time.Hour, store.MaxEventFrameBytes*8); err != nil {
+		t.Fatal(err)
+	}
+	if manager.retention.MaxAge != 48*time.Hour || manager.retention.MaxBytes != store.MaxEventFrameBytes*8 {
+		t.Fatalf("retention = %+v", manager.retention)
+	}
+	if err := manager.UpdateRetention(0, store.MaxEventFrameBytes); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid retention error = %v", err)
+	}
+}
+
 func newTestManager(t *testing.T, maxBytes int64) (*Manager, *store.Store) {
 	t.Helper()
 	local, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "node.db"), store.Options{Clock: func() time.Time { return eventNow }})

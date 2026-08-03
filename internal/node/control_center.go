@@ -330,7 +330,7 @@ func (c *controlCenter) Close() error {
 
 func controlCenterCommand(value string) bool {
 	switch value {
-	case "reload", "pairing_create", "pairing_list", "client_list", "enrollment_list", "device_list",
+	case "reload", "autostart_set", "pairing_create", "pairing_list", "client_list", "enrollment_list", "device_list",
 		"config_show", "config_update", "config_pending":
 		return true
 	default:
