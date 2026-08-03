@@ -78,6 +78,22 @@ describe("personal data projection", () => {
     expect(turn.items.find((item) => item.kind === "diff")?.path).toBe("internal/app.go");
     expect(projection.state.files[fileChangeKey("node-a", "workspace", "thread", "turn", "internal/app.go")]?.diff).toBe("+new");
   });
+
+  it("merges a targeted Diff snapshot without replacing existing Turn items", () => {
+    const projection = new DataProjection();
+    projection.apply(message("node-a", 1, "thread.snapshot", {
+      status: "idle",
+      turns: [{ id: "turn", status: "completed", items: [{ id: "agent", kind: "agent_message", text: "kept" }, { id: "file", kind: "file_change", path: "app.go", changeType: "modified" }] }],
+    }, "workspace", "thread"));
+
+    projection.applyDiffSnapshot(message("node-a", 2, "thread.snapshot", {
+      status: "idle",
+      turns: [{ id: "turn", status: "completed", items: [{ id: "file", kind: "file_change", path: "app.go", changeType: "modified", diff: "+line", truncated: true, totalBytes: 70000, digest: "digest" }] }],
+    }, "workspace", "thread"), "app.go");
+
+    expect(projection.state.turns[turnKey("node-a", "workspace", "thread", "turn")].items.find((item) => item.id === "agent")?.text).toBe("kept");
+    expect(projection.state.files[fileChangeKey("node-a", "workspace", "thread", "turn", "app.go")]).toMatchObject({ diff: "+line", truncated: true, totalBytes: 70000, digest: "digest" });
+  });
 });
 
 function message(nodeId: string, sequence: number, type: string, payload: Record<string, unknown>, workspaceId?: string, threadId?: string, turnId?: string, itemId?: string): YuanshuMessage {

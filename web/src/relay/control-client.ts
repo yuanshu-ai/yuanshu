@@ -11,7 +11,7 @@ import {
 } from "./storage";
 
 export type ControlClientState = "idle" | "connecting" | "authenticating" | "connected" | "reconnecting" | "paused" | "closed" | "reauth_required";
-export type ControlActionState = "sent" | "confirmed" | "rejected" | "ambiguous" | "unknown" | "offline";
+export type ControlActionState = "sent" | "executing" | "confirmed" | "rejected" | "failed" | "ambiguous" | "unknown" | "offline";
 
 export interface RecoveryTarget {
   nodeId: string;
@@ -84,6 +84,11 @@ export interface ControlTarget {
   threadId?: string;
   turnId?: string;
   itemId?: string;
+}
+
+export interface ControlRequestHandle {
+  messageId: string;
+  result: Promise<YuanshuMessage>;
 }
 
 interface PendingControl {
@@ -403,19 +408,30 @@ export class ControlClient {
     return messageId;
   }
 
-  /** Sends a control and waits for its correlated control.result. */
-  async request(type: ControlType, payload: Record<string, unknown>, target: ControlTarget = {}): Promise<YuanshuMessage> {
+  /**
+   * Starts a request and exposes its message ID before the result arrives.
+   * Coordinators use this to associate snapshot events with a local read
+   * intent without adding request metadata to the wire protocol.
+   */
+  async startRequest(type: ControlType, payload: Record<string, unknown>, target: ControlTarget = {}, onStarted?: (messageId: string) => void): Promise<ControlRequestHandle> {
     const messageId = await this.sendControl(type, payload, target);
+    onStarted?.(messageId);
     const pending = this.pendingControls.get(messageId);
     if (!pending) {
       const completed = this.completedResults.get(messageId);
       if (completed) {
         this.completedResults.delete(messageId);
-        return completed;
+        return { messageId, result: Promise.resolve(completed) };
       }
       throw new Error("control request was finalized before it could be observed");
     }
-    return pending.result;
+    return { messageId, result: pending.result };
+  }
+
+  /** Sends a control and waits for its correlated control.result. */
+  async request(type: ControlType, payload: Record<string, unknown>, target: ControlTarget = {}): Promise<YuanshuMessage> {
+    const handle = await this.startRequest(type, payload, target);
+    return handle.result;
   }
 
   sendRecoveryControl(type: "events.replay" | "snapshot.request", payload: Record<string, unknown>, target: ControlTarget = {}): Promise<string> {
@@ -707,10 +723,9 @@ export class ControlClient {
     const pending = this.pendingControls.get(event.correlationId);
     if (!pending) return;
     const rawStatus = typeof event.payload.status === "string" ? event.payload.status : "rejected";
-    const state: ControlActionState = rawStatus === "confirmed" || rawStatus === "rejected" || rawStatus === "ambiguous" ? rawStatus : "sent";
+    const state: ControlActionState = rawStatus === "dispatching" ? "executing" : rawStatus === "confirmed" || rawStatus === "rejected" || rawStatus === "ambiguous" ? rawStatus : "sent";
     const action = { ...pending.action, state, ...(typeof event.payload.errorCode === "string" ? { errorCode: event.payload.errorCode } : {}) };
     this.options.onControlAction?.(action);
-    this.pendingControls.get(event.correlationId)?.resolve(event);
     if (pending.action.type === "snapshot.request" && state !== "confirmed" && event.workspaceId && event.threadId) {
       this.snapshotRequests.delete(`${pending.action.nodeId}\u001f${event.workspaceId}\u001f${event.threadId}`);
     }
@@ -719,7 +734,8 @@ export class ControlClient {
       this.historyGapStreams.delete(this.storageKey(this.eventKey(event)));
       this.snapshotRequests.delete(`${pending.action.nodeId}\u001f${event.workspaceId}\u001f${event.threadId}`);
     }
-    if (state !== "sent") {
+    if (state !== "sent" && state !== "executing") {
+      pending.resolve(event);
       this.completedResults.set(event.correlationId, event);
       if (this.completedResults.size > 512) this.completedResults.delete(this.completedResults.keys().next().value as string);
       this.pendingControls.delete(event.correlationId);

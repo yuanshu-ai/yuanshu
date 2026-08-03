@@ -307,6 +307,33 @@ export class DataProjection {
     }
   }
 
+  /**
+   * Applies a targeted Diff read without replacing the Thread history that is
+   * already on screen. The request intent is kept by WorkbenchSession and is
+   * deliberately not represented on the protocol envelope.
+   */
+  applyDiffSnapshot(event: YuanshuMessage, path: string): void {
+    if (event.type !== "thread.snapshot" || !event.workspaceId || !event.threadId || !path) return;
+    const eventKey = `${event.ownerId}\u001f${event.nodeId}\u001f${event.streamId}\u001f${event.sequence}`;
+    if (this.seenEvents.has(eventKey)) return;
+    this.seenEvents.add(eventKey);
+
+    const node = this.ensureNode(event);
+    node.lastEventSequence = Math.max(node.lastEventSequence, event.sequence);
+    node.lastSeen = event.sentAt;
+    node.online = true;
+
+    if (!Array.isArray(event.payload.turns)) return;
+    for (const rawTurn of event.payload.turns) {
+      if (!isRecord(rawTurn) || typeof rawTurn.id !== "string" || !Array.isArray(rawTurn.items)) continue;
+      for (const rawItem of rawTurn.items) {
+        const item = this.itemFromPayload(rawItem, event.sequence);
+        if (!item || item.path !== path || (item.kind !== "file_change" && item.kind !== "diff")) continue;
+        this.applyFileChange(event, item, rawTurn.id);
+      }
+    }
+  }
+
   private ensureNode(event: YuanshuMessage): NodeProjection {
     return this.registerNode({ ownerId: event.ownerId, nodeId: event.nodeId });
   }
@@ -485,9 +512,16 @@ export class DataProjection {
     const key = fileChangeKey(event.nodeId, event.workspaceId, event.threadId, turnId, item.path);
     const current = this.stateValue.files[key];
     this.stateValue.files[key] = {
+      ...current,
       key, nodeId: event.nodeId, workspaceId: event.workspaceId, threadId: event.threadId, turnId,
-      path: item.path, changeType: item.changeType, diff: item.diff, truncated: item.truncated,
-      totalBytes: item.totalBytes, digest: item.digest, revision: (current?.revision ?? 0) + 1, updatedAt: event.sentAt,
+      path: item.path,
+      changeType: item.changeType ?? current?.changeType,
+      diff: item.diff || current?.diff,
+      truncated: item.truncated ?? current?.truncated,
+      totalBytes: item.totalBytes ?? current?.totalBytes,
+      digest: item.digest ?? current?.digest,
+      revision: (current?.revision ?? 0) + 1,
+      updatedAt: event.sentAt,
     };
   }
 

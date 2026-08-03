@@ -174,6 +174,42 @@ describe("ControlClient recovery", () => {
     await expect(client.sendControl("turn.start", { input: "do not send" }, { nodeId: "offline" })).rejects.toThrow("offline");
     expect(actions).toEqual(["offline:offline"]);
   });
+
+  it("exposes a request message ID before the correlated result resolves", async () => {
+    const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+    const socket = new FakeSocket();
+    const actions: string[] = [];
+    const client = new ControlClient({
+      url: "wss://relay.test/web/connect",
+      identity: { ownerId: "owner", nodeId: "node", clientId: "client", keyId: "key", privateKey: keyPair.privateKey },
+      storage: new MemoryControlStorage(),
+      websocketFactory: () => socket,
+      onControlAction: (action) => actions.push(action.state),
+    });
+    client.connect();
+    socket.open();
+    socket.receive(challenge());
+    await tick();
+    socket.receive({ version: "1", type: "authenticated" });
+    await tick();
+    const replay = JSON.parse(socket.sent.at(-1) as string);
+    socket.receive(event("control.result", 1, replay.messageId));
+    await tick();
+
+    const handle = await client.startRequest("device.sync", {}, { nodeId: "node" });
+    expect(handle.messageId).toBeTruthy();
+    let settled = false;
+    void handle.result.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    socket.receive(eventFor("node", "control.result", 2, handle.messageId, { status: "dispatching" }));
+    await tick();
+    expect(settled).toBe(false);
+    expect(actions.at(-1)).toBe("executing");
+    socket.receive(event("control.result", 3, handle.messageId));
+    await expect(handle.result).resolves.toMatchObject({ correlationId: handle.messageId });
+    client.close();
+  });
 });
 
 function challenge(): Record<string, unknown> {
