@@ -223,11 +223,84 @@
       "properties": { "status": { "type": "string", "minLength": 1, "maxLength": 64 } },
       "additionalProperties": true
     },
+    "historyState": {
+      "type": "string",
+      "enum": ["complete", "partial", "unavailable"]
+    },
+    "threadItemPayload": {
+      "type": "object",
+      "required": ["id", "kind", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/opaqueId" },
+        "kind": { "type": "string", "enum": ["user_message", "agent_message", "command", "command_output", "tool", "file_change", "diff", "error", "unknown"] },
+        "status": { "type": "string", "maxLength": 64 },
+        "text": { "type": "string", "maxLength": 65536 },
+        "command": { "type": "string", "maxLength": 65536 },
+        "output": { "type": "string", "maxLength": 262144 },
+        "toolName": { "type": "string", "maxLength": 256 },
+        "path": { "$ref": "#/$defs/logicalPath" },
+        "changeType": { "type": "string", "enum": ["created", "modified", "deleted", "renamed"] },
+        "diff": { "type": "string", "maxLength": 262144 },
+        "exitCode": { "type": "integer" },
+        "errorCode": { "$ref": "#/$defs/errorCode" },
+        "errorMessage": { "type": "string", "maxLength": 4096 },
+        "partial": { "type": "boolean" },
+        "truncated": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "threadSummaryPayload": {
+      "type": "object",
+      "required": ["id", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/opaqueId" },
+        "status": { "type": "string", "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 4096 },
+        "preview": { "type": "string", "maxLength": 65536 },
+        "historyState": { "$ref": "#/$defs/historyState" },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" },
+        "pendingApprovals": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "turnSnapshotPayload": {
+      "type": "object",
+      "required": ["id", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/opaqueId" },
+        "status": { "type": "string", "maxLength": 64 },
+        "historyState": { "$ref": "#/$defs/historyState" },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/threadItemPayload" } }
+      },
+      "additionalProperties": true
+    },
+    "approvalSummaryPayload": {
+      "type": "object",
+      "required": ["approvalId", "kind", "status"],
+      "properties": {
+        "approvalId": { "$ref": "#/$defs/opaqueId" },
+        "kind": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "maxLength": 64 },
+        "summary": { "type": "string", "maxLength": 4096 },
+        "operationDigest": { "$ref": "#/$defs/operationDigest" }
+      },
+      "additionalProperties": true
+    },
     "threadSnapshotPayload": {
       "type": "object",
       "required": ["status"],
       "properties": {
         "status": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "historyState": { "$ref": "#/$defs/historyState" },
+        "title": { "type": "string", "maxLength": 4096 },
+        "preview": { "type": "string", "maxLength": 65536 },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" },
+        "threads": { "type": "array", "items": { "$ref": "#/$defs/threadSummaryPayload" } },
+        "turns": { "type": "array", "items": { "$ref": "#/$defs/turnSnapshotPayload" } },
+        "nextCursor": { "type": "string", "maxLength": 512 },
+        "pendingApprovals": { "type": "array", "items": { "$ref": "#/$defs/approvalSummaryPayload" } },
         "latestSequence": { "$ref": "#/$defs/sequence" }
       },
       "additionalProperties": true

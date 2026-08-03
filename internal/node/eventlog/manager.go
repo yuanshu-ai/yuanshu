@@ -482,9 +482,77 @@ func snapshotPayload(snapshot adapter.ThreadSnapshot, override string) map[strin
 	}
 	turns := make([]any, 0, len(snapshot.Turns))
 	for _, turn := range snapshot.Turns {
-		turns = append(turns, map[string]any{"id": turn.ID, "status": turn.Status})
+		items := make([]any, 0, len(turn.Items))
+		for _, item := range turn.Items {
+			payload := map[string]any{"id": item.ID, "kind": item.Kind, "status": item.Status}
+			if item.Text != "" {
+				payload["text"] = item.Text
+			}
+			if item.Command != "" {
+				payload["command"] = item.Command
+			}
+			if item.Output != "" {
+				payload["output"] = item.Output
+			}
+			if item.ToolName != "" {
+				payload["toolName"] = item.ToolName
+			}
+			if item.Path != "" {
+				payload["path"] = item.Path
+			}
+			if item.ChangeType != "" {
+				payload["changeType"] = item.ChangeType
+			}
+			if item.Diff != "" {
+				payload["diff"] = item.Diff
+			}
+			if item.ExitCode != nil {
+				payload["exitCode"] = *item.ExitCode
+			}
+			if item.ErrorCode != "" {
+				payload["errorCode"] = item.ErrorCode
+			}
+			if item.ErrorMessage != "" {
+				payload["errorMessage"] = item.ErrorMessage
+			}
+			if item.Partial {
+				payload["partial"] = true
+			}
+			if item.Truncated {
+				payload["truncated"] = true
+			}
+			items = append(items, payload)
+		}
+		turnPayload := map[string]any{"id": turn.ID, "status": turn.Status, "items": items}
+		if turn.HistoryState != "" {
+			turnPayload["historyState"] = turn.HistoryState
+		}
+		turns = append(turns, turnPayload)
 	}
-	return map[string]any{"status": status, "thread": map[string]any{"id": snapshot.Thread.ID, "status": snapshot.Thread.Status}, "turns": turns}
+	payload := map[string]any{
+		"status": status,
+		"thread": map[string]any{
+			"id": snapshot.Thread.ID, "status": snapshot.Thread.Status,
+		},
+		"turns": turns,
+	}
+	if snapshot.Thread.HistoryState != "" {
+		payload["historyState"] = snapshot.Thread.HistoryState
+	}
+	threadPayload := payload["thread"].(map[string]any)
+	if snapshot.Thread.Title != "" {
+		threadPayload["title"] = snapshot.Thread.Title
+	}
+	if snapshot.Thread.Preview != "" {
+		threadPayload["preview"] = snapshot.Thread.Preview
+	}
+	if !snapshot.Thread.CreatedAt.IsZero() {
+		threadPayload["createdAt"] = snapshot.Thread.CreatedAt.Format(time.RFC3339Nano)
+	}
+	if !snapshot.Thread.UpdatedAt.IsZero() {
+		threadPayload["updatedAt"] = snapshot.Thread.UpdatedAt.Format(time.RFC3339Nano)
+	}
+	return payload
 }
 
 func terminalStatus(turns []adapter.Turn, id string) string {

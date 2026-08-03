@@ -116,11 +116,14 @@ type ApprovalDecision struct {
 }
 
 type Thread struct {
-	ID          string
-	WorkspaceID string
-	Status      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           string
+	WorkspaceID  string
+	Status       string
+	Title        string
+	Preview      string
+	HistoryState string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type ThreadPage struct {
@@ -134,9 +137,31 @@ type ThreadSnapshot struct {
 }
 
 type Turn struct {
-	ID       string
-	ThreadID string
-	Status   string
+	ID           string
+	ThreadID     string
+	Status       string
+	HistoryState string
+	Items        []ThreadItem
+}
+
+// ThreadItem is the stable, deliberately small history projection exposed to
+// remote clients. Codex-specific item JSON must never cross this boundary.
+type ThreadItem struct {
+	ID           string
+	Kind         string
+	Status       string
+	Text         string
+	Command      string
+	Output       string
+	ToolName     string
+	Path         string
+	ChangeType   string
+	Diff         string
+	ExitCode     *int
+	ErrorCode    string
+	ErrorMessage string
+	Partial      bool
+	Truncated    bool
 }
 
 type Approval struct {

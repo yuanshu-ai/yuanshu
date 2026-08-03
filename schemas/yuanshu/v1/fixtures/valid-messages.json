@@ -48,7 +48,17 @@
   "events": [
     { "type": "device.status", "payload": { "status": "online" } },
     { "type": "runtime.status", "payload": { "status": "ready" } },
-    { "type": "thread.snapshot", "payload": { "status": "active", "latestSequence": 2 } },
+    { "type": "thread.snapshot", "payload": {
+      "status": "active", "historyState": "complete", "title": "Synthetic task", "preview": "Create a synthetic file.",
+      "createdAt": "2026-08-01T00:00:00Z", "updatedAt": "2026-08-01T00:01:00Z", "nextCursor": "cursor_2", "latestSequence": 2,
+      "threads": [{ "id": "thread_1", "status": "active", "title": "Synthetic task", "pendingApprovals": 1 }],
+      "turns": [{ "id": "turn_1", "status": "completed", "historyState": "complete", "items": [
+        { "id": "item_1", "kind": "user_message", "status": "completed", "text": "Create a synthetic file." },
+        { "id": "item_2", "kind": "command", "status": "completed", "command": "go test", "output": "ok", "exitCode": 0 },
+        { "id": "item_3", "kind": "file_change", "status": "completed", "path": "src/example.txt", "changeType": "modified", "diff": "+synthetic" }
+      ] }],
+      "pendingApprovals": [{ "approvalId": "approval_1", "kind": "file-change", "status": "pending", "operationDigest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }]
+    } },
     { "type": "thread.started", "payload": {} },
     { "type": "turn.started", "payload": {} },
     { "type": "turn.completed", "payload": {} },

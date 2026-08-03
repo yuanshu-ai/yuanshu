@@ -84,6 +84,38 @@ func TestFormalAdapterThreadTurnApprovalAndEvents(t *testing.T) {
 	}
 }
 
+func TestPublicSnapshotMapsStableHistoryItems(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	exitCode := 0
+	snapshot := publicSnapshot(codexThread{
+		ID: "thread-history", Cwd: root, Preview: "ship the feature", CreatedAt: 1, UpdatedAt: 2,
+		Status: struct {
+			Type string `json:"type"`
+		}{Type: "idle"},
+		Turns: []codexTurn{{
+			ID: "turn-history", Status: "completed", ItemsView: "full",
+			Items: []codexThreadItem{
+				{ID: "user", Type: "userMessage", Content: []json.RawMessage{json.RawMessage(`{"type":"text","text":"ship it"}`)}},
+				{ID: "agent", Type: "agentMessage", Text: "done"},
+				{ID: "command", Type: "commandExecution", Status: "completed", Command: "go test", AggregatedOutput: "ok", ExitCode: &exitCode},
+				{ID: "file", Type: "fileChange", Status: "completed", Changes: []codexFileChange{{Path: filepath.Join(root, "internal", "app.go"), Kind: "add", Diff: "+new"}}},
+				{ID: "tool", Type: "mcpToolCall", Status: "completed", Tool: "search"},
+				{ID: "unknown", Type: "futureItem", Status: "completed"},
+			},
+		}},
+	}, "workspace")
+	if snapshot.Thread.HistoryState != "partial" || snapshot.Thread.Preview != "ship the feature" {
+		t.Fatalf("snapshot metadata = %#v", snapshot.Thread)
+	}
+	if len(snapshot.Turns) != 1 || len(snapshot.Turns[0].Items) != 6 {
+		t.Fatalf("snapshot items = %#v", snapshot.Turns)
+	}
+	items := snapshot.Turns[0].Items
+	if items[0].Kind != "user_message" || items[0].Text != "ship it" || items[2].Output != "ok" || items[3].Path != "internal/app.go" || items[4].ToolName != "search" || !items[5].Partial {
+		t.Fatalf("mapped items = %#v", items)
+	}
+}
+
 func TestFormalAdapterStartsRuntimeForSecondCompatibilityProfile(t *testing.T) {
 	server := &syntheticServer{version: "0.146.0-alpha.9.2"}
 	formal, err := New(Options{

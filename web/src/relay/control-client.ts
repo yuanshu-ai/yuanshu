@@ -316,7 +316,7 @@ export class ControlClient {
     this.setState(this.reconnectAttempt === 0 ? "connecting" : "reconnecting");
     let socket: RelaySocket;
     try {
-      socket = this.websocketFactory(this.options.url, RELAY_SUBPROTOCOL);
+      socket = this.websocketFactory(this.relayURL(), RELAY_SUBPROTOCOL);
     } catch {
       this.scheduleReconnect();
       return;
@@ -660,6 +660,13 @@ export class ControlClient {
   private setState(state: ControlClientState): void {
     this.stateValue = state;
     this.options.onState?.(state);
+  }
+
+  private relayURL(): string {
+    const base = typeof location === "undefined" ? "http://localhost" : location.origin;
+    const url = new URL(this.options.url, base);
+    if (!url.searchParams.has("clientId")) url.searchParams.set("clientId", this.options.identity.clientId);
+    return url.toString();
   }
 }
 

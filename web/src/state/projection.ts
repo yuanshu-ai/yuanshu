@@ -32,10 +32,15 @@ export interface ThreadProjection {
   workspaceId: string;
   threadId: string;
   status?: string;
+  title?: string;
+  preview?: string;
+  historyState?: "complete" | "partial" | "unavailable";
+  createdAt?: string;
+  updatedAt?: string;
+  pendingApprovals?: number;
   turnIds: string[];
   latestSequence: number;
   recovery: "none" | "pending" | "history_gap";
-  updatedAt?: string;
 }
 
 export interface TurnProjection {
@@ -46,7 +51,30 @@ export interface TurnProjection {
   threadId: string;
   turnId: string;
   status?: string;
+  historyState?: "complete" | "partial" | "unavailable";
+  items: ThreadItemProjection[];
   updatedAt?: string;
+}
+
+export type ThreadItemKind = "user_message" | "agent_message" | "command" | "command_output" | "tool" | "file_change" | "diff" | "error" | "unknown";
+
+export interface ThreadItemProjection {
+  id: string;
+  kind: ThreadItemKind;
+  status?: string;
+  text?: string;
+  command?: string;
+  output?: string;
+  toolName?: string;
+  path?: string;
+  changeType?: string;
+  diff?: string;
+  exitCode?: number;
+  errorCode?: string;
+  errorMessage?: string;
+  partial?: boolean;
+  truncated?: boolean;
+  sequence?: number;
 }
 
 export interface EventProjection {
@@ -153,7 +181,7 @@ export class DataProjection {
     const node = this.ensureNode(event);
     node.lastEventSequence = Math.max(node.lastEventSequence, event.sequence);
     node.lastSeen = event.sentAt;
-    node.online = true;
+    node.online = !["offline", "unavailable", "not_available"].includes(node.status ?? "");
 
     switch (event.type) {
       case "device.status":
@@ -179,6 +207,32 @@ export class DataProjection {
         break;
       case "turn.interrupted":
         this.applyTurnLifecycle(event, "interrupted");
+        break;
+      case "agent.message.delta":
+        this.applyThreadItem(event, { id: event.itemId ?? `${event.turnId ?? "turn"}:agent`, kind: "agent_message", text: stringValue(event.payload.text) ?? "", status: "streaming", sequence: event.sequence });
+        break;
+      case "agent.message.completed":
+        this.applyThreadItem(event, { id: event.itemId ?? `${event.turnId ?? "turn"}:agent`, kind: "agent_message", text: stringValue(event.payload.text) ?? "", status: "completed", sequence: event.sequence });
+        break;
+      case "command.started":
+      case "command.completed":
+        this.applyThreadItem(event, { id: stringValue(event.payload.commandId) ?? event.itemId ?? `${event.sequence}`, kind: "command", command: stringValue(event.payload.displayText) ?? stringValue(event.payload.command), status: event.type === "command.completed" ? "completed" : "running", exitCode: numberValue(event.payload.exitCode), sequence: event.sequence });
+        break;
+      case "command.output.delta":
+        this.applyThreadItem(event, { id: stringValue(event.payload.commandId) ?? event.itemId ?? `${event.sequence}`, kind: "command_output", output: stringValue(event.payload.text) ?? "", status: "streaming", sequence: event.sequence });
+        break;
+      case "tool.started":
+      case "tool.completed":
+        this.applyThreadItem(event, { id: event.itemId ?? `${event.sequence}`, kind: "tool", toolName: stringValue(event.payload.toolName), status: event.type === "tool.completed" ? "completed" : "running", sequence: event.sequence });
+        break;
+      case "file.changed":
+        this.applyThreadItem(event, { id: event.itemId ?? `${event.sequence}`, kind: "file_change", path: stringValue(event.payload.path), changeType: stringValue(event.payload.changeType), status: "completed", sequence: event.sequence });
+        break;
+      case "diff.updated":
+        this.applyThreadItem(event, { id: event.itemId ?? stringValue(event.payload.path) ?? `${event.sequence}`, kind: "diff", path: stringValue(event.payload.path), diff: stringValue(event.payload.diff), status: "updated", sequence: event.sequence });
+        break;
+      case "error":
+        this.applyThreadItem(event, { id: event.itemId ?? `${event.sequence}`, kind: "error", errorCode: stringValue(event.payload.code), errorMessage: stringValue(event.payload.message), status: "failed", sequence: event.sequence });
         break;
       case "approval.requested":
         this.applyApprovalRequested(event);
@@ -223,7 +277,7 @@ export class DataProjection {
 
   private applyRuntimeStatus(node: NodeProjection, event: YuanshuMessage): void {
     if (typeof event.payload.status === "string") node.runtimeStatus = event.payload.status;
-    node.online = true;
+    node.online = !["offline", "unavailable", "not_available"].includes(node.runtimeStatus ?? "");
   }
 
   private applyThreadSnapshot(event: YuanshuMessage): void {
@@ -235,15 +289,45 @@ export class DataProjection {
         if (!isRecord(raw) || typeof raw.id !== "string") continue;
         const thread = this.upsertThread(event.nodeId, event.ownerId, workspaceId, raw.id);
         if (typeof raw.status === "string") thread.status = raw.status;
+        this.applyThreadMetadata(thread, raw);
+        if (raw.historyState === "complete" || raw.historyState === "partial" || raw.historyState === "unavailable") thread.historyState = raw.historyState;
+        if (typeof raw.pendingApprovals === "number") thread.pendingApprovals = raw.pendingApprovals;
         thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
         thread.recovery = "none";
-        thread.updatedAt = event.sentAt;
+        thread.updatedAt = stringValue(raw.updatedAt) ?? event.sentAt;
       }
       return;
     }
     if (!event.threadId) return;
     const thread = this.upsertThread(event.nodeId, event.ownerId, workspaceId, event.threadId);
     if (typeof payload.status === "string") thread.status = payload.status;
+    this.applyThreadMetadata(thread, payload);
+    if (isRecord(payload.thread)) {
+      if (typeof payload.thread.status === "string") thread.status = payload.thread.status;
+      this.applyThreadMetadata(thread, payload.thread);
+    }
+    if (payload.historyState === "complete" || payload.historyState === "partial" || payload.historyState === "unavailable") thread.historyState = payload.historyState;
+    if (Array.isArray(payload.pendingApprovals)) thread.pendingApprovals = payload.pendingApprovals.length;
+    if (Array.isArray(payload.pendingApprovals)) {
+      for (const raw of payload.pendingApprovals) {
+        if (!isRecord(raw)) continue;
+        const approvalId = stringValue(raw.approvalId);
+        if (!approvalId) continue;
+        const key = this.approvalKey(event.nodeId, workspaceId, event.threadId, stringValue(raw.turnId) ?? "", approvalId);
+        this.stateValue.approvals[key] = {
+          key,
+          nodeId: event.nodeId,
+          workspaceId,
+          threadId: event.threadId,
+          turnId: stringValue(raw.turnId) ?? "",
+          approvalId,
+          operationDigest: stringValue(raw.operationDigest),
+          kind: stringValue(raw.kind),
+          summary: stringValue(raw.summary),
+          status: "pending",
+        };
+      }
+    }
     if (typeof payload.latestSequence === "number") thread.latestSequence = Math.max(thread.latestSequence, payload.latestSequence);
     thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
     thread.recovery = "none";
@@ -253,6 +337,8 @@ export class DataProjection {
       if (!isRecord(raw) || typeof raw.id !== "string") continue;
       const turn = this.upsertTurn(event.nodeId, event.ownerId, workspaceId, event.threadId, raw.id);
       if (typeof raw.status === "string") turn.status = raw.status;
+      if (raw.historyState === "complete" || raw.historyState === "partial" || raw.historyState === "unavailable") turn.historyState = raw.historyState;
+      if (Array.isArray(raw.items)) turn.items = raw.items.map((item) => this.itemFromPayload(item, event.sequence)).filter((item): item is ThreadItemProjection => item !== undefined);
       turn.updatedAt = event.sentAt;
       if (!thread.turnIds.includes(turn.turnId)) thread.turnIds.push(turn.turnId);
     }
@@ -262,6 +348,7 @@ export class DataProjection {
     if (!event.workspaceId || !event.threadId) return;
     const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId);
     thread.status = stringValue(event.payload.status) ?? fallback;
+    this.applyThreadMetadata(thread, event.payload);
     thread.recovery = "none";
     thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
     thread.updatedAt = event.sentAt;
@@ -271,6 +358,7 @@ export class DataProjection {
     if (!event.workspaceId || !event.threadId || !event.turnId) return;
     const turn = this.upsertTurn(event.nodeId, event.ownerId, event.workspaceId, event.threadId, event.turnId);
     turn.status = stringValue(event.payload.status) ?? fallback;
+    if (event.type === "turn.started") turn.historyState = "partial";
     turn.updatedAt = event.sentAt;
     const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId);
     if (!thread.turnIds.includes(turn.turnId)) thread.turnIds.push(turn.turnId);
@@ -282,8 +370,51 @@ export class DataProjection {
     if (!event.workspaceId || !event.threadId) return;
     const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId);
     thread.recovery = "history_gap";
+    thread.historyState = "partial";
     thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
     thread.updatedAt = event.sentAt;
+  }
+
+  private applyThreadMetadata(thread: ThreadProjection, payload: Record<string, unknown>): void {
+    if (typeof payload.title === "string") thread.title = payload.title;
+    if (typeof payload.preview === "string") thread.preview = payload.preview;
+    if (typeof payload.createdAt === "string") thread.createdAt = payload.createdAt;
+    if (typeof payload.updatedAt === "string") thread.updatedAt = payload.updatedAt;
+  }
+
+  private applyThreadItem(event: YuanshuMessage, item: ThreadItemProjection): void {
+    if (!event.workspaceId || !event.threadId || !event.turnId) return;
+    const turn = this.upsertTurn(event.nodeId, event.ownerId, event.workspaceId, event.threadId, event.turnId);
+    const index = turn.items.findIndex((candidate) => candidate.id === item.id);
+    if (index < 0) turn.items.push(item);
+    else turn.items[index] = mergeItem(turn.items[index], item);
+    const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId);
+    if (!thread.turnIds.includes(turn.turnId)) thread.turnIds.push(turn.turnId);
+    turn.updatedAt = event.sentAt;
+  }
+
+  private itemFromPayload(raw: unknown, sequence: number): ThreadItemProjection | undefined {
+    if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.kind !== "string") return undefined;
+    const kinds = new Set<ThreadItemKind>(["user_message", "agent_message", "command", "command_output", "tool", "file_change", "diff", "error", "unknown"]);
+    const kind = kinds.has(raw.kind as ThreadItemKind) ? raw.kind as ThreadItemKind : "unknown";
+    return {
+      id: raw.id,
+      kind,
+      status: stringValue(raw.status),
+      text: stringValue(raw.text),
+      command: stringValue(raw.command),
+      output: stringValue(raw.output),
+      toolName: stringValue(raw.toolName),
+      path: stringValue(raw.path),
+      changeType: stringValue(raw.changeType),
+      diff: stringValue(raw.diff),
+      exitCode: numberValue(raw.exitCode),
+      errorCode: stringValue(raw.errorCode),
+      errorMessage: stringValue(raw.errorMessage),
+      partial: raw.partial === true,
+      truncated: raw.truncated === true,
+      sequence,
+    };
   }
 
   private applyApprovalRequested(event: YuanshuMessage): void {
@@ -368,7 +499,7 @@ export class DataProjection {
   private upsertTurn(nodeId: string, ownerId: string, workspaceId: string, threadId: string, turnId: string): TurnProjection {
     const key = turnKey(nodeId, workspaceId, threadId, turnId);
     const current = this.stateValue.turns[key];
-    const next: TurnProjection = { ...current, key, ownerId, nodeId, workspaceId, threadId, turnId };
+    const next: TurnProjection = { ...current, key, ownerId, nodeId, workspaceId, threadId, turnId, items: [...(current?.items ?? [])] };
     this.stateValue.turns[key] = next;
     return next;
   }
@@ -400,4 +531,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function mergeItem(current: ThreadItemProjection, incoming: ThreadItemProjection): ThreadItemProjection {
+  const next = { ...current, ...incoming };
+  if (current.kind === "agent_message" && incoming.kind === "agent_message" && incoming.sequence !== current.sequence) {
+    next.text = incoming.text === current.text ? current.text : `${current.text ?? ""}${incoming.text ?? ""}`;
+  }
+  if (current.kind === "command_output" && incoming.kind === "command_output" && incoming.sequence !== current.sequence) {
+    next.output = `${current.output ?? ""}${incoming.output ?? ""}`;
+  }
+  if (current.kind === "command" && incoming.kind === "command_output") {
+    next.output = `${current.output ?? ""}${incoming.output ?? ""}`;
+    next.kind = "command";
+  }
+  return next;
 }

@@ -54,6 +54,29 @@ describe("personal data projection", () => {
     projection.apply(event);
     expect(projection.state.events[eventBucketKey(event)]).toHaveLength(1);
   });
+
+  it("merges snapshot history with streaming message, command, and diff items", () => {
+    const projection = new DataProjection();
+    projection.apply(message("node-a", 1, "thread.snapshot", {
+      status: "idle", historyState: "complete", title: "Deploy API", preview: "ship it",
+      turns: [{ id: "turn", status: "completed", historyState: "complete", items: [
+        { id: "user-item", kind: "user_message", status: "completed", text: "ship it" },
+        { id: "agent-item", kind: "agent_message", status: "completed", text: "done" },
+      ] }],
+    }, "workspace", "thread"));
+    projection.apply(message("node-a", 2, "turn.started", { status: "running" }, "workspace", "thread", "turn"));
+    projection.apply(message("node-a", 3, "agent.message.delta", { text: " + more" }, "workspace", "thread", "turn", "agent-item"));
+    projection.apply(message("node-a", 4, "command.started", { commandId: "command", displayText: "go test" }, "workspace", "thread", "turn"));
+    projection.apply(message("node-a", 5, "command.output.delta", { commandId: "command", stream: "stdout", text: "ok\n" }, "workspace", "thread", "turn"));
+    projection.apply(message("node-a", 6, "diff.updated", { path: "internal/app.go", diff: "+new" }, "workspace", "thread", "turn"));
+
+    const thread = projection.state.threads[threadKey("node-a", "workspace", "thread")];
+    const turn = projection.state.turns[turnKey("node-a", "workspace", "thread", "turn")];
+    expect(thread.title).toBe("Deploy API");
+    expect(turn.items.find((item) => item.id === "agent-item")?.text).toBe("done + more");
+    expect(turn.items.find((item) => item.id === "command")?.output).toBe("ok\n");
+    expect(turn.items.find((item) => item.kind === "diff")?.path).toBe("internal/app.go");
+  });
 });
 
 function message(nodeId: string, sequence: number, type: string, payload: Record<string, unknown>, workspaceId?: string, threadId?: string, turnId?: string, itemId?: string): YuanshuMessage {

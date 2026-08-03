@@ -2,7 +2,7 @@
   "protocolVersion": "1.0",
   "schemaDraft": "https://json-schema.org/draft/2020-12/schema",
   "schemaFile": "yuanshu-protocol.schema.json",
-  "schemaSha256": "bf0bfb18bfcb865229b1d2b91664301fd6141bdb0d3c4451d73f139a0a59ea26",
+  "schemaSha256": "11af50b807776880f99c597b1d2ef84a29219c39a6fc7617415c375c10d6e47a",
   "generator": "quicktype@26.0.0",
   "generatedTargets": [
     "internal/protocol/v1/types.generated.go",

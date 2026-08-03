@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/adapter/codex/appserver"
+	"github.com/yuanshu-ai/yuanshu/internal/adapter/codex/probe"
 	"github.com/yuanshu-ai/yuanshu/internal/config"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
@@ -628,10 +630,12 @@ func sameLocalPath(left, right string) bool {
 var stableSourceKinds = []string{"cli", "vscode", "exec", "appServer", "subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "unknown"}
 
 type codexThread struct {
-	ID        string `json:"id"`
-	Cwd       string `json:"cwd"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
+	ID        string  `json:"id"`
+	Cwd       string  `json:"cwd"`
+	Name      *string `json:"name"`
+	Preview   string  `json:"preview"`
+	CreatedAt int64   `json:"createdAt"`
+	UpdatedAt int64   `json:"updatedAt"`
 	Status    struct {
 		Type string `json:"type"`
 	} `json:"status"`
@@ -639,20 +643,213 @@ type codexThread struct {
 }
 
 type codexTurn struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
+	ID        string            `json:"id"`
+	Status    string            `json:"status"`
+	Items     []codexThreadItem `json:"items"`
+	ItemsView string            `json:"itemsView"`
+	Error     *codexTurnError   `json:"error"`
+}
+
+type codexTurnError struct {
+	Message           string `json:"message"`
+	AdditionalDetails string `json:"additionalDetails"`
+}
+
+type codexThreadItem struct {
+	ID               string            `json:"id"`
+	Type             string            `json:"type"`
+	Status           string            `json:"status"`
+	Text             string            `json:"text"`
+	Command          string            `json:"command"`
+	AggregatedOutput string            `json:"aggregatedOutput"`
+	ExitCode         *int              `json:"exitCode"`
+	Tool             string            `json:"tool"`
+	Server           string            `json:"server"`
+	Content          []json.RawMessage `json:"content"`
+	Changes          []codexFileChange `json:"changes"`
+	Error            *codexItemError   `json:"error"`
+}
+
+type codexFileChange struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+	Diff string `json:"diff"`
+}
+
+type codexItemError struct {
+	Message string `json:"message"`
 }
 
 func publicThread(value codexThread, workspaceID string) adapter.Thread {
-	return adapter.Thread{ID: value.ID, WorkspaceID: workspaceID, Status: value.Status.Type, CreatedAt: time.Unix(value.CreatedAt, 0).UTC(), UpdatedAt: time.Unix(value.UpdatedAt, 0).UTC()}
+	title := ""
+	if value.Name != nil {
+		title = boundedHistoryText(*value.Name)
+	}
+	return adapter.Thread{
+		ID: value.ID, WorkspaceID: workspaceID, Status: value.Status.Type,
+		Title: title, Preview: boundedHistoryText(value.Preview),
+		HistoryState: "partial", CreatedAt: time.Unix(value.CreatedAt, 0).UTC(), UpdatedAt: time.Unix(value.UpdatedAt, 0).UTC(),
+	}
 }
 
 func publicSnapshot(value codexThread, workspaceID string) adapter.ThreadSnapshot {
 	snapshot := adapter.ThreadSnapshot{Thread: publicThread(value, workspaceID), Turns: make([]adapter.Turn, len(value.Turns))}
+	complete := true
 	for index, turn := range value.Turns {
-		snapshot.Turns[index] = adapter.Turn{ID: turn.ID, ThreadID: value.ID, Status: turn.Status}
+		items := make([]adapter.ThreadItem, 0, len(turn.Items)+1)
+		for _, item := range turn.Items {
+			mapped, ok := publicThreadItem(item, value.Cwd)
+			if !ok {
+				complete = false
+				continue
+			}
+			if mapped.Partial {
+				complete = false
+			}
+			items = append(items, mapped)
+			if item.Type == "fileChange" {
+				for changeIndex, change := range item.Changes[1:] {
+					extra := publicFileChangeItem(fmt.Sprintf("%s:%d", item.ID, changeIndex+1), item.Status, change, value.Cwd)
+					if extra.Partial {
+						complete = false
+					}
+					items = append(items, extra)
+				}
+			}
+		}
+		if turn.Error != nil && strings.TrimSpace(turn.Error.Message) != "" {
+			complete = false
+			items = append(items, adapter.ThreadItem{ID: turn.ID + ":error", Kind: "error", Status: "failed", ErrorMessage: boundedHistoryText(turn.Error.Message), Partial: true})
+		}
+		historyState := "complete"
+		if turn.ItemsView != "" && turn.ItemsView != "full" {
+			historyState = "partial"
+			complete = false
+		}
+		snapshot.Turns[index] = adapter.Turn{ID: turn.ID, ThreadID: value.ID, Status: turn.Status, HistoryState: historyState, Items: items}
+	}
+	if len(value.Turns) == 0 {
+		snapshot.Thread.HistoryState = "unavailable"
+	} else if !complete {
+		snapshot.Thread.HistoryState = "partial"
+	} else {
+		snapshot.Thread.HistoryState = "complete"
 	}
 	return snapshot
+}
+
+func publicThreadItem(value codexThreadItem, root string) (adapter.ThreadItem, bool) {
+	if value.ID == "" {
+		return adapter.ThreadItem{}, false
+	}
+	item := adapter.ThreadItem{ID: value.ID, Status: value.Status}
+	switch value.Type {
+	case "userMessage":
+		item.Kind, item.Text = "user_message", boundedHistoryTextFlag(contentText(value.Content), &item.Truncated)
+		if item.Text == "" {
+			item.Text = boundedHistoryTextFlag(value.Text, &item.Truncated)
+		}
+	case "agentMessage":
+		item.Kind, item.Text = "agent_message", boundedHistoryTextFlag(value.Text, &item.Truncated)
+	case "commandExecution":
+		item.Kind = "command"
+		item.Command = boundedHistoryTextFlag(redactHistory(value.Command, root), &item.Truncated)
+		item.Output = boundedHistoryTextFlag(redactHistory(value.AggregatedOutput, root), &item.Truncated)
+		item.ExitCode = value.ExitCode
+	case "fileChange":
+		item.Kind = "file_change"
+		if len(value.Changes) == 0 {
+			item.Partial = true
+			return item, true
+		}
+		item = publicFileChangeItem(value.ID, value.Status, value.Changes[0], root)
+	case "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch":
+		item.Kind, item.ToolName = "tool", boundedHistoryTextFlag(value.Tool, &item.Truncated)
+		if item.ToolName == "" {
+			item.ToolName = boundedHistoryTextFlag(value.Server, &item.Truncated)
+		}
+	case "plan", "reasoning", "hookPrompt":
+		item.Kind, item.Text, item.Partial = "unknown", boundedHistoryTextFlag(value.Text, &item.Truncated), true
+	default:
+		item.Kind, item.Partial = "unknown", true
+	}
+	if value.Error != nil && value.Error.Message != "" {
+		item.ErrorMessage, item.Partial = boundedHistoryTextFlag(value.Error.Message, &item.Truncated), true
+	}
+	return item, true
+}
+
+func publicFileChangeItem(id, status string, change codexFileChange, root string) adapter.ThreadItem {
+	item := adapter.ThreadItem{ID: id, Kind: "file_change", Status: status}
+	logical, valid := logicalExistingOrFuture(root, change.Path)
+	if !valid {
+		item.Partial = true
+		return item
+	}
+	item.Path = logical
+	item.ChangeType = normalizeChangeKind(change.Kind)
+	item.Diff, item.Truncated = boundedHistory(redactHistory(change.Diff, root))
+	return item
+}
+
+func contentText(content []json.RawMessage) string {
+	parts := make([]string, 0, len(content))
+	for _, raw := range content {
+		var value struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(raw, &value) == nil && value.Text != "" {
+			parts = append(parts, value.Text)
+			continue
+		}
+		var text string
+		if json.Unmarshal(raw, &text) == nil && text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func normalizeChangeKind(value string) string {
+	switch value {
+	case "add", "create", "created":
+		return "created"
+	case "delete", "deleted":
+		return "deleted"
+	case "rename", "renamed":
+		return "renamed"
+	default:
+		return "modified"
+	}
+}
+
+func redactHistory(value, root string) string {
+	return probe.RedactText(redactWorkspace(value, root))
+}
+
+func boundedHistoryText(value string) string {
+	bounded, _ := boundedHistory(value)
+	return bounded
+}
+
+func boundedHistoryTextFlag(value string, truncated *bool) string {
+	bounded, wasTruncated := boundedHistory(value)
+	if wasTruncated && truncated != nil {
+		*truncated = true
+	}
+	return bounded
+}
+
+func boundedHistory(value string) (string, bool) {
+	limit := 64 << 10
+	value = probe.RedactText(value)
+	if len(value) <= limit {
+		return value, false
+	}
+	for len(value) > limit && !utf8.ValidString(value[:limit]) {
+		limit--
+	}
+	return value[:limit], true
 }
 
 func hasInProgress(turns []adapter.Turn) bool {

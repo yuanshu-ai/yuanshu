@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/node/eventlog"
@@ -306,7 +307,7 @@ func (s *ControlSession) dispatch(ctx context.Context, message protocol.YuanshuM
 	case protocol.ControlDeviceSync:
 		health := s.runtime.Health()
 		return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventDeviceStatus, CorrelationID: message.MessageID, Payload: map[string]any{
-			"status": "online", "name": s.deviceName, "runtime": health.State,
+			"status": "online", "name": s.deviceName, "runtime": health.State, "version": health.CodexVersion, "protocol": health.Protocol,
 		}})
 	case protocol.ControlWorkspaceList:
 		items, err := s.store.Workspaces(ctx)
@@ -328,7 +329,7 @@ func (s *ControlSession) dispatch(ctx context.Context, message protocol.YuanshuM
 		}
 		threads := make([]any, 0, len(page.Data))
 		for _, thread := range page.Data {
-			threads = append(threads, map[string]any{"id": thread.ID, "status": thread.Status})
+			threads = append(threads, threadPayload(thread))
 		}
 		return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventThreadSnapshot, CorrelationID: message.MessageID, WorkspaceID: workspaceID, Payload: map[string]any{"status": "listed", "threads": threads, "nextCursor": page.NextCursor}})
 	case protocol.ControlThreadRead:
@@ -420,9 +421,77 @@ func (s *ControlSession) dispatch(ctx context.Context, message protocol.YuanshuM
 func (s *ControlSession) publishSnapshot(ctx context.Context, correlationID string, snapshot adapter.ThreadSnapshot) error {
 	turns := make([]any, 0, len(snapshot.Turns))
 	for _, turn := range snapshot.Turns {
-		turns = append(turns, map[string]any{"id": turn.ID, "status": turn.Status})
+		items := make([]any, 0, len(turn.Items))
+		for _, item := range turn.Items {
+			items = append(items, threadItemPayload(item))
+		}
+		turns = append(turns, map[string]any{"id": turn.ID, "status": turn.Status, "historyState": turn.HistoryState, "items": items})
 	}
-	return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventThreadSnapshot, CorrelationID: correlationID, WorkspaceID: snapshot.Thread.WorkspaceID, ThreadID: snapshot.Thread.ID, Payload: map[string]any{"status": snapshot.Thread.Status, "turns": turns}})
+	payload := threadPayload(snapshot.Thread)
+	payload["historyState"] = snapshot.Thread.HistoryState
+	payload["turns"] = turns
+	return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventThreadSnapshot, CorrelationID: correlationID, WorkspaceID: snapshot.Thread.WorkspaceID, ThreadID: snapshot.Thread.ID, Payload: payload})
+}
+
+func threadPayload(thread adapter.Thread) map[string]any {
+	payload := map[string]any{"id": thread.ID, "status": thread.Status}
+	if thread.Title != "" {
+		payload["title"] = thread.Title
+	}
+	if thread.Preview != "" {
+		payload["preview"] = thread.Preview
+	}
+	if thread.HistoryState != "" {
+		payload["historyState"] = thread.HistoryState
+	}
+	if !thread.CreatedAt.IsZero() {
+		payload["createdAt"] = thread.CreatedAt.Format(time.RFC3339Nano)
+	}
+	if !thread.UpdatedAt.IsZero() {
+		payload["updatedAt"] = thread.UpdatedAt.Format(time.RFC3339Nano)
+	}
+	return payload
+}
+
+func threadItemPayload(item adapter.ThreadItem) map[string]any {
+	payload := map[string]any{"id": item.ID, "kind": item.Kind, "status": item.Status}
+	if item.Text != "" {
+		payload["text"] = item.Text
+	}
+	if item.Command != "" {
+		payload["command"] = item.Command
+	}
+	if item.Output != "" {
+		payload["output"] = item.Output
+	}
+	if item.ToolName != "" {
+		payload["toolName"] = item.ToolName
+	}
+	if item.Path != "" {
+		payload["path"] = item.Path
+	}
+	if item.ChangeType != "" {
+		payload["changeType"] = item.ChangeType
+	}
+	if item.Diff != "" {
+		payload["diff"] = item.Diff
+	}
+	if item.ExitCode != nil {
+		payload["exitCode"] = *item.ExitCode
+	}
+	if item.ErrorCode != "" {
+		payload["errorCode"] = item.ErrorCode
+	}
+	if item.ErrorMessage != "" {
+		payload["errorMessage"] = item.ErrorMessage
+	}
+	if item.Partial {
+		payload["partial"] = true
+	}
+	if item.Truncated {
+		payload["truncated"] = true
+	}
+	return payload
 }
 
 func (s *ControlSession) publish(ctx context.Context, event adapter.AgentEvent) error {
