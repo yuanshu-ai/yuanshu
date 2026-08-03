@@ -16,6 +16,13 @@
       "type": "array",
       "maxItems": 32,
       "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+    },
+    "web": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
     }
   }
 }

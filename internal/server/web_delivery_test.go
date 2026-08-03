@@ -1,0 +1,116 @@
+package server
+
+import (
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+	"testing"
+)
+
+func TestEmbeddedWebDeliveryServesWorkbenchRuntimeConfigAndAssets(t *testing.T) {
+	api := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/healthz" {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.NotFound(writer, request)
+	})
+	handler, err := newWebDeliveryHandler(api, webDeliveryOptions{Enabled: true, PublicURL: "https://192.168.1.20:7444"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	health := httptest.NewRecorder()
+	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if health.Code != http.StatusNoContent {
+		t.Fatalf("health status=%d", health.Code)
+	}
+
+	page := httptest.NewRecorder()
+	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Yuanshu") || page.Header().Get("Content-Security-Policy") == "" || page.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("page status=%d headers=%v body=%q", page.Code, page.Header(), page.Body.String())
+	}
+
+	runtime := httptest.NewRecorder()
+	handler.ServeHTTP(runtime, httptest.NewRequest(http.MethodGet, "/yuanshu.config.json", nil))
+	var settings map[string]string
+	if err := json.Unmarshal(runtime.Body.Bytes(), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings["relayUrl"] != "wss://192.168.1.20:7444/web/connect" || settings["pairingUrl"] != "https://192.168.1.20:7444/pair" || runtime.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("runtime settings=%v headers=%v", settings, runtime.Header())
+	}
+
+	match := regexp.MustCompile(`(?:src|href)="(/assets/[^"]+)"`).FindStringSubmatch(page.Body.String())
+	if len(match) != 2 {
+		t.Fatalf("asset link unavailable: %q", page.Body.String())
+	}
+	asset := httptest.NewRecorder()
+	handler.ServeHTTP(asset, httptest.NewRequest(http.MethodGet, match[1], nil))
+	if asset.Code != http.StatusOK || asset.Body.Len() == 0 || !strings.Contains(asset.Header().Get("Cache-Control"), "immutable") {
+		t.Fatalf("asset status=%d bytes=%d headers=%v", asset.Code, asset.Body.Len(), asset.Header())
+	}
+
+	spa := httptest.NewRecorder()
+	handler.ServeHTTP(spa, httptest.NewRequest(http.MethodGet, "/nodes/node-1/threads/thread-1", nil))
+	if spa.Code != http.StatusOK || spa.Body.String() != page.Body.String() {
+		t.Fatalf("SPA fallback status=%d", spa.Code)
+	}
+}
+
+func TestEmbeddedWebDeliveryCanBeDisabled(t *testing.T) {
+	api := http.NotFoundHandler()
+	handler, err := newWebDeliveryHandler(api, webDeliveryOptions{Enabled: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+func TestEmbeddedWebDeliveryRejectsTraversal(t *testing.T) {
+	handler, err := newWebDeliveryHandler(http.NotFoundHandler(), webDeliveryOptions{Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/settings", nil)
+	request.URL.Path = "/assets/../settings"
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+func TestEmbeddedWebRuntimeConfigUsesTLSRequestHost(t *testing.T) {
+	handler, err := newWebDeliveryHandler(http.NotFoundHandler(), webDeliveryOptions{Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "https://[fd00::20]:7444/yuanshu.config.json", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var settings map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings["relayUrl"] != "wss://[fd00::20]:7444/web/connect" || settings["pairingUrl"] != "https://[fd00::20]:7444/pair" {
+		t.Fatalf("settings=%v", settings)
+	}
+}
+
+func TestWebAccessURLUsesPublicURLAndLoopbackForWildcard(t *testing.T) {
+	if got := webAccessURL("https://192.168.1.20:7444/", &net.TCPAddr{IP: net.IPv4zero, Port: 7444}); got != "https://192.168.1.20:7444/" {
+		t.Fatalf("public URL=%q", got)
+	}
+	if got := webAccessURL("", &net.TCPAddr{IP: net.IPv4zero, Port: 7555}); got != "http://127.0.0.1:7555/" {
+		t.Fatalf("local URL=%q", got)
+	}
+}

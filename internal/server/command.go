@@ -18,6 +18,7 @@ const Usage = `Usage:
   yuanshu server [run] [--config <absolute-path>] [--data-dir <absolute-path>] [--listen <ip:port>]
     [--public-url https://host[:port] --tls-cert <absolute-path> --tls-key <absolute-path>]
     [--allowed-control-origin https://web-host[:port]]
+    [--web | --no-web]
   yuanshu server doctor [--config <absolute-path>] [--json]
   yuanshu server healthcheck [--address 127.0.0.1:7444]
 `
@@ -63,6 +64,7 @@ func parseServerOptions(args []string) (Options, error) {
 	var configPath string
 	var dataDir, listen, publicURL, tlsCert, tlsKey string
 	var origins []string
+	var webOverride *bool
 	var hasDataDir, hasListen, hasPublicURL, hasTLSCert, hasTLSKey bool
 	for index := 0; index < len(args); index++ {
 		name := args[index]
@@ -113,6 +115,18 @@ func parseServerOptions(args []string) (Options, error) {
 				return Options{}, ErrUsage
 			}
 			origins = append(origins, strings.TrimSuffix(args[index], "/"))
+		case "--web":
+			if webOverride != nil {
+				return Options{}, ErrUsage
+			}
+			value := true
+			webOverride = &value
+		case "--no-web":
+			if webOverride != nil {
+				return Options{}, ErrUsage
+			}
+			value := false
+			webOverride = &value
 		default:
 			return Options{}, ErrUsage
 		}
@@ -125,6 +139,7 @@ func parseServerOptions(args []string) (Options, error) {
 		options.DataDir, options.Listen, options.PublicURL = file.DataDir, file.Listen, file.PublicURL
 		options.TLSCertFile, options.TLSKeyFile = file.TLSCertFile, file.TLSKeyFile
 		options.AllowedControlOrigins = append([]string(nil), file.AllowedControlOrigins...)
+		options.WebEnabled = cloneBool(file.Web.Enabled)
 		if options.Listen == "" {
 			options.Listen = "127.0.0.1:7444"
 		}
@@ -147,6 +162,9 @@ func parseServerOptions(args []string) (Options, error) {
 	if len(origins) > 0 {
 		options.AllowedControlOrigins = origins
 	}
+	if webOverride != nil {
+		options.WebEnabled = webOverride
+	}
 	if options.DataDir == "" || !validListen(options.Listen) || !validPublicOptions(options) || !validControlOrigins(options.AllowedControlOrigins) {
 		return Options{}, ErrUsage
 	}
@@ -166,6 +184,7 @@ type doctorStatus struct {
 	TLSError              string   `json:"tlsError,omitempty"`
 	AllowedControlOrigins []string `json:"allowedControlOrigins,omitempty"`
 	Revision              string   `json:"revision,omitempty"`
+	Web                   string   `json:"web"`
 }
 
 func doctor(ctx context.Context, args []string, stdout io.Writer) error {
@@ -188,7 +207,7 @@ func doctor(ctx context.Context, args []string, stdout io.Writer) error {
 			return ErrUsage
 		}
 	}
-	status := doctorStatus{Version: 1, State: "needs_attention", Config: "unavailable", TLS: "not_configured"}
+	status := doctorStatus{Version: 1, State: "needs_attention", Config: "unavailable", TLS: "not_configured", Web: "enabled"}
 	if configPath == "" {
 		status.Config = "not_configured"
 		return writeDoctorStatus(stdout, status, jsonOutput, false)
@@ -203,6 +222,9 @@ func doctor(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	status.AllowedControlOrigins = append([]string(nil), value.AllowedControlOrigins...)
 	status.Revision = configRevision(value)
+	if !embeddedWebEnabled(value.Web.Enabled) {
+		status.Web = "disabled"
+	}
 	if value.PublicURL != "" {
 		tlsConfig, tlsErr := loadTLSConfig(Options{PublicURL: value.PublicURL, TLSCertFile: value.TLSCertFile, TLSKeyFile: value.TLSKeyFile})
 		if tlsErr != nil {
@@ -229,12 +251,20 @@ func writeDoctorStatus(stdout io.Writer, status doctorStatus, jsonOutput, health
 			return err
 		}
 	} else {
-		_, _ = fmt.Fprintf(stdout, "Yuanshu Server: %s\nConfig: %s\nListen: %s\nPublic URL: %s\nTLS: %s\n", status.State, status.Config, status.Listen, status.PublicURL, status.TLS)
+		_, _ = fmt.Fprintf(stdout, "Yuanshu Server: %s\nConfig: %s\nListen: %s\nPublic URL: %s\nTLS: %s\nWeb: %s\n", status.State, status.Config, status.Listen, status.PublicURL, status.TLS, status.Web)
 	}
 	if !healthy {
 		return errors.New("server requires attention")
 	}
 	return nil
+}
+
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func validListen(value string) bool {

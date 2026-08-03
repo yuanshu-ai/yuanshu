@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
@@ -32,6 +33,7 @@ type Options struct {
 	TLSCertFile           string
 	TLSKeyFile            string
 	AllowedControlOrigins []string
+	WebEnabled            *bool
 	Stdout                io.Writer
 	Random                io.Reader
 	Clock                 func() time.Time
@@ -108,6 +110,22 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return err
 	}
+	handler, err = newWebDeliveryHandler(handler, webDeliveryOptions{
+		Enabled:   embeddedWebEnabled(options.WebEnabled),
+		PublicURL: options.PublicURL,
+	})
+	if err != nil {
+		return err
+	}
+	if embeddedWebEnabled(options.WebEnabled) {
+		writer := options.Stdout
+		if writer == nil {
+			writer = io.Discard
+		}
+		if _, err := fmt.Fprintf(writer, "Yuanshu Web: %s\n", webAccessURL(options.PublicURL, listener.Addr())); err != nil {
+			return errors.New("server web address output failed")
+		}
+	}
 	shutdownTimeout := options.ShutdownTimeout
 	if shutdownTimeout == 0 {
 		shutdownTimeout = 5 * time.Second
@@ -148,6 +166,21 @@ func Run(ctx context.Context, options Options) error {
 		return nil
 	}
 	return errors.New("server HTTP service failed")
+}
+
+func embeddedWebEnabled(value *bool) bool {
+	return value == nil || *value
+}
+
+func webAccessURL(publicURL string, address net.Addr) string {
+	if publicURL != "" {
+		return strings.TrimSuffix(publicURL, "/") + "/"
+	}
+	host := address.String()
+	if tcpAddress, ok := address.(*net.TCPAddr); ok && tcpAddress.IP.IsUnspecified() {
+		host = net.JoinHostPort("127.0.0.1", strconv.Itoa(tcpAddress.Port))
+	}
+	return "http://" + host + "/"
 }
 
 func validateRunOptions(options Options) error {

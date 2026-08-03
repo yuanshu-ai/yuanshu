@@ -162,6 +162,9 @@ pnpm --dir web test
 pnpm --dir web build
 ```
 
+Web 构建会把正式产物写入 `internal/server/webassets/dist`，普通 Go 构建直接嵌入
+这份确定性产物。独立开发服务使用 `pnpm --dir web dev`。
+
 正式 Protocol v1 Schema 是线上的唯一类型来源。可使用以下命令重新生成并检查提交的 Go/TypeScript 类型：
 
 ```shell
@@ -222,7 +225,10 @@ listen = "0.0.0.0:7444"
 public_url = "https://192.168.1.20:7444"
 tls_cert_file = "/absolute/path/server.crt"
 tls_key_file = "/absolute/path/server.key"
-allowed_control_origins = ["https://192.168.1.20:4173"]
+allowed_control_origins = ["https://192.168.1.20:7444"]
+
+[web]
+enabled = true
 ```
 
 ```shell
@@ -230,7 +236,11 @@ yuanshu server --config /absolute/path/server.toml
 yuanshu server doctor --config /absolute/path/server.toml --json
 ```
 
-Web 可以加载 `/yuanshu.config.json`，也可以在连接设置页面填写：
+正式 Server 默认在 `/` 提供内置个人工作台，并根据 `public_url` 动态生成
+`/yuanshu.config.json`。因此启动 `yuanshu server` 后，Server、配对页、Relay 和
+Web UI 共用一个进程、端口、证书和容器。命令会输出访问地址，但不会自动弹出浏览器。
+
+用户仍可在连接设置页面覆盖自动生成的地址：
 
 ```json
 {
@@ -238,6 +248,10 @@ Web 可以加载 `/yuanshu.config.json`，也可以在连接设置页面填写�
   "pairingUrl": "https://192.168.1.20:7444/pair"
 }
 ```
+
+开发时继续使用独立 Vite 服务。高级部署可以设置 `web.enabled = false` 或传入
+`--no-web`，将同一静态构建放到 CDN 或另一个 HTTPS Origin；此时必须把该 Origin
+加入 `allowed_control_origins`。
 
 浏览器只在 IndexedDB 保存连接地址和控制端身份。Node 设置以脱敏形式读取；Relay、代理、工作区和执行边界的变更需要 Node 本机确认。Server 监听/TLS 设置和凭据仍只能由本机配置文件或 CLI 管理。
 

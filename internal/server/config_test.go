@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,10 +12,11 @@ import (
 )
 
 func TestServerConfigValidatesIPTLSAndOrigins(t *testing.T) {
+	enabled, disabled := true, false
 	valid := []ConfigFile{
 		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "127.0.0.1:7444"},
-		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "0.0.0.0:7444", PublicURL: "https://192.168.1.20:7444", TLSCertFile: "/tmp/server.crt", TLSKeyFile: "/tmp/server.key", AllowedControlOrigins: []string{"https://192.168.1.20:4173"}},
-		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "[::]:7444", PublicURL: "https://[fd00::20]:7444", TLSCertFile: "/tmp/server.crt", TLSKeyFile: "/tmp/server.key"},
+		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "0.0.0.0:7444", PublicURL: "https://192.168.1.20:7444", TLSCertFile: "/tmp/server.crt", TLSKeyFile: "/tmp/server.key", AllowedControlOrigins: []string{"https://192.168.1.20:4173"}, Web: WebConfig{Enabled: &enabled}},
+		{ConfigVersion: 1, DataDir: "/tmp/server", Listen: "[::]:7444", PublicURL: "https://[fd00::20]:7444", TLSCertFile: "/tmp/server.crt", TLSKeyFile: "/tmp/server.key", Web: WebConfig{Enabled: &disabled}},
 	}
 	for _, value := range valid {
 		if err := ValidateConfigFile(value); err != nil {
@@ -77,12 +79,19 @@ func TestParseServerOptionsConfigPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(context.Background(), ConfigFile{ConfigVersion: 1, DataDir: data, Listen: "127.0.0.1:7444"}); err != nil {
+	disabled := false
+	if err := store.Save(context.Background(), ConfigFile{ConfigVersion: 1, DataDir: data, Listen: "127.0.0.1:7444", Web: WebConfig{Enabled: &disabled}}); err != nil {
 		t.Fatal(err)
 	}
-	options, err := parseServerOptions([]string{"--listen", "127.0.0.1:7555", "--config", configPath})
-	if err != nil || options.DataDir != data || options.Listen != "127.0.0.1:7555" {
+	options, err := parseServerOptions([]string{"--listen", "127.0.0.1:7555", "--config", configPath, "--web"})
+	if err != nil || options.DataDir != data || options.Listen != "127.0.0.1:7555" || options.WebEnabled == nil || !*options.WebEnabled {
 		t.Fatalf("options=%#v err=%v", options, err)
+	}
+}
+
+func TestParseServerOptionsRejectsConflictingWebFlags(t *testing.T) {
+	if _, err := parseServerOptions([]string{"--web", "--no-web"}); !errors.Is(err, ErrUsage) {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -107,5 +116,8 @@ func TestServerDoctorReportsTLSIdentity(t *testing.T) {
 	}
 	if status.State != "ready" || status.TLS != "ready" || len(status.TLSSAN) != 1 || status.TLSSAN[0] != "localhost" || status.TLSNotAfter == "" {
 		t.Fatalf("doctor status=%+v", status)
+	}
+	if status.Web != "enabled" {
+		t.Fatalf("web status=%q", status.Web)
 	}
 }

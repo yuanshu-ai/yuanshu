@@ -26,13 +26,20 @@ const (
 // are referenced by path and are never read into this structure for logging or
 // transport purposes.
 type ConfigFile struct {
-	ConfigVersion         int      `toml:"config_version" json:"config_version"`
-	DataDir               string   `toml:"data_dir" json:"data_dir"`
-	Listen                string   `toml:"listen" json:"listen"`
-	PublicURL             string   `toml:"public_url" json:"public_url"`
-	TLSCertFile           string   `toml:"tls_cert_file" json:"tls_cert_file"`
-	TLSKeyFile            string   `toml:"tls_key_file" json:"tls_key_file"`
-	AllowedControlOrigins []string `toml:"allowed_control_origins" json:"allowed_control_origins"`
+	ConfigVersion         int       `toml:"config_version" json:"config_version"`
+	DataDir               string    `toml:"data_dir" json:"data_dir"`
+	Listen                string    `toml:"listen" json:"listen"`
+	PublicURL             string    `toml:"public_url" json:"public_url"`
+	TLSCertFile           string    `toml:"tls_cert_file" json:"tls_cert_file"`
+	TLSKeyFile            string    `toml:"tls_key_file" json:"tls_key_file"`
+	AllowedControlOrigins []string  `toml:"allowed_control_origins" json:"allowed_control_origins"`
+	Web                   WebConfig `toml:"web" json:"web"`
+}
+
+// WebConfig controls delivery of the embedded personal workbench. A nil
+// Enabled value preserves the secure, single-service default: enabled.
+type WebConfig struct {
+	Enabled *bool `toml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 type ConfigFileStore struct {

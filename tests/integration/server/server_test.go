@@ -65,7 +65,7 @@ func TestFormalServerBootstrapPersistsAcrossRestart(t *testing.T) {
 		cancel()
 		t.Fatal("bootstrap secret was not displayed")
 	}
-	line := strings.TrimSpace(output.String())
+	line := strings.Split(strings.TrimSpace(output.String()), "\n")[0]
 	marker := "shown once): "
 	index := strings.Index(line, marker)
 	if index < 0 {
@@ -145,7 +145,7 @@ func TestFormalServerBootstrapPersistsAcrossRestart(t *testing.T) {
 	}
 	statusBody, _ := io.ReadAll(statusResponse.Body)
 	_ = statusResponse.Body.Close()
-	if statusResponse.StatusCode != http.StatusOK || !bytes.Contains(statusBody, []byte("completed")) || restartOutput.String() != "" {
+	if statusResponse.StatusCode != http.StatusOK || !bytes.Contains(statusBody, []byte("completed")) || strings.Contains(restartOutput.String(), "bootstrap secret") || !strings.Contains(restartOutput.String(), "Yuanshu Web: ") {
 		restartCancel()
 		t.Fatalf("restart status=%d output-len=%d", statusResponse.StatusCode, len(restartOutput.String()))
 	}

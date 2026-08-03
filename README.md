@@ -163,6 +163,11 @@ pnpm --dir web test
 pnpm --dir web build
 ```
 
+The Web build writes the production bundle to
+`internal/server/webassets/dist`; those deterministic assets are embedded by
+ordinary Go builds. Use `pnpm --dir web dev` for the separate development
+server.
+
 The formal Protocol v1 Schema is the sole wire-type source. Regenerate and verify the committed Go/TypeScript types with:
 
 ```shell
@@ -252,7 +257,10 @@ listen = "0.0.0.0:7444"
 public_url = "https://192.168.1.20:7444"
 tls_cert_file = "/absolute/path/server.crt"
 tls_key_file = "/absolute/path/server.key"
-allowed_control_origins = ["https://192.168.1.20:4173"]
+allowed_control_origins = ["https://192.168.1.20:7444"]
+
+[web]
+enabled = true
 ```
 
 ```shell
@@ -260,8 +268,14 @@ yuanshu server --config /absolute/path/server.toml
 yuanshu server doctor --config /absolute/path/server.toml --json
 ```
 
-The Web build can load `/yuanshu.config.json`, or a user can enter these
-addresses in the connection settings page:
+The production Server serves the embedded personal workbench at `/` and
+generates `/yuanshu.config.json` from `public_url`. Starting `yuanshu server`
+therefore gives one process, port, certificate, and container for the Server,
+pairing page, Relay, and Web UI. It prints the access URL but does not launch a
+browser automatically.
+
+The user may still override the generated addresses in the connection settings
+page:
 
 ```json
 {
@@ -269,6 +283,11 @@ addresses in the connection settings page:
   "pairingUrl": "https://192.168.1.20:7444/pair"
 }
 ```
+
+Vite remains a separate development server. Advanced deployments may set
+`web.enabled = false` or pass `--no-web` and host the same static build on a CDN
+or another HTTPS origin; that origin must then be included in
+`allowed_control_origins`.
 
 The browser stores only connection settings and the control identity in
 IndexedDB. Node settings are redacted; Relay, proxy, workspace, and execution

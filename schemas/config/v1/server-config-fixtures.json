@@ -12,7 +12,8 @@
       "public_url": "https://192.168.1.20:7444",
       "tls_cert_file": "/tmp/server.crt",
       "tls_key_file": "/tmp/server.key",
-      "allowed_control_origins": ["https://192.168.1.20:4173"]
+      "allowed_control_origins": ["https://192.168.1.20:4173"],
+      "web": { "enabled": true }
     },
     {
       "config_version": 1,
@@ -21,6 +22,12 @@
       "public_url": "https://[fd00::20]:7444",
       "tls_cert_file": "/tmp/server.crt",
       "tls_key_file": "/tmp/server.key"
+    },
+    {
+      "config_version": 1,
+      "data_dir": "/tmp/yuanshu-server",
+      "listen": "127.0.0.1:7444",
+      "web": { "enabled": false }
     }
   ],
   "invalid": [

@@ -46,6 +46,7 @@ const Usage = `Usage:
     [--public-url https://host[:port] --tls-cert <absolute-path> --tls-key <absolute-path>]
     [--allowed-control-origin https://web-host[:port]]
     [--master-key-file <absolute-path>]
+    [--web | --no-web]
 `
 
 type Options struct {
@@ -57,6 +58,7 @@ type Options struct {
 	TLSCertFile           string
 	TLSKeyFile            string
 	AllowedControlOrigins []string
+	WebEnabled            *bool
 	MasterKeyFile         string
 	Stdout                io.Writer
 	Platform              platform.Platform
@@ -87,6 +89,7 @@ func parseArguments(args []string) (Options, error) {
 	options := Options{Listen: "127.0.0.1:7444"}
 	seen := make(map[string]bool)
 	var origins []string
+	var webOverride *bool
 	for index := 0; index < len(args); index++ {
 		name := args[index]
 		if seen[name] && name != "--allowed-control-origin" {
@@ -148,11 +151,24 @@ func parseArguments(args []string) (Options, error) {
 				return Options{}, ErrUsage
 			}
 			origins = append(origins, strings.TrimSuffix(args[index], "/"))
+		case "--web":
+			if webOverride != nil {
+				return Options{}, ErrUsage
+			}
+			value := true
+			webOverride = &value
+		case "--no-web":
+			if webOverride != nil {
+				return Options{}, ErrUsage
+			}
+			value := false
+			webOverride = &value
 		default:
 			return Options{}, ErrUsage
 		}
 	}
 	options.AllowedControlOrigins = origins
+	options.WebEnabled = webOverride
 	if options.DataDir == "" || options.Config == "" || !validListen(options.Listen) || !validPublicOptions(options) {
 		return Options{}, ErrUsage
 	}
@@ -245,6 +261,9 @@ func Run(ctx context.Context, options Options) error {
 		}
 		if len(options.AllowedControlOrigins) == 0 {
 			options.AllowedControlOrigins = append([]string(nil), serverConfig.AllowedControlOrigins...)
+		}
+		if options.WebEnabled == nil {
+			options.WebEnabled = copyBool(serverConfig.Web.Enabled)
 		}
 	}
 	if options.DataDir == "" || options.Config == "" || !filepath.IsAbs(options.DataDir) || !filepath.IsAbs(options.Config) || !validListen(options.Listen) || !validPublicOptions(options) || !validControlOrigins(options.AllowedControlOrigins) || options.Platform == nil {
@@ -350,7 +369,7 @@ func Run(ctx context.Context, options Options) error {
 	go func() {
 		results <- server.Run(runCtx, server.Options{
 			DataDir: serverDir, Listen: options.Listen, PublicURL: options.PublicURL, TLSCertFile: options.TLSCertFile, TLSKeyFile: options.TLSKeyFile, AllowedControlOrigins: options.AllowedControlOrigins,
-			Stdout: options.Stdout, Random: options.Random, Clock: options.Clock,
+			WebEnabled: options.WebEnabled, Stdout: options.Stdout, Random: options.Random, Clock: options.Clock,
 			LocalNode: &server.LocalNodeSession{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID, Transport: serverSide},
 		})
 	}()
@@ -366,6 +385,14 @@ func Run(ctx context.Context, options Options) error {
 		return first
 	}
 	return second
+}
+
+func copyBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func validControlOrigins(values []string) bool {

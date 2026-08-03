@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	cryptorand "crypto/rand"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,10 +57,12 @@ func TestPublicServerServesTLS13(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
+	var output bytes.Buffer
 	go func() {
 		done <- Run(ctx, Options{
 			DataDir: filepath.Join(root, "data"), Listen: listener.Addr().String(), Listener: listener,
 			PublicURL: "https://localhost:" + big.NewInt(int64(port)).String(), TLSCertFile: certPath, TLSKeyFile: keyPath,
+			Stdout: &output,
 		})
 	}()
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}}}
@@ -76,6 +80,14 @@ func TestPublicServerServesTLS13(t *testing.T) {
 			t.Fatalf("TLS server did not start: %v", requestErr)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	page, err := client.Get("https://localhost:" + big.NewInt(int64(port)).String() + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer page.Body.Close()
+	if page.StatusCode != http.StatusOK || !strings.Contains(page.Header.Get("Content-Type"), "text/html") || !strings.Contains(output.String(), "Yuanshu Web: https://localhost:") {
+		t.Fatalf("page status=%d headers=%v output=%q", page.StatusCode, page.Header, output.String())
 	}
 	cancel()
 	if err := <-done; err != nil {
