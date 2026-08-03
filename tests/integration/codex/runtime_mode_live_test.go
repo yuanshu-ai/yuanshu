@@ -28,10 +28,7 @@ func TestRuntimeModeLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Codex version: %v", err)
 	}
-	version := strings.TrimSpace(string(versionOutput))
-	if version != "codex-cli "+schemaVersion {
-		t.Fatalf("Codex version mismatch: got a different version, want %s", schemaVersion)
-	}
+	version := requireCompatibleCodexVersion(t, versionOutput)
 
 	assertRuntimeCLISurface(t, ctx)
 
@@ -83,7 +80,7 @@ func TestRuntimeModeLive(t *testing.T) {
 		daemonResult = "unsupported"
 	}
 
-	t.Logf("AC-004 runtime result: codex=%s platform=%s transport=stdio starts=%d auth=%s daemon=%s turns=0", schemaVersion, runtime.GOOS, len(authModes), authModes[0], daemonResult)
+	t.Logf("AC-004 runtime result: codex=%s platform=%s transport=stdio starts=%d auth=%s daemon=%s turns=0", version, runtime.GOOS, len(authModes), authModes[0], daemonResult)
 }
 
 func startRuntimeModeClient(ctx context.Context, workspace string) (*probe.Client, error) {

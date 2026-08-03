@@ -92,10 +92,7 @@ func TestLiveAppServerProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Codex version: %v", err)
 	}
-	version := strings.TrimSpace(string(versionOutput))
-	if version != "codex-cli "+schemaVersion {
-		t.Fatalf("Codex version = %q, want %q", version, "codex-cli "+schemaVersion)
-	}
+	version := requireCompatibleCodexVersion(t, versionOutput)
 
 	scenarios := []approvalScenario{
 		{
@@ -156,7 +153,7 @@ func TestLiveAppServerProtocol(t *testing.T) {
 
 	methods := sortedObserved(winner.observer.methods)
 	items := sortedObserved(winner.observer.itemTypes)
-	t.Logf("AC-002 active-turn result: codex=%s auth=%s transport=stdio turns=%d scenario=%s methods=%s itemTypes=%s", schemaVersion, winner.authMode, budget.used, winner.name, strings.Join(methods, ","), strings.Join(items, ","))
+	t.Logf("AC-002 active-turn result: codex=%s auth=%s transport=stdio turns=%d scenario=%s methods=%s itemTypes=%s", version, winner.authMode, budget.used, winner.name, strings.Join(methods, ","), strings.Join(items, ","))
 }
 
 func runActiveApprovalScenario(ctx context.Context, workspace string, scenario approvalScenario, budget *liveTurnBudget) (result liveScenarioResult, retryable bool, err error) {

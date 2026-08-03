@@ -10,9 +10,21 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/yuanshu-ai/yuanshu/internal/adapter/codex"
 )
 
 const schemaVersion = "0.144.6"
+
+func requireCompatibleCodexVersion(t *testing.T, raw []byte) string {
+	t.Helper()
+	output := strings.TrimSpace(string(raw))
+	version, ok := strings.CutPrefix(output, "codex-cli ")
+	if !ok || !codex.IsVersionCompatible(version) {
+		t.Fatalf("Codex version = %q, no compatible Yuanshu profile", output)
+	}
+	return version
+}
 
 func TestSchemaSnapshotAndFixtures(t *testing.T) {
 	t.Parallel()

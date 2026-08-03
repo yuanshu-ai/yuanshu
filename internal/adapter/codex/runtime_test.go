@@ -37,7 +37,7 @@ func TestFormalAdapterThreadTurnApprovalAndEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	installation, err := formal.Detect(context.Background())
-	if err != nil || installation.Version != SupportedVersion {
+	if err != nil || installation.Version != BaselineVersion {
 		t.Fatalf("Detect = %#v, %v", installation, err)
 	}
 	runtimeValue, err := formal.StartRuntime(context.Background())
@@ -81,6 +81,26 @@ func TestFormalAdapterThreadTurnApprovalAndEvents(t *testing.T) {
 	sawWorkspaceWrite, sawCwd, approvalDecision := server.observations()
 	if !sawWorkspaceWrite || sawCwd != root || approvalDecision != "decline" {
 		t.Fatalf("server observations = %+v", server)
+	}
+}
+
+func TestFormalAdapterStartsRuntimeForSecondCompatibilityProfile(t *testing.T) {
+	server := &syntheticServer{version: "0.146.0-alpha.9.2"}
+	formal, err := New(Options{
+		Config:    config.CodexAdapterConfig{Enabled: true, Binary: "synthetic-codex", RuntimeMode: "stdio"},
+		Processes: newScriptedProcessManager(server.serve), Workspaces: &fakeWorkspaceResolver{}, Threads: newMemoryThreadStore(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeValue, err := formal.StartRuntime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := runtimeValue.(*Runtime)
+	defer runtime.Close(context.Background())
+	if health := runtime.Health(); health.State != "ready" || health.CodexVersion != "0.146.0-alpha.9.2" {
+		t.Fatalf("runtime health = %#v", health)
 	}
 }
 
@@ -287,7 +307,7 @@ func (s *syntheticServer) serve(spec platform.ProcessSpec, process *fake.Process
 	if len(spec.Args) == 1 && spec.Args[0] == "--version" {
 		version := s.version
 		if version == "" {
-			version = SupportedVersion
+			version = BaselineVersion
 		}
 		_ = process.WriteStdout([]byte("codex-cli " + version + "\n"))
 		_ = process.Complete(0)
@@ -307,7 +327,11 @@ func (s *syntheticServer) serve(spec platform.ProcessSpec, process *fake.Process
 		id := string(request.ID)
 		switch request.Method {
 		case "initialize":
-			s.write(process, `{"id":%s,"result":{"userAgent":"codex_cli_rs/0.144.6"}}`, id)
+			version := s.version
+			if version == "" {
+				version = BaselineVersion
+			}
+			s.write(process, `{"id":%s,"result":{"userAgent":"codex_cli_rs/%s"}}`, id, version)
 		case "account/read":
 			s.write(process, `{"id":%s,"result":{"account":{"type":"apiKey"}}}`, id)
 		case "thread/start":

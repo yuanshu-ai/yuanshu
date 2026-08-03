@@ -32,10 +32,7 @@ func TestCredentialLiveBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Codex version: %v", err)
 	}
-	version := strings.TrimSpace(string(versionOutput))
-	if version != "codex-cli "+schemaVersion {
-		t.Fatalf("Codex version = %q, want %q", version, "codex-cli "+schemaVersion)
-	}
+	version := requireCompatibleCodexVersion(t, versionOutput)
 
 	client, err := startLiveClient(ctx, workspace)
 	if err != nil {
@@ -172,7 +169,7 @@ func TestCredentialLiveBoundary(t *testing.T) {
 		observed = append(observed, method)
 	}
 	sort.Strings(observed)
-	t.Logf("AC-003 credential result: codex=%s auth=%s transport=stdio turns=%d status=%s methods=%s", schemaVersion, authMode, turns, status, strings.Join(observed, ","))
+	t.Logf("AC-003 credential result: codex=%s auth=%s transport=stdio turns=%d status=%s methods=%s", version, authMode, turns, status, strings.Join(observed, ","))
 }
 
 func credentialItemType(message probe.Message) (string, error) {

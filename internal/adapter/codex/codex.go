@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	AdapterID        = "codex"
-	SupportedVersion = "0.144.6"
-	ProtocolVersion  = "stable-v2"
+	AdapterID       = "codex"
+	BaselineVersion = "0.144.6"
+	ProtocolVersion = "stable-v2"
 )
 
 type WorkspaceResolver interface {
@@ -90,10 +90,11 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Installation, error) {
 	if !ok || version == "" {
 		return adapter.Installation{}, adapter.ErrUnavailable
 	}
-	if version != SupportedVersion {
+	profile, compatible := compatibilityForVersion(version)
+	if !compatible {
 		return adapter.Installation{Detected: true, Version: version, Protocol: ProtocolVersion}, adapter.ErrUnsupported
 	}
-	return adapter.Installation{Detected: true, Version: version, Protocol: ProtocolVersion}, nil
+	return adapter.Installation{Detected: true, Version: version, Protocol: profile.Protocol}, nil
 }
 
 func (a *Adapter) StartRuntime(ctx context.Context) (adapter.Runtime, error) {

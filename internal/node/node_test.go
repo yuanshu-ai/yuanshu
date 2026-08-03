@@ -100,7 +100,7 @@ func TestHostAssemblesFormalUnpairedNode(t *testing.T) {
 		deadline := time.Now().Add(30 * time.Second)
 		for time.Now().Before(deadline) {
 			if process := processes.LastProcess(); process != nil {
-				if err := process.WriteStdout([]byte("codex-cli " + codex.SupportedVersion + "\n")); err != nil {
+				if err := process.WriteStdout([]byte("codex-cli " + codex.BaselineVersion + "\n")); err != nil {
 					processReady <- err
 					return
 				}
