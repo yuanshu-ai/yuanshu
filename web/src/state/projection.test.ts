@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest";
-import { DataProjection, eventBucketKey, threadKey, turnKey, workspaceKey } from "./projection";
+import { DataProjection, eventBucketKey, fileChangeKey, threadKey, turnKey, workspaceKey } from "./projection";
 import type { YuanshuMessage } from "../protocol/v1/types.generated";
 
 describe("personal data projection", () => {
@@ -76,6 +76,7 @@ describe("personal data projection", () => {
     expect(turn.items.find((item) => item.id === "agent-item")?.text).toBe("done + more");
     expect(turn.items.find((item) => item.id === "command")?.output).toBe("ok\n");
     expect(turn.items.find((item) => item.kind === "diff")?.path).toBe("internal/app.go");
+    expect(projection.state.files[fileChangeKey("node-a", "workspace", "thread", "turn", "internal/app.go")]?.diff).toBe("+new");
   });
 });
 

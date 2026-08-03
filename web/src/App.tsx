@@ -200,7 +200,8 @@ export function App() {
       return;
     }
     const highRisk = !approval.kind || /command|file|write|delete|shell/i.test(approval.kind);
-    if (!window.confirm(highRisk ? "这是高风险审批。确认后将把决定发送到本机 Codex？" : "确认发送审批决定？")) return;
+    if (!window.confirm(highRisk ? "这是高风险审批。确认查看并准备发送决定？" : "确认发送审批决定？")) return;
+    if (highRisk && !window.confirm("第二次确认：这项操作可能修改文件或执行命令，继续发送吗？")) return;
     try {
       await boot.client.request("approval.resolve", { approvalId: approval.approvalId, decision, operationDigest: approval.operationDigest }, { nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, threadId: selectedThreadId, turnId: approval.turnId, itemId: approval.itemId });
       setMessage(decision === "accept" ? "已发送批准，等待 Codex 确认" : "已发送拒绝，等待 Codex 确认");
@@ -316,7 +317,7 @@ function ItemCard({ item }: { item: ThreadItemProjection }) {
   if (item.kind === "agent_message" || item.kind === "user_message") return <div className={`message-block ${item.kind}`}><span className="item-label">{item.kind === "user_message" ? "你" : "CODEX"}</span><p>{item.text || "（空消息）"}</p></div>;
   if (item.kind === "command" || item.kind === "command_output") return <details className="activity-card command-card" open={item.kind === "command"}><summary><span className="activity-icon">$</span><span><b>{item.command || "命令输出"}</b><small>{item.status ?? "执行中"}{item.exitCode !== undefined ? ` · exit ${item.exitCode}` : ""}</small></span></summary>{item.output && <pre>{item.output}</pre>}</details>;
   if (item.kind === "tool") return <div className="activity-card"><span className="activity-icon">◇</span><span><b>{item.toolName || "工具调用"}</b><small>{item.status ?? "已记录"}</small></span></div>;
-  if (item.kind === "file_change" || item.kind === "diff") return <details className="activity-card diff-card"><summary><span className="activity-icon">{item.kind === "diff" ? "±" : "↳"}</span><span><b>{item.path || "文件变更"}</b><small>{item.changeType || "Diff 已更新"}</small></span></summary>{item.diff && <pre>{item.diff}</pre>}</details>;
+  if (item.kind === "file_change" || item.kind === "diff") return <details className="activity-card diff-card"><summary><span className="activity-icon">{item.kind === "diff" ? "±" : "↳"}</span><span><b>{item.path || "文件变更"}</b><small>{item.changeType || "Diff 已更新"}{item.truncated ? ` · 仅展示 ${Math.min(item.totalBytes ?? 0, 64 * 1024)} / ${item.totalBytes ?? "?"} bytes` : ""}</small></span></summary>{item.diff && <pre>{item.diff}</pre>}</details>;
   return <div className="activity-card error-card"><span className="activity-icon">!</span><span><b>{item.errorCode || "未识别活动"}</b><small>{item.errorMessage || "Codex 返回了未支持的历史项，正文未被转发。"}</small></span></div>;
 }
 

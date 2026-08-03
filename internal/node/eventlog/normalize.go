@@ -1,6 +1,8 @@
 package eventlog
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -58,7 +60,7 @@ func normalizeEvent(event adapter.AgentEvent) ([]eventSpec, error) {
 				if path == "" {
 					continue
 				}
-				result = append(result, eventSpec{kind: event.Type, target: target, correlationID: event.CorrelationID, payload: map[string]any{"path": path, "changeType": mapChangeKind(firstString(item, "kind", "modified"))}})
+				result = append(result, eventSpec{kind: event.Type, target: target, correlationID: event.CorrelationID, payload: diffPayload(map[string]any{"path": path, "changeType": mapChangeKind(firstString(item, "kind", "modified")), "diff": firstString(item, "diff", "")})})
 			}
 			if len(result) == 0 {
 				return nil, ErrInvalid
@@ -69,7 +71,7 @@ func normalizeEvent(event adapter.AgentEvent) ([]eventSpec, error) {
 		payload["changeType"] = mapChangeKind(firstString(payload, "changeType", firstString(payload, "kind", "modified")))
 	case protocol.EventDiffUpdated:
 		payload["path"] = firstString(payload, "path", ".")
-		payload["diff"] = firstString(payload, "diff", "")
+		payload = diffPayload(payload)
 	case protocol.EventApprovalRequested:
 		if event.Approval == nil || !validID(event.Approval.ID) {
 			return nil, ErrInvalid
@@ -177,6 +179,19 @@ func firstString(values map[string]any, key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func diffPayload(payload map[string]any) map[string]any {
+	diff := firstString(payload, "diff", "")
+	full := []byte(diff)
+	digest := sha256.Sum256(full)
+	payload["diff"] = truncateUTF8(diff, 64<<10)
+	if len(full) > 64<<10 {
+		payload["truncated"] = true
+	}
+	payload["totalBytes"] = len(full)
+	payload["digest"] = base64.RawURLEncoding.EncodeToString(digest[:])
+	return payload
 }
 
 func mapChangeKind(value string) string {

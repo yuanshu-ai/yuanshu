@@ -341,6 +341,8 @@ func (m *Manager) pendingApprovalPayloads(ctx context.Context, threadID string) 
 	for _, record := range records {
 		var payload map[string]any
 		if json.Unmarshal(record.Payload, &payload) == nil {
+			payload["turnId"] = record.TurnID
+			payload["itemId"] = record.ItemID
 			result = append(result, payload)
 		}
 	}

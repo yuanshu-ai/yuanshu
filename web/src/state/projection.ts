@@ -74,7 +74,25 @@ export interface ThreadItemProjection {
   errorMessage?: string;
   partial?: boolean;
   truncated?: boolean;
+  totalBytes?: number;
+  digest?: string;
   sequence?: number;
+}
+
+export interface FileChangeProjection {
+  key: string;
+  nodeId: string;
+  workspaceId: string;
+  threadId: string;
+  turnId: string;
+  path: string;
+  changeType?: string;
+  diff?: string;
+  truncated?: boolean;
+  totalBytes?: number;
+  digest?: string;
+  revision: number;
+  updatedAt: string;
 }
 
 export interface EventProjection {
@@ -98,12 +116,27 @@ export interface ApprovalProjection {
   operationDigest?: string;
   kind?: string;
   summary?: string;
+  expiresAt?: string;
+  risk?: string;
   decision?: string;
   status: "pending" | "resolved";
 }
 
 export interface ControlActionProjection extends ControlAction {
   updatedAt: string;
+}
+
+export interface NotificationProjection {
+  id: string;
+  nodeId: string;
+  workspaceId?: string;
+  threadId?: string;
+  turnId?: string;
+  type: string;
+  summary: string;
+  sourceSequence: number;
+  createdAt: string;
+  read: boolean;
 }
 
 export interface ProjectionState {
@@ -113,6 +146,8 @@ export interface ProjectionState {
   turns: Record<string, TurnProjection>;
   events: Record<string, EventProjection[]>;
   approvals: Record<string, ApprovalProjection>;
+  files: Record<string, FileChangeProjection>;
+  notifications: Record<string, NotificationProjection>;
   actions: Record<string, ControlActionProjection>;
 }
 
@@ -141,6 +176,8 @@ export class DataProjection {
     turns: {},
     events: {},
     approvals: {},
+    files: {},
+    notifications: {},
     actions: {},
   };
 
@@ -170,6 +207,18 @@ export class DataProjection {
     const next: ControlActionProjection = { ...action, updatedAt: this.now() };
     this.stateValue.actions[action.messageId] = next;
     return next;
+  }
+
+  applyServerControlResult(event: YuanshuMessage): void {
+    this.applyControlResultProjection(event);
+    if (!Array.isArray(event.payload.notifications)) return;
+    for (const raw of event.payload.notifications) {
+      if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.type !== "string" || typeof raw.summary !== "string") continue;
+      this.stateValue.notifications[raw.id] = {
+        id: raw.id, nodeId: stringValue(raw.nodeId) ?? event.nodeId, workspaceId: stringValue(raw.workspaceId), threadId: stringValue(raw.threadId), turnId: stringValue(raw.turnId),
+        type: raw.type, summary: raw.summary, sourceSequence: numberValue(raw.sourceSequence) ?? 0, createdAt: stringValue(raw.createdAt) ?? event.sentAt, read: raw.read === true,
+      };
+    }
   }
 
   apply(event: YuanshuMessage): void {
@@ -320,10 +369,13 @@ export class DataProjection {
           workspaceId,
           threadId: event.threadId,
           turnId: stringValue(raw.turnId) ?? "",
+          itemId: stringValue(raw.itemId),
           approvalId,
           operationDigest: stringValue(raw.operationDigest),
           kind: stringValue(raw.kind),
           summary: stringValue(raw.summary),
+          expiresAt: stringValue(raw.expiresAt),
+          risk: stringValue(raw.risk),
           status: "pending",
         };
       }
@@ -338,7 +390,10 @@ export class DataProjection {
       const turn = this.upsertTurn(event.nodeId, event.ownerId, workspaceId, event.threadId, raw.id);
       if (typeof raw.status === "string") turn.status = raw.status;
       if (raw.historyState === "complete" || raw.historyState === "partial" || raw.historyState === "unavailable") turn.historyState = raw.historyState;
-      if (Array.isArray(raw.items)) turn.items = raw.items.map((item) => this.itemFromPayload(item, event.sequence)).filter((item): item is ThreadItemProjection => item !== undefined);
+      if (Array.isArray(raw.items)) {
+        turn.items = raw.items.map((item) => this.itemFromPayload(item, event.sequence)).filter((item): item is ThreadItemProjection => item !== undefined);
+        for (const item of turn.items) if (item.kind === "file_change" || item.kind === "diff") this.applyFileChange(event, item, turn.turnId);
+      }
       turn.updatedAt = event.sentAt;
       if (!thread.turnIds.includes(turn.turnId)) thread.turnIds.push(turn.turnId);
     }
@@ -391,6 +446,7 @@ export class DataProjection {
     const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId);
     if (!thread.turnIds.includes(turn.turnId)) thread.turnIds.push(turn.turnId);
     turn.updatedAt = event.sentAt;
+    if ((item.kind === "file_change" || item.kind === "diff") && item.path) this.applyFileChange(event, item);
   }
 
   private itemFromPayload(raw: unknown, sequence: number): ThreadItemProjection | undefined {
@@ -413,7 +469,20 @@ export class DataProjection {
       errorMessage: stringValue(raw.errorMessage),
       partial: raw.partial === true,
       truncated: raw.truncated === true,
+      totalBytes: numberValue(raw.totalBytes),
+      digest: stringValue(raw.digest),
       sequence,
+    };
+  }
+
+  private applyFileChange(event: YuanshuMessage, item: ThreadItemProjection, turnId = event.turnId ?? ""): void {
+    if (!event.workspaceId || !event.threadId || !turnId || !item.path) return;
+    const key = fileChangeKey(event.nodeId, event.workspaceId, event.threadId, turnId, item.path);
+    const current = this.stateValue.files[key];
+    this.stateValue.files[key] = {
+      key, nodeId: event.nodeId, workspaceId: event.workspaceId, threadId: event.threadId, turnId,
+      path: item.path, changeType: item.changeType, diff: item.diff, truncated: item.truncated,
+      totalBytes: item.totalBytes, digest: item.digest, revision: (current?.revision ?? 0) + 1, updatedAt: event.sentAt,
     };
   }
 
@@ -433,6 +502,8 @@ export class DataProjection {
       operationDigest: stringValue(event.payload.operationDigest),
       kind: stringValue(event.payload.kind),
       summary: stringValue(event.payload.summary),
+      expiresAt: stringValue(event.payload.expiresAt),
+      risk: stringValue(event.payload.risk),
       status: "pending",
     };
   }
@@ -458,6 +529,10 @@ export class DataProjection {
   }
 
   private applyControlResult(event: YuanshuMessage): void {
+    this.applyControlResultProjection(event);
+  }
+
+  private applyControlResultProjection(event: YuanshuMessage): void {
     const current = this.stateValue.actions[event.correlationId];
     const status = stringValue(event.payload.status);
     const mapped = status === "confirmed" || status === "rejected" || status === "ambiguous" ? status : current?.state ?? "sent";
@@ -519,6 +594,10 @@ export function threadKey(nodeId: string, workspaceId: string, threadId: string)
 
 export function turnKey(nodeId: string, workspaceId: string, threadId: string, turnId: string): string {
   return [nodeId, workspaceId, threadId, turnId].join("\u001f");
+}
+
+export function fileChangeKey(nodeId: string, workspaceId: string, threadId: string, turnId: string, path: string): string {
+  return [nodeId, workspaceId, threadId, turnId, path].join("\u001f");
 }
 
 export function eventBucketKey(event: Pick<YuanshuMessage, "nodeId" | "workspaceId" | "threadId" | "turnId">): string {
