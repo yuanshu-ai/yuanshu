@@ -10,6 +10,7 @@ import (
 )
 
 func main() {
+	prepareUIThread()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	os.Exit(cli.Run(

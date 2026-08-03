@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package node
 
@@ -13,4 +13,4 @@ type headlessTray struct{}
 func newPlatformTray(bool) tray                                     { return headlessTray{} }
 func (headlessTray) Run(ctx context.Context, _ trayCallbacks) error { <-ctx.Done(); return ctx.Err() }
 func (headlessTray) Update(Status)                                  {}
-func openConfiguration(string, string) error                        { return platform.ErrUnavailable }
+func (headlessTray) OpenURL(string) error                           { return platform.ErrUnavailable }

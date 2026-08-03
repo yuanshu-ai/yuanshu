@@ -30,12 +30,12 @@ func TestWindowsTrayLive(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- tray.Run(ctx, trayCallbacks{
-			Status:       func() Status { return status },
-			Reload:       func(context.Context) error { return nil },
-			Diagnostics:  func() ([]byte, error) { return marshalStatus(status, true) },
-			OpenConfig:   func() error { return nil },
-			SetAutostart: func(context.Context, bool) error { return nil },
-			Stop:         cancel,
+			Status:            func() Status { return status },
+			Reload:            func(context.Context) error { return nil },
+			Diagnostics:       func() ([]byte, error) { return marshalStatus(status, true) },
+			OpenControlCenter: func(context.Context) error { return nil },
+			SetAutostart:      func(context.Context, bool) error { return nil },
+			Stop:              cancel,
 		})
 	}()
 	tray.Update(status)

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,15 +31,23 @@ type configUpdateResult struct {
 }
 
 type ConfigChangeSummary struct {
-	ID           string `json:"id"`
-	BaseRevision string `json:"baseRevision"`
-	State        string `json:"state"`
-	CreatedAt    string `json:"createdAt"`
-	ErrorCode    string `json:"errorCode,omitempty"`
+	ID           string   `json:"id"`
+	BaseRevision string   `json:"baseRevision"`
+	State        string   `json:"state"`
+	CreatedAt    string   `json:"createdAt"`
+	ErrorCode    string   `json:"errorCode,omitempty"`
+	Fields       []string `json:"fields,omitempty"`
 }
 
 func configChangeSummary(value store.ConfigChangeRecord) ConfigChangeSummary {
-	return ConfigChangeSummary{ID: value.ID, BaseRevision: value.BaseRevision, State: value.State, CreatedAt: value.CreatedAt.UTC().Format(time.RFC3339Nano), ErrorCode: value.ErrorCode}
+	var changes map[string]any
+	_ = json.Unmarshal(value.Changes, &changes)
+	fields := make([]string, 0, len(changes))
+	for field := range changes {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return ConfigChangeSummary{ID: value.ID, BaseRevision: value.BaseRevision, State: value.State, CreatedAt: value.CreatedAt.UTC().Format(time.RFC3339Nano), ErrorCode: value.ErrorCode, Fields: fields}
 }
 
 type nodeConfigController struct {

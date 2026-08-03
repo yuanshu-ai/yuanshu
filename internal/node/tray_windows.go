@@ -5,8 +5,8 @@ package node
 import (
 	"context"
 	"errors"
-	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -45,7 +45,12 @@ const (
 	menuReload     = 102
 	menuCopy       = 103
 	menuAutostart  = 104
-	menuExit       = 105
+	menuReview     = 105
+	menuExit       = 106
+	mbYesNoCancel  = 0x00000003
+	mbIconWarning  = 0x00000030
+	idYes          = 6
+	idNo           = 7
 )
 
 var (
@@ -69,6 +74,7 @@ var (
 	procDestroyMenu         = user32.NewProc("DestroyMenu")
 	procGetCursorPos        = user32.NewProc("GetCursorPos")
 	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
+	procMessageBoxW         = user32.NewProc("MessageBoxW")
 	procShowWindow          = user32.NewProc("ShowWindow")
 	procCreateIcon          = user32.NewProc("CreateIcon")
 	procDestroyIcon         = user32.NewProc("DestroyIcon")
@@ -257,14 +263,15 @@ func (t *windowsTray) showMenu(window uintptr) {
 	status := t.callbacks.Status()
 	appendTrayMenu(menu, mfString|mfGray, 0, "Yuanshu Node · "+trayStateLabel(status.State))
 	appendTrayMenu(menu, mfSeparator, 0, "")
-	appendTrayMenu(menu, mfString, menuOpen, "Open configuration")
-	appendTrayMenu(menu, mfString, menuReload, "Reload configuration")
+	appendTrayMenu(menu, mfString, menuOpen, "Open Node Control Center")
+	appendTrayMenu(menu, mfString, menuReload, "Reload and reconnect")
 	appendTrayMenu(menu, mfString, menuCopy, "Copy diagnostics")
 	autostartFlags := uint32(mfString)
 	if status.Autostart == "enabled" {
 		autostartFlags |= mfChecked
 	}
 	appendTrayMenu(menu, autostartFlags, menuAutostart, "Start at login")
+	appendTrayMenu(menu, mfString, menuReview, "Review pending changes...")
 	appendTrayMenu(menu, mfSeparator, 0, "")
 	appendTrayMenu(menu, mfString, menuExit, "Exit Yuanshu Node")
 	var point trayPoint
@@ -277,7 +284,9 @@ func (t *windowsTray) showMenu(window uintptr) {
 func (t *windowsTray) handleMenu(command uint32) {
 	switch command {
 	case menuOpen:
-		if t.callbacks.OpenConfig() != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if t.callbacks.OpenControlCenter(ctx) != nil {
 			t.notify(nimModify, true)
 		}
 	case menuReload:
@@ -303,27 +312,38 @@ func (t *windowsTray) handleMenu(command uint32) {
 			}
 			t.Update(t.callbacks.Status())
 		}()
+	case menuReview:
+		go t.reviewConfigChanges()
 	case menuExit:
 		t.callbacks.Stop()
+	}
+}
+
+func (t *windowsTray) reviewConfigChanges() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	changes, err := t.callbacks.PendingConfig(ctx)
+	if err != nil {
+		t.notify(nimModify, true)
+		return
+	}
+	for _, change := range changes {
+		message, _ := windows.UTF16PtrFromString("Only approve this change if you initiated it.\r\n\r\nChange: " + change.ID + "\r\nFields: " + strings.Join(change.Fields, ", "))
+		title, _ := windows.UTF16PtrFromString("Review protected Node settings")
+		decision, _, _ := procMessageBoxW.Call(0, uintptr(unsafe.Pointer(message)), uintptr(unsafe.Pointer(title)), mbYesNoCancel|mbIconWarning)
+		if decision != idYes && decision != idNo {
+			return
+		}
+		if err := t.callbacks.DecideConfig(ctx, change.ID, decision == idYes); err != nil {
+			t.notify(nimModify, true)
+			return
+		}
 	}
 }
 
 func appendTrayMenu(menu uintptr, flags uint32, id uint32, label string) {
 	value, _ := windows.UTF16PtrFromString(label)
 	procAppendMenuW.Call(menu, uintptr(flags), uintptr(id), uintptr(unsafe.Pointer(value)))
-}
-
-func trayStateLabel(state string) string {
-	switch state {
-	case "ready":
-		return "Ready"
-	case "unpaired":
-		return "Unpaired"
-	case "recovering", "starting":
-		return "Recovering"
-	default:
-		return "Needs attention"
-	}
 }
 
 func createYuanshuIcon(instance uintptr) uintptr {
@@ -351,11 +371,7 @@ func createYuanshuIcon(instance uintptr) uintptr {
 	return icon
 }
 
-func openConfiguration(configPath, root string) error {
-	target := configPath
-	if _, err := os.Stat(configPath); err != nil {
-		target = root
-	}
+func (t *windowsTray) OpenURL(target string) error {
 	operation, _ := windows.UTF16PtrFromString("open")
 	file, _ := windows.UTF16PtrFromString(target)
 	result, _, _ := procShellExecuteW.Call(0, uintptr(unsafe.Pointer(operation)), uintptr(unsafe.Pointer(file)), 0, 0, swShowNormal)

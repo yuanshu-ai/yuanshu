@@ -2,11 +2,11 @@
   "name": "yuanshu-workspace",
   "private": true,
   "scripts": {
-    "build": "pnpm --dir web build",
+    "build": "pnpm --dir web build && pnpm --dir node-web build",
     "protocol:check": "node scripts/protocol.mjs check",
     "protocol:generate": "node scripts/protocol.mjs generate",
     "protocol:test": "node scripts/protocol-test.mjs",
-    "test": "pnpm --dir web test"
+    "test": "pnpm --dir web test && pnpm --dir node-web test"
   },
   "devDependencies": {
     "ajv": "8.20.0",

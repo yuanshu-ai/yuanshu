@@ -23,15 +23,18 @@ const (
 )
 
 type localRequest struct {
-	Protocol     string `json:"protocol"`
-	Command      string `json:"command"`
-	PairingID    string `json:"pairingId,omitempty"`
-	ClientID     string `json:"clientId,omitempty"`
-	KeyID        string `json:"keyId,omitempty"`
-	EnrollmentID string `json:"enrollmentId,omitempty"`
-	NodeID       string `json:"nodeId,omitempty"`
-	JoinURL      string `json:"joinUrl,omitempty"`
-	ChangeID     string `json:"changeId,omitempty"`
+	Protocol     string         `json:"protocol"`
+	Command      string         `json:"command"`
+	PairingID    string         `json:"pairingId,omitempty"`
+	ClientID     string         `json:"clientId,omitempty"`
+	KeyID        string         `json:"keyId,omitempty"`
+	EnrollmentID string         `json:"enrollmentId,omitempty"`
+	NodeID       string         `json:"nodeId,omitempty"`
+	JoinURL      string         `json:"joinUrl,omitempty"`
+	ChangeID     string         `json:"changeId,omitempty"`
+	Enabled      *bool          `json:"enabled,omitempty"`
+	BaseRevision string         `json:"baseRevision,omitempty"`
+	Changes      map[string]any `json:"changes,omitempty"`
 }
 
 type localResponse struct {

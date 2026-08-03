@@ -185,6 +185,7 @@ func (t *testTray) Update(status Status) {
 	t.status = status
 	t.mu.Unlock()
 }
+func (t *testTray) OpenURL(string) error { return nil }
 
 func TestNodeFlagParsing(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.toml")

@@ -48,6 +48,7 @@ type host struct {
 	controlTarget    protocolv1.Target
 	controlName      string
 	configController configController
+	controlCenter    *controlCenter
 }
 
 func runHost(ctx context.Context, options runOptions) error {
@@ -75,7 +76,16 @@ func runHost(ctx context.Context, options runOptions) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if options.tray == nil {
+		options.tray = newPlatformTray(options.background)
+	}
 	h := &host{options: options, status: newStatusStore(string(options.platform.Family())), log: newOperationalLog(options.paths.log), runCtx: runCtx}
+	center, err := newControlCenter(h.status.snapshot, h.handleLocalManagement)
+	if err != nil {
+		return err
+	}
+	h.controlCenter = center
+	defer center.Close()
 	h.refreshAutostart(runCtx)
 	server, err := startLocalServer(runCtx, options.platform.IPC(), h.status.snapshot, cancel, h.handleLocalManagement)
 	if err != nil {
@@ -84,36 +94,12 @@ func runHost(ctx context.Context, options runOptions) error {
 	defer server.Close()
 	h.log.write("node_starting", "starting", 0)
 	_ = h.reload(runCtx)
-	if options.tray == nil {
-		options.tray = newPlatformTray(options.background)
-		h.options.tray = options.tray
-	}
-	trayErrors := make(chan error, 1)
-	go func() { trayErrors <- options.tray.Run(runCtx, h.trayCallbacks(cancel)) }()
 	options.tray.Update(h.status.snapshot())
-	trayReturned := false
-	var trayErr error
-	select {
-	case <-runCtx.Done():
-	case trayErr = <-trayErrors:
-		trayReturned = true
-		if trayErr != nil {
-			cancel()
-			_ = h.close()
-			return errors.New("node tray is unavailable")
-		}
-	}
+	trayErr := options.tray.Run(runCtx, h.trayCallbacks(cancel))
 	cancel()
 	closeErr := h.close()
-	if !trayReturned {
-		select {
-		case trayErr = <-trayErrors:
-			if trayErr != nil && !errors.Is(trayErr, context.Canceled) {
-				return errors.New("node tray shutdown failed")
-			}
-		case <-time.After(5 * time.Second):
-			return errors.New("node tray shutdown timed out")
-		}
+	if trayErr != nil && !errors.Is(trayErr, context.Canceled) {
+		return errors.New("node tray is unavailable")
 	}
 	if closeErr != nil {
 		return errors.New("node shutdown failed")
@@ -402,6 +388,23 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	response := localResponse{Protocol: localProtocol}
+	if request.Command == "ui_open" {
+		if err := h.openControlCenter(ctx); err != nil {
+			response.Error = "ui_unavailable"
+		} else {
+			response.OK = true
+		}
+		return response
+	}
+	if request.Command == "reload" {
+		response.OK = true
+		go func() { _ = h.reload(h.runCtx) }()
+		return response
+	}
+	if request.Command == "copy_diagnostics" {
+		response.OK = true
+		return response
+	}
 	if request.Command == "enrollment_join" {
 		if h.joiner == nil {
 			response.Error = "enrollment_unavailable"
@@ -416,7 +419,7 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 	}
 	if h.pairing == nil {
 		switch request.Command {
-		case "config_show", "config_pending", "config_approve", "config_reject":
+		case "config_show", "config_update", "config_pending", "config_approve", "config_reject":
 			// Configuration management is local and remains available even if
 			// Relay trust has not been established.
 		default:
@@ -436,6 +439,20 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 			break
 		}
 		response.OK, response.Config = true, value
+	case "config_update":
+		if h.configController == nil {
+			response.Error = "config_unavailable"
+			break
+		}
+		result, err := h.configController.Update(ctx, request.BaseRevision, request.Changes)
+		if err != nil {
+			response.Error = "config_update_failed"
+			break
+		}
+		response.OK, response.Config = true, result.Payload
+		if result.Reload {
+			go func() { _ = h.reload(h.runCtx) }()
+		}
 	case "config_pending":
 		if h.configController == nil {
 			response.Error = "config_unavailable"

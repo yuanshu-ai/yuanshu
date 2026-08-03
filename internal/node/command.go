@@ -17,6 +17,7 @@ const Usage = `Usage:
   yuanshu node [run] [--config <absolute-path>] [--background]
   yuanshu node status [--json]
   yuanshu node stop
+  yuanshu node ui
   yuanshu node doctor [--config <absolute-path>] [--json]
   yuanshu node pairing create
   yuanshu node pairing list
@@ -91,6 +92,16 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			return nil
 		}
 		return err
+	case "ui":
+		if len(args) != 0 {
+			return ErrUsage
+		}
+		response, err := callLocalRequest(ctx, current.IPC(), localRequest{Protocol: localProtocol, Command: "ui_open"})
+		if err != nil || !response.OK {
+			return errors.New("node control center is unavailable")
+		}
+		fmt.Fprintln(stdout, "Yuanshu Node control center opened.")
+		return nil
 	case "doctor":
 		defaults, err := defaultPaths()
 		if err != nil {
@@ -136,7 +147,7 @@ func validateNodeArguments(args []string) error {
 	case "status":
 		_, _, _, err := parseNodeFlags(args, "", true, false)
 		return err
-	case "stop":
+	case "stop", "ui":
 		if len(args) != 0 {
 			return ErrUsage
 		}

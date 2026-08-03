@@ -76,8 +76,10 @@ jobs:
       - run: pnpm protocol:test
       - run: pnpm --dir web test
       - run: pnpm --dir web build
+      - run: pnpm --dir node-web test
+      - run: pnpm --dir node-web build
       - name: Check embedded Web assets
-        run: git diff --exit-code -- internal/server/webassets/dist
+        run: git diff --exit-code -- internal/server/webassets/dist internal/node/webassets/dist
       - run: pnpm audit --audit-level high
 
   linux-race-container:

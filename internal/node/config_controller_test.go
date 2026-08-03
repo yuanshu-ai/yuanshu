@@ -72,6 +72,10 @@ func TestNodeConfigControllerRedactsAndUsesRevisionedPendingChanges(t *testing.T
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
+	summary := configChangeSummary(pending[0])
+	if len(summary.Fields) != 1 || summary.Fields[0] != "relayUrl" {
+		t.Fatalf("pending summary fields = %v", summary.Fields)
+	}
 	if _, err := controller.Approve(ctx, pending[0].ID); err != nil {
 		t.Fatal(err)
 	}
