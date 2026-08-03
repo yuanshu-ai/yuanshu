@@ -103,6 +103,72 @@ describe("ControlClient recovery", () => {
     expect(sockets).toHaveLength(1);
     expect(client.state).toBe("closed");
   });
+
+  it("keeps Node bindings, cursors, and control sequences isolated", async () => {
+    const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+    const storage = new MemoryControlStorage();
+    const sockets: FakeSocket[] = [];
+    const received: Record<string, unknown>[] = [];
+    const client = new ControlClient({
+      url: "wss://relay.test/web/connect?clientId=client",
+      identity: { ownerId: "owner", clientId: "client", keyId: "key", privateKey: keyPair.privateKey },
+      nodes: [{ ownerId: "owner", nodeId: "node-a", name: "Office", online: true }, { ownerId: "owner", nodeId: "node-b", name: "Home", online: true }],
+      storage,
+      websocketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      onEvent: (event) => { received.push(event as unknown as Record<string, unknown>); },
+    });
+
+    client.connect();
+    sockets[0].open();
+    sockets[0].receive(challenge());
+    await tick();
+    sockets[0].receive({ version: "1", type: "authenticated" });
+    await tick();
+    const replayMessages = sockets[0].sent.map((raw) => JSON.parse(raw)).filter((message) => message.type === "events.replay");
+    expect(replayMessages).toHaveLength(2);
+    expect(replayMessages.map((message) => message.nodeId).sort()).toEqual(["node-a", "node-b"]);
+    for (const message of replayMessages) sockets[0].receive(eventFor(message.nodeId, "control.result", 1, message.messageId));
+    await tick();
+
+    await client.sendControl("device.sync", {}, { nodeId: "node-a" });
+    await client.sendControl("device.sync", {}, { nodeId: "node-b" });
+    const controls = sockets[0].sent.map((raw) => JSON.parse(raw)).filter((message) => message.type === "device.sync");
+    expect(controls.map((message) => [message.nodeId, message.sequence])).toEqual([["node-a", 2], ["node-b", 2]]);
+
+    sockets[0].receive(eventFor("node-a", "device.status", 2, "a-status", { status: "online", name: "Office" }));
+    sockets[0].receive(eventFor("node-b", "device.status", 2, "b-status", { status: "offline", name: "Home" }));
+    await tick();
+    expect(received.filter((event) => event.type === "device.status").map((event) => event.nodeId)).toEqual(["node-a", "node-b"]);
+    expect(await storage.getEventCursor({ ownerId: "owner", nodeId: "node-a", streamId: "node-events-v1" })).toBe(2);
+    expect(await storage.getEventCursor({ ownerId: "owner", nodeId: "node-b", streamId: "node-events-v1" })).toBe(2);
+    expect(client.listNodes().map((node) => [node.nodeId, node.name])).toEqual([["node-a", "Office"], ["node-b", "Home"]]);
+    const refreshed = new ControlClient({
+      url: "wss://relay.test/web/connect?clientId=client",
+      identity: { ownerId: "owner", clientId: "client", keyId: "key", privateKey: keyPair.privateKey },
+      storage,
+    });
+    await refreshed.ready;
+    expect(refreshed.listNodes().map((node) => node.nodeId)).toEqual(["node-a", "node-b"]);
+    client.close();
+  });
+
+  it("reports a registered offline Node without sending a side-effect", async () => {
+    const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+    const actions: string[] = [];
+    const client = new ControlClient({
+      url: "wss://relay.test/web/connect?clientId=client",
+      identity: { ownerId: "owner", clientId: "client", keyId: "key", privateKey: keyPair.privateKey },
+      nodes: [{ ownerId: "owner", nodeId: "offline", online: false }],
+      storage: new MemoryControlStorage(),
+      onControlAction: (action) => actions.push(`${action.nodeId}:${action.state}`),
+    });
+    await expect(client.sendControl("turn.start", { input: "do not send" }, { nodeId: "offline" })).rejects.toThrow("offline");
+    expect(actions).toEqual(["offline:offline"]);
+  });
 });
 
 function challenge(): Record<string, unknown> {
@@ -113,13 +179,17 @@ function challenge(): Record<string, unknown> {
 }
 
 function event(type: string, sequence: number, correlationId: string): Record<string, unknown> {
+  return eventFor("node", type, sequence, correlationId);
+}
+
+function eventFor(nodeId: string, type: string, sequence: number, correlationId: string, payload: Record<string, unknown> = { status: "confirmed" }): Record<string, unknown> {
   return {
-    protocolVersion: "1.0", messageId: `event-${sequence}`, type, ownerId: "owner", nodeId: "node", streamId: "node-events-v1",
-    sequence, correlationId, sentAt: "2026-08-03T00:00:00Z", payload: { status: "confirmed" },
+    protocolVersion: "1.0", messageId: `${nodeId}-event-${sequence}`, type, ownerId: "owner", nodeId, streamId: "node-events-v1",
+    sequence, correlationId, sentAt: "2026-08-03T00:00:00Z", payload,
   };
 }
 
 async function tick(): Promise<void> {
-  for (let attempt = 0; attempt < 10; attempt += 1) await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let attempt = 0; attempt < 20; attempt += 1) await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 10));
 }

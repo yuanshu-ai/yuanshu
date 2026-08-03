@@ -297,11 +297,16 @@ func (h *Hub) route(ctx context.Context, source *hubConnection) {
 		}
 		target := h.node(source.ownerID, header.NodeID)
 		if target == nil {
-			return
+			// A control connection is owner-scoped, while each Node is an
+			// independent availability boundary. Keep the Web session alive so
+			// another registered Node can still be controlled and let the client
+			// represent this request as offline/unknown. The Hub must not invent
+			// a control.result for a message that never reached a Node.
+			continue
 		}
 		if err := target.relay.Send(ctx, frame); err != nil {
 			_ = target.relay.Close()
-			return
+			continue
 		}
 	}
 }

@@ -23,22 +23,23 @@ const parseSecret = () => {
   return { pairingId: raw.slice(0, split), secret: raw.slice(split + 1) };
 };
 const openDB = () => new Promise((resolve, reject) => {
-  const request = indexedDB.open('yuanshu-control-client', 2);
+  const request = indexedDB.open('yuanshu-control-client', 3);
   request.onupgradeneeded = () => {
     const database = request.result;
     if (!database.objectStoreNames.contains('keys')) database.createObjectStore('keys');
     if (!database.objectStoreNames.contains('event-cursors')) database.createObjectStore('event-cursors');
     if (!database.objectStoreNames.contains('control-sequences')) database.createObjectStore('control-sequences');
+    if (!database.objectStoreNames.contains('node-bindings')) database.createObjectStore('node-bindings');
   };
   request.onsuccess = () => resolve(request.result);
   request.onerror = () => reject(new Error('storage unavailable'));
 });
-const withStore = async (mode, operation) => {
+const withStore = async (storeName, mode, operation) => {
   const db = await openDB();
   try {
     return await new Promise((resolve, reject) => {
-      const tx = db.transaction('keys', mode);
-      const request = operation(tx.objectStore('keys'));
+      const tx = db.transaction(storeName, mode);
+      const request = operation(tx.objectStore(storeName));
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(new Error('storage unavailable'));
     });
@@ -46,9 +47,10 @@ const withStore = async (mode, operation) => {
     db.close();
   }
 };
-const storeKey = (id, value) => withStore('readwrite', store => store.put(value, id));
-const getKey = id => withStore('readonly', store => store.get(id));
-const deleteKey = id => withStore('readwrite', store => store.delete(id));
+const storeKey = (id, value) => withStore('keys', 'readwrite', store => store.put(value, id));
+const getKey = id => withStore('keys', 'readonly', store => store.get(id));
+const deleteKey = id => withStore('keys', 'readwrite', store => store.delete(id));
+const storeNodeBinding = binding => withStore('node-bindings', 'readwrite', store => store.put(binding, `${binding.ownerId}\u001f${binding.nodeId}`));
 
 const connectRealtime = client => {
   if (!client?.clientId || !client?.privateKey) return Promise.reject(new Error('identity unavailable'));
@@ -138,12 +140,21 @@ const poll = async (pairing, client) => {
     if (!response.ok) throw new Error('status unavailable');
     const value = await response.json();
     if (value.status === 'approved') {
-      const active = { ...client, ownerId: value.ownerId, nodeId: value.nodeId, nodePublicKey: value.nodePublicKey, proof: value.proof };
-      await storeKey('active', active);
+      const identity = { ...client, ownerId: value.ownerId };
+      await storeKey('active', identity);
+      await storeNodeBinding({
+        ownerId: value.ownerId,
+        nodeId: value.nodeId,
+        name: value.nodeName || nameFromClient(client),
+        version: value.version,
+        status: 'paired',
+        pairedAt: new Date().toISOString(),
+        online: true,
+      });
       await deleteKey(`pending:${pairing.pairingId}`);
       location.hash = '';
       setStatus('正在建立安全实时连接', 'waiting');
-      await connectRealtime(active);
+      await connectRealtime(identity);
       return;
     }
     if (value.status === 'declined' || value.status === 'expired') {
@@ -169,9 +180,10 @@ button.addEventListener('click', async () => {
   let claimed = false;
   try {
     if (!crypto.subtle || !indexedDB) throw new Error('unsupported');
-    const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
-    const publicKey = base64url(await crypto.subtle.exportKey('raw', keys.publicKey));
-    const client = { clientId: randomID('cli'), keyId: randomID('key'), name, publicKey, privateKey: keys.privateKey };
+    const existing = await getKey('active');
+    const client = existing?.clientId && existing?.keyId && existing?.publicKey && existing?.privateKey
+      ? stripLegacyNodeFields(existing, name)
+      : await createClientIdentity(name);
     await storeKey(`pending:${pairing.pairingId}`, client);
     const response = await fetch(`/v1/control-client-pairings/${encodeURIComponent(pairing.pairingId)}/claim`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pairing.secret}` },
@@ -199,7 +211,22 @@ if (parseSecret()) {
     if (active) {
       button.disabled = true;
       setStatus('正在恢复安全实时连接', 'waiting');
-      return connectRealtime(active);
+      return connectRealtime(stripLegacyNodeFields(active, nameFromClient(active)));
     }
   }).catch(() => setStatus('请从办公室电脑生成配对链接', 'error'));
+}
+
+async function createClientIdentity(name) {
+  const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
+  const publicKey = base64url(await crypto.subtle.exportKey('raw', keys.publicKey));
+  return { clientId: randomID('cli'), keyId: randomID('key'), name, publicKey, privateKey: keys.privateKey };
+}
+
+function nameFromClient(client) {
+  return typeof client.name === 'string' && client.name ? client.name : 'Yuanshu 控制端';
+}
+
+function stripLegacyNodeFields(identity, name) {
+  const { nodeId: _nodeId, nodePublicKey: _nodePublicKey, proof: _proof, ...ownerIdentity } = identity;
+  return { ...ownerIdentity, name };
 }

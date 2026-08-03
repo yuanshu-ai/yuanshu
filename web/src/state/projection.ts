@@ -1,0 +1,403 @@
+import type { YuanshuMessage } from "../protocol/v1/types.generated";
+import type { ControlAction } from "../relay/control-client";
+
+export interface NodeProjection {
+  ownerId: string;
+  nodeId: string;
+  name?: string;
+  version?: string;
+  status?: string;
+  runtimeStatus?: string;
+  online: boolean;
+  discovered?: boolean;
+  workspaceIds: string[];
+  lastEventSequence: number;
+  lastSeen?: string;
+}
+
+export interface WorkspaceProjection {
+  key: string;
+  ownerId: string;
+  nodeId: string;
+  workspaceId: string;
+  name?: string;
+  adapter?: string;
+  permissionProfile?: string;
+}
+
+export interface ThreadProjection {
+  key: string;
+  ownerId: string;
+  nodeId: string;
+  workspaceId: string;
+  threadId: string;
+  status?: string;
+  turnIds: string[];
+  latestSequence: number;
+  recovery: "none" | "pending" | "history_gap";
+  updatedAt?: string;
+}
+
+export interface TurnProjection {
+  key: string;
+  ownerId: string;
+  nodeId: string;
+  workspaceId: string;
+  threadId: string;
+  turnId: string;
+  status?: string;
+  updatedAt?: string;
+}
+
+export interface EventProjection {
+  key: string;
+  nodeId: string;
+  workspaceId?: string;
+  threadId?: string;
+  turnId?: string;
+  sequence: number;
+  event: YuanshuMessage;
+}
+
+export interface ApprovalProjection {
+  key: string;
+  nodeId: string;
+  workspaceId: string;
+  threadId: string;
+  turnId: string;
+  itemId?: string;
+  approvalId: string;
+  operationDigest?: string;
+  kind?: string;
+  summary?: string;
+  decision?: string;
+  status: "pending" | "resolved";
+}
+
+export interface ControlActionProjection extends ControlAction {
+  updatedAt: string;
+}
+
+export interface ProjectionState {
+  nodes: Record<string, NodeProjection>;
+  workspaces: Record<string, WorkspaceProjection>;
+  threads: Record<string, ThreadProjection>;
+  turns: Record<string, TurnProjection>;
+  events: Record<string, EventProjection[]>;
+  approvals: Record<string, ApprovalProjection>;
+  actions: Record<string, ControlActionProjection>;
+}
+
+export interface ProjectionOptions {
+  maxEventsPerBucket?: number;
+  now?: () => string;
+}
+
+const DEFAULT_MAX_EVENTS = 512;
+
+/**
+ * Pure, in-memory projection for the personal Web control client.
+ *
+ * The projection deliberately does not persist task content or send anything
+ * to the Server. The Relay client owns cursor/replay correctness; this layer
+ * only turns accepted, ordered envelopes into UI-friendly records.
+ */
+export class DataProjection {
+  private readonly maxEventsPerBucket: number;
+  private readonly now: () => string;
+  private readonly seenEvents = new Set<string>();
+  private readonly stateValue: ProjectionState = {
+    nodes: {},
+    workspaces: {},
+    threads: {},
+    turns: {},
+    events: {},
+    approvals: {},
+    actions: {},
+  };
+
+  constructor(options: ProjectionOptions = {}) {
+    this.maxEventsPerBucket = options.maxEventsPerBucket ?? DEFAULT_MAX_EVENTS;
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  get state(): ProjectionState {
+    return this.stateValue;
+  }
+
+  registerNode(node: Partial<NodeProjection> & Pick<NodeProjection, "ownerId" | "nodeId">): NodeProjection {
+    const current = this.stateValue.nodes[node.nodeId];
+    const next: NodeProjection = {
+      ...current,
+      ...node,
+      online: node.online ?? current?.online ?? true,
+      workspaceIds: [...(node.workspaceIds ?? current?.workspaceIds ?? [])],
+      lastEventSequence: node.lastEventSequence ?? current?.lastEventSequence ?? 0,
+    };
+    this.stateValue.nodes[node.nodeId] = next;
+    return next;
+  }
+
+  applyControlAction(action: ControlAction): ControlActionProjection {
+    const next: ControlActionProjection = { ...action, updatedAt: this.now() };
+    this.stateValue.actions[action.messageId] = next;
+    return next;
+  }
+
+  apply(event: YuanshuMessage): void {
+    if (event.ownerId === "" || event.nodeId === "") return;
+    const eventKey = `${event.ownerId}\u001f${event.nodeId}\u001f${event.streamId}\u001f${event.sequence}`;
+    if (this.seenEvents.has(eventKey)) return;
+    this.seenEvents.add(eventKey);
+
+    const node = this.ensureNode(event);
+    node.lastEventSequence = Math.max(node.lastEventSequence, event.sequence);
+    node.lastSeen = event.sentAt;
+    node.online = true;
+
+    switch (event.type) {
+      case "device.status":
+        this.applyDeviceStatus(node, event);
+        break;
+      case "runtime.status":
+        this.applyRuntimeStatus(node, event);
+        break;
+      case "thread.snapshot":
+        this.applyThreadSnapshot(event);
+        break;
+      case "thread.started":
+        this.applyThreadLifecycle(event, "running");
+        break;
+      case "turn.started":
+        this.applyTurnLifecycle(event, "running");
+        break;
+      case "turn.completed":
+        this.applyTurnLifecycle(event, "completed");
+        break;
+      case "turn.failed":
+        this.applyTurnLifecycle(event, "failed");
+        break;
+      case "turn.interrupted":
+        this.applyTurnLifecycle(event, "interrupted");
+        break;
+      case "approval.requested":
+        this.applyApprovalRequested(event);
+        break;
+      case "approval.resolved":
+        this.applyApprovalResolved(event);
+        break;
+      case "history.gap":
+        this.applyHistoryGap(event);
+        break;
+      case "control.result":
+        this.applyControlResult(event);
+        break;
+    }
+
+    if (event.type !== "device.status" && event.type !== "runtime.status" && event.type !== "control.result") {
+      this.appendEvent(event);
+    }
+  }
+
+  private ensureNode(event: YuanshuMessage): NodeProjection {
+    return this.registerNode({ ownerId: event.ownerId, nodeId: event.nodeId });
+  }
+
+  private applyDeviceStatus(node: NodeProjection, event: YuanshuMessage): void {
+    const payload = event.payload;
+    if (typeof payload.status === "string") node.status = payload.status;
+    if (typeof payload.runtime === "string") node.runtimeStatus = payload.runtime;
+    if (typeof payload.name === "string") node.name = payload.name;
+    if (typeof payload.version === "string") node.version = payload.version;
+    if (!Array.isArray(payload.workspaces)) return;
+    for (const raw of payload.workspaces) {
+      if (!isRecord(raw) || typeof raw.id !== "string") continue;
+      const workspace = this.upsertWorkspace(node, raw.id, {
+        name: stringValue(raw.name),
+        adapter: stringValue(raw.adapter),
+        permissionProfile: stringValue(raw.permissionProfile),
+      });
+      if (!node.workspaceIds.includes(workspace.workspaceId)) node.workspaceIds.push(workspace.workspaceId);
+    }
+  }
+
+  private applyRuntimeStatus(node: NodeProjection, event: YuanshuMessage): void {
+    if (typeof event.payload.status === "string") node.runtimeStatus = event.payload.status;
+    node.online = true;
+  }
+
+  private applyThreadSnapshot(event: YuanshuMessage): void {
+    const payload = event.payload;
+    const workspaceId = event.workspaceId;
+    if (!workspaceId) return;
+    if (Array.isArray(payload.threads)) {
+      for (const raw of payload.threads) {
+        if (!isRecord(raw) || typeof raw.id !== "string") continue;
+        const thread = this.upsertThread(event.nodeId, event.ownerId, workspaceId, raw.id);
+        if (typeof raw.status === "string") thread.status = raw.status;
+        thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
+        thread.recovery = "none";
+        thread.updatedAt = event.sentAt;
+      }
+      return;
+    }
+    if (!event.threadId) return;
+    const thread = this.upsertThread(event.nodeId, event.ownerId, workspaceId, event.threadId);
+    if (typeof payload.status === "string") thread.status = payload.status;
+    if (typeof payload.latestSequence === "number") thread.latestSequence = Math.max(thread.latestSequence, payload.latestSequence);
+    thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
+    thread.recovery = "none";
+    thread.updatedAt = event.sentAt;
+    if (!Array.isArray(payload.turns)) return;
+    for (const raw of payload.turns) {
+      if (!isRecord(raw) || typeof raw.id !== "string") continue;
+      const turn = this.upsertTurn(event.nodeId, event.ownerId, workspaceId, event.threadId, raw.id);
+      if (typeof raw.status === "string") turn.status = raw.status;
+      turn.updatedAt = event.sentAt;
+      if (!thread.turnIds.includes(turn.turnId)) thread.turnIds.push(turn.turnId);
+    }
+  }
+
+  private applyThreadLifecycle(event: YuanshuMessage, fallback: string): void {
+    if (!event.workspaceId || !event.threadId) return;
+    const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId);
+    thread.status = stringValue(event.payload.status) ?? fallback;
+    thread.recovery = "none";
+    thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
+    thread.updatedAt = event.sentAt;
+  }
+
+  private applyTurnLifecycle(event: YuanshuMessage, fallback: string): void {
+    if (!event.workspaceId || !event.threadId || !event.turnId) return;
+    const turn = this.upsertTurn(event.nodeId, event.ownerId, event.workspaceId, event.threadId, event.turnId);
+    turn.status = stringValue(event.payload.status) ?? fallback;
+    turn.updatedAt = event.sentAt;
+    const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId);
+    if (!thread.turnIds.includes(turn.turnId)) thread.turnIds.push(turn.turnId);
+    thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
+    thread.updatedAt = event.sentAt;
+  }
+
+  private applyHistoryGap(event: YuanshuMessage): void {
+    if (!event.workspaceId || !event.threadId) return;
+    const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId);
+    thread.recovery = "history_gap";
+    thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
+    thread.updatedAt = event.sentAt;
+  }
+
+  private applyApprovalRequested(event: YuanshuMessage): void {
+    if (!event.workspaceId || !event.threadId || !event.turnId) return;
+    const approvalId = stringValue(event.payload.approvalId);
+    if (!approvalId) return;
+    const key = this.approvalKey(event.nodeId, event.workspaceId, event.threadId, event.turnId, approvalId);
+    this.stateValue.approvals[key] = {
+      key,
+      nodeId: event.nodeId,
+      workspaceId: event.workspaceId,
+      threadId: event.threadId,
+      turnId: event.turnId,
+      itemId: event.itemId,
+      approvalId,
+      operationDigest: stringValue(event.payload.operationDigest),
+      kind: stringValue(event.payload.kind),
+      summary: stringValue(event.payload.summary),
+      status: "pending",
+    };
+  }
+
+  private applyApprovalResolved(event: YuanshuMessage): void {
+    if (!event.workspaceId || !event.threadId || !event.turnId) return;
+    const approvalId = stringValue(event.payload.approvalId);
+    if (!approvalId) return;
+    const key = this.approvalKey(event.nodeId, event.workspaceId, event.threadId, event.turnId, approvalId);
+    const current = this.stateValue.approvals[key] ?? {
+      key,
+      nodeId: event.nodeId,
+      workspaceId: event.workspaceId,
+      threadId: event.threadId,
+      turnId: event.turnId,
+      itemId: event.itemId,
+      approvalId,
+      status: "resolved" as const,
+    };
+    current.status = "resolved";
+    current.decision = stringValue(event.payload.decision);
+    this.stateValue.approvals[key] = current;
+  }
+
+  private applyControlResult(event: YuanshuMessage): void {
+    const current = this.stateValue.actions[event.correlationId];
+    const status = stringValue(event.payload.status);
+    const mapped = status === "confirmed" || status === "rejected" || status === "ambiguous" ? status : current?.state ?? "sent";
+    this.stateValue.actions[event.correlationId] = {
+      ...(current ?? { messageId: event.correlationId, nodeId: event.nodeId, type: "unknown" }),
+      state: mapped,
+      errorCode: stringValue(event.payload.errorCode),
+      updatedAt: this.now(),
+    };
+  }
+
+  private appendEvent(event: YuanshuMessage): void {
+    const key = eventBucketKey(event);
+    const bucket = this.stateValue.events[key] ?? [];
+    if (bucket.some((item) => item.sequence === event.sequence && item.nodeId === event.nodeId)) return;
+    bucket.push({ key, nodeId: event.nodeId, workspaceId: event.workspaceId, threadId: event.threadId, turnId: event.turnId, sequence: event.sequence, event });
+    bucket.sort((left, right) => left.sequence - right.sequence);
+    if (bucket.length > this.maxEventsPerBucket) bucket.splice(0, bucket.length - this.maxEventsPerBucket);
+    this.stateValue.events[key] = bucket;
+  }
+
+  private upsertWorkspace(node: NodeProjection, workspaceId: string, values: Partial<WorkspaceProjection>): WorkspaceProjection {
+    const key = workspaceKey(node.nodeId, workspaceId);
+    const current = this.stateValue.workspaces[key];
+    const { key: _key, ownerId: _ownerId, nodeId: _nodeId, workspaceId: _workspaceId, ...workspaceValues } = values;
+    const next: WorkspaceProjection = { ...current, key, ownerId: node.ownerId, nodeId: node.nodeId, workspaceId, ...workspaceValues };
+    this.stateValue.workspaces[key] = next;
+    return next;
+  }
+
+  private upsertThread(nodeId: string, ownerId: string, workspaceId: string, threadId: string): ThreadProjection {
+    const key = threadKey(nodeId, workspaceId, threadId);
+    const current = this.stateValue.threads[key];
+    const next: ThreadProjection = { ...current, key, ownerId, nodeId, workspaceId, threadId, turnIds: [...(current?.turnIds ?? [])], latestSequence: current?.latestSequence ?? 0, recovery: current?.recovery ?? "pending" };
+    this.stateValue.threads[key] = next;
+    return next;
+  }
+
+  private upsertTurn(nodeId: string, ownerId: string, workspaceId: string, threadId: string, turnId: string): TurnProjection {
+    const key = turnKey(nodeId, workspaceId, threadId, turnId);
+    const current = this.stateValue.turns[key];
+    const next: TurnProjection = { ...current, key, ownerId, nodeId, workspaceId, threadId, turnId };
+    this.stateValue.turns[key] = next;
+    return next;
+  }
+
+  private approvalKey(nodeId: string, workspaceId: string, threadId: string, turnId: string, approvalId: string): string {
+    return [nodeId, workspaceId, threadId, turnId, approvalId].join("\u001f");
+  }
+}
+
+export function workspaceKey(nodeId: string, workspaceId: string): string {
+  return [nodeId, workspaceId].join("\u001f");
+}
+
+export function threadKey(nodeId: string, workspaceId: string, threadId: string): string {
+  return [nodeId, workspaceId, threadId].join("\u001f");
+}
+
+export function turnKey(nodeId: string, workspaceId: string, threadId: string, turnId: string): string {
+  return [nodeId, workspaceId, threadId, turnId].join("\u001f");
+}
+
+export function eventBucketKey(event: Pick<YuanshuMessage, "nodeId" | "workspaceId" | "threadId" | "turnId">): string {
+  return [event.nodeId, event.workspaceId ?? "", event.threadId ?? "", event.turnId ?? ""].join("\u001f");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}

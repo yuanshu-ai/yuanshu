@@ -156,6 +156,28 @@ func TestHubRoutesRawFramesInBothDirections(t *testing.T) {
 	}
 }
 
+func TestHubKeepsControlSessionAliveWhenTargetNodeIsOffline(t *testing.T) {
+	fixture := newHubFixture(t)
+	node := fixture.dialNode(t)
+	defer node.Close()
+	control := fixture.dialControl(t)
+	defer control.Close()
+	waitHubSnapshot(t, fixture.hub, 1, 1)
+
+	offline := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"offline-node","payload":{}}`)
+	if err := control.Send(context.Background(), transport.NewFrame(offline)); err != nil {
+		t.Fatal(err)
+	}
+	valid := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"nod_test","payload":{}}`)
+	if err := control.Send(context.Background(), transport.NewFrame(valid)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := node.Receive(context.Background())
+	if err != nil || !bytes.Equal(got.Bytes(), valid) {
+		t.Fatalf("control session did not survive offline target: frame=%q err=%v", got.Bytes(), err)
+	}
+}
+
 func TestHubRoutesRemoteControlThroughStandaloneLocalNode(t *testing.T) {
 	fixture := newHubFixture(t)
 	serverSide, nodeSide, err := transport.NewStandalonePair(transport.StandaloneOptions{QueueCapacity: 8})

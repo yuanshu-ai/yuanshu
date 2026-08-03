@@ -10,9 +10,22 @@ export interface ControlSequenceKey {
   keyId: string;
 }
 
-export interface StoredControlIdentity {
+export interface StoredNodeBinding {
   ownerId: string;
   nodeId: string;
+  name?: string;
+  version?: string;
+  status?: string;
+  pairedAt?: string;
+  lastSeen?: string;
+  online?: boolean;
+  discovered?: boolean;
+}
+
+export interface StoredControlIdentity {
+  ownerId: string;
+  /** @deprecated Kept only so identities written by PF-010 can migrate. */
+  nodeId?: string;
   clientId: string;
   keyId: string;
   privateKey: CryptoKey;
@@ -24,13 +37,17 @@ export interface ControlStorage {
   nextControlSequence(key: ControlSequenceKey): Promise<number>;
   getActiveIdentity(): Promise<StoredControlIdentity | undefined>;
   putActiveIdentity(identity: StoredControlIdentity): Promise<void>;
+  listNodeBindings(ownerId: string): Promise<StoredNodeBinding[]>;
+  putNodeBinding(binding: StoredNodeBinding): Promise<void>;
+  removeNodeBinding(ownerId: string, nodeId: string): Promise<void>;
 }
 
 const DATABASE_NAME = "yuanshu-control-client";
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const KEYS_STORE = "keys";
 const CURSORS_STORE = "event-cursors";
 const SEQUENCES_STORE = "control-sequences";
+const NODES_STORE = "node-bindings";
 
 export function cursorStorageKey(key: CursorKey): string {
   return [key.ownerId, key.nodeId, key.streamId].map(encodeURIComponent).join("\u001f");
@@ -38,6 +55,10 @@ export function cursorStorageKey(key: CursorKey): string {
 
 export function controlSequenceStorageKey(key: ControlSequenceKey): string {
   return [key.ownerId, key.nodeId, key.clientId, key.keyId].map(encodeURIComponent).join("\u001f");
+}
+
+export function nodeBindingStorageKey(ownerId: string, nodeId: string): string {
+  return [ownerId, nodeId].map(encodeURIComponent).join("\u001f");
 }
 
 export class IndexedDBControlStorage implements ControlStorage {
@@ -87,12 +108,35 @@ export class IndexedDBControlStorage implements ControlStorage {
     transaction.objectStore(KEYS_STORE).put(identity, "active");
     await transactionComplete(transaction);
   }
+
+  async listNodeBindings(ownerId: string): Promise<StoredNodeBinding[]> {
+    const database = await this.database;
+    const transaction = database.transaction(NODES_STORE, "readonly");
+    const values = await requestValue<StoredNodeBinding[]>(transaction.objectStore(NODES_STORE).getAll());
+    return values.filter((binding) => binding?.ownerId === ownerId && typeof binding.nodeId === "string").map(copyNodeBinding);
+  }
+
+  async putNodeBinding(binding: StoredNodeBinding): Promise<void> {
+    validateNodeBinding(binding);
+    const database = await this.database;
+    const transaction = database.transaction(NODES_STORE, "readwrite");
+    transaction.objectStore(NODES_STORE).put(copyNodeBinding(binding), nodeBindingStorageKey(binding.ownerId, binding.nodeId));
+    await transactionComplete(transaction);
+  }
+
+  async removeNodeBinding(ownerId: string, nodeId: string): Promise<void> {
+    const database = await this.database;
+    const transaction = database.transaction(NODES_STORE, "readwrite");
+    transaction.objectStore(NODES_STORE).delete(nodeBindingStorageKey(ownerId, nodeId));
+    await transactionComplete(transaction);
+  }
 }
 
 export class MemoryControlStorage implements ControlStorage {
   private readonly cursors = new Map<string, number>();
   private readonly sequences = new Map<string, number>();
   private identity?: StoredControlIdentity;
+  private readonly nodes = new Map<string, StoredNodeBinding>();
 
   getEventCursor(key: CursorKey): Promise<number> {
     return Promise.resolve(this.cursors.get(cursorStorageKey(key)) ?? 0);
@@ -118,6 +162,21 @@ export class MemoryControlStorage implements ControlStorage {
     this.identity = identity;
     return Promise.resolve();
   }
+
+  listNodeBindings(ownerId: string): Promise<StoredNodeBinding[]> {
+    return Promise.resolve([...this.nodes.values()].filter((binding) => binding.ownerId === ownerId).map(copyNodeBinding));
+  }
+
+  putNodeBinding(binding: StoredNodeBinding): Promise<void> {
+    validateNodeBinding(binding);
+    this.nodes.set(nodeBindingStorageKey(binding.ownerId, binding.nodeId), copyNodeBinding(binding));
+    return Promise.resolve();
+  }
+
+  removeNodeBinding(ownerId: string, nodeId: string): Promise<void> {
+    this.nodes.delete(nodeBindingStorageKey(ownerId, nodeId));
+    return Promise.resolve();
+  }
 }
 
 function openDatabase(databaseName: string): Promise<IDBDatabase> {
@@ -128,11 +187,22 @@ function openDatabase(databaseName: string): Promise<IDBDatabase> {
       if (!database.objectStoreNames.contains(KEYS_STORE)) database.createObjectStore(KEYS_STORE);
       if (!database.objectStoreNames.contains(CURSORS_STORE)) database.createObjectStore(CURSORS_STORE);
       if (!database.objectStoreNames.contains(SEQUENCES_STORE)) database.createObjectStore(SEQUENCES_STORE);
+      if (!database.objectStoreNames.contains(NODES_STORE)) database.createObjectStore(NODES_STORE);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error("IndexedDB could not be opened"));
     request.onblocked = () => reject(new Error("IndexedDB upgrade is blocked"));
   });
+}
+
+function validateNodeBinding(binding: StoredNodeBinding): void {
+  if (!binding.ownerId || !binding.nodeId || (binding.online !== undefined && typeof binding.online !== "boolean")) {
+    throw new Error("node binding is invalid");
+  }
+}
+
+function copyNodeBinding(binding: StoredNodeBinding): StoredNodeBinding {
+  return { ...binding };
 }
 
 function requestValue<T>(request: IDBRequest<T>): Promise<T> {
