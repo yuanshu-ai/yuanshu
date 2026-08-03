@@ -122,14 +122,15 @@ yuanshu standalone   Server + Web + local Node in one deployment
 - [ ] Linux Server and real-phone self-hosted deployment
 - [ ] Linux Yuanshu Node
 - [ ] macOS arm64 real-device Alpha acceptance
-- [ ] Mobile PWA task loop
+- [x] Personal mobile Web task loop, multi-Node projection, leases, approvals, Diff, notifications, and settings
+- [ ] Safari/Android real-device Personal Alpha acceptance
 - [ ] Security hardening and first public preview
 
 The roadmap establishes a reliable daily-use loop for one developer first, then completes the committed Linux and macOS integrations before expanding into more agent adapters or team features.
 
 ## Development
 
-The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. Node SQLite now also provides monotonic event sequences, bounded retention, outbox cursor acknowledgement, replay, snapshots, and conservative reconciliation of uncertain Turns. The TLS-only Hub supports one personal Owner with up to five isolated Nodes; an existing Node signs five-minute enrollment decisions, and Owner-wide Control Client trust is revalidated independently by every Node. The full task PWA remains a later milestone.
+The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. Node SQLite now also provides monotonic event sequences, bounded retention, replay, snapshots, and conservative reconciliation of uncertain Turns. The TLS-only Hub supports one personal Owner with up to five isolated Nodes; an existing Node signs five-minute enrollment decisions, and Owner-wide Control Client trust is revalidated independently by every Node. The embedded personal Web workbench now provides task-first mobile navigation, multi-Node Thread summaries, lazy history and Diff reads, streaming events, lease-protected control, approvals, notifications, and connection/Node settings. Real-device PF-052 acceptance remains required before a public Alpha tag.
 
 Reference development toolchain (recommendation only; not enforced by the repository):
 
@@ -163,6 +164,7 @@ go vet ./...
 go build ./...
 pnpm --dir web test
 pnpm --dir web build
+pnpm --dir web test:e2e
 pnpm --dir node-web test
 pnpm --dir node-web build
 ```

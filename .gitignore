@@ -6,6 +6,8 @@
 **/node_modules/
 /web/dist/
 /coverage/
+/web/test-results/
+/web/playwright-report/
 /.cache/
 /.tmp/
 *.tsbuildinfo

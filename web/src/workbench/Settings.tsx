@@ -1,0 +1,190 @@
+import { useEffect, useState, type FormEvent } from "react";
+
+import { normalizeRuntimeSettings, type RuntimeSettings } from "../relay/runtime-config";
+import { RELAY_SUBPROTOCOL } from "../relay/session";
+import type { ControlStorage } from "../relay/storage";
+import { Icon } from "./Icon";
+import type { WorkbenchSession } from "./session";
+
+export function SettingsView({ session, storage, settings, selectedNodeId, onSettingsSaved }: { session: WorkbenchSession; storage: ControlStorage; settings: RuntimeSettings; selectedNodeId: string; onSettingsSaved: () => void }) {
+  return <section className="utility-view" aria-labelledby="settings-title">
+    <div className="utility-heading"><div><p>设置</p><h1 id="settings-title">连接与本机边界</h1></div></div>
+    <div className="settings-columns">
+      <ConnectionSettings initial={settings} storage={storage} onSaved={onSettingsSaved} />
+      {selectedNodeId ? <NodeSettings session={session} nodeId={selectedNodeId} /> : <div className="state-panel"><Icon name="node" /><b>尚未选择 Node</b><p>配对并选择一台电脑后，可以读取脱敏的 Node 配置。</p></div>}
+    </div>
+    <div className="settings-links">
+      <a href={settings.pairingUrl}>配对新设备</a>
+      {settings.adminEnabled && <a href={settings.adminUrl ?? "/admin"}>Server 管理</a>}
+    </div>
+  </section>;
+}
+
+export function ConnectionSettings({ initial, storage, compact = false, onSaved }: { initial: RuntimeSettings; storage: ControlStorage; compact?: boolean; onSaved: () => void }) {
+  const [relayUrl, setRelayUrl] = useState(initial.relayUrl);
+  const [pairingUrl, setPairingUrl] = useState(initial.pairingUrl);
+  const [displayName, setDisplayName] = useState(initial.displayName ?? "");
+  const [error, setError] = useState("");
+  const [testStatus, setTestStatus] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const value = normalizeRuntimeSettings({ relayUrl, pairingUrl, displayName });
+      setSaving(true);
+      await storage.putRuntimeSettings(value);
+      onSaved();
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "连接设置无效");
+      setSaving(false);
+    }
+  };
+
+  const testConnection = () => {
+    setError("");
+    setTestStatus("");
+    let value: RuntimeSettings;
+    try {
+      value = normalizeRuntimeSettings({ relayUrl, pairingUrl, displayName });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "连接设置无效");
+      return;
+    }
+    if (typeof WebSocket === "undefined") {
+      setTestStatus("当前浏览器不支持 WebSocket");
+      return;
+    }
+    setTestStatus("正在测试 WSS 和 TLS");
+    let finished = false;
+    const socket = new WebSocket(value.relayUrl, RELAY_SUBPROTOCOL);
+    const timer = window.setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      socket.close();
+      setTestStatus("连接超时，请检查 IP、端口和证书信任");
+    }, 5_000);
+    socket.onopen = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(timer);
+      socket.close();
+      setTestStatus("WSS 和 TLS 可达，保存后会完成身份认证");
+    };
+    socket.onerror = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(timer);
+      setTestStatus("连接失败，请检查证书 SAN、Origin 和网络");
+    };
+  };
+
+  const reset = async () => {
+    setError("");
+    await storage.removeRuntimeSettings();
+    onSaved();
+  };
+
+  return <section className={`settings-card ${compact ? "compact" : ""}`} aria-label="连接设置">
+    <div className="settings-card-heading"><div><p>浏览器连接</p><h2>Relay 与配对地址</h2></div><Icon name="lock" /></div>
+    <p className="settings-help">Relay 必须使用 <code>wss://</code>，配对页必须使用 <code>https://</code>。局域网 IP 仍需要可信 TLS 证书。</p>
+    <form onSubmit={(event) => void save(event)}>
+      <label><span>Relay URL</span><input value={relayUrl} onChange={(event) => setRelayUrl(event.target.value)} placeholder="wss://192.168.1.20:7444/web/connect" inputMode="url" /></label>
+      <label><span>Pairing URL</span><input value={pairingUrl} onChange={(event) => setPairingUrl(event.target.value)} placeholder="https://192.168.1.20:7444/pair" inputMode="url" /></label>
+      <label><span>设备显示名称（可选）</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={128} /></label>
+      {error && <small className="form-error" role="alert">{error}</small>}
+      {testStatus && <small className="form-status">{testStatus}</small>}
+      <div className="form-actions"><button className="button secondary" type="button" onClick={testConnection}>测试连接</button><button className="button quiet" type="button" onClick={() => void reset()}>恢复默认</button><button className="button primary" type="submit" disabled={saving}>{saving ? "保存中" : "保存并重连"}</button></div>
+    </form>
+  </section>;
+}
+
+type NodeConfigView = {
+  revision: string;
+  host?: { name?: string };
+  relay?: { url?: string; proxyUrl?: string; connectTimeoutSeconds?: number; credentialConfigured?: boolean };
+  events?: { maxAgeHours?: number; maxSizeMiB?: number };
+  adapter?: { codexEnabled?: boolean; runtimeMode?: string };
+  workspaces?: Array<{ id: string; name?: string; permissionProfile?: string; allowNetwork?: boolean }>;
+  pendingChanges?: number;
+};
+
+function NodeSettings({ session, nodeId }: { session: WorkbenchSession; nodeId: string }) {
+  const [view, setView] = useState<NodeConfigView>();
+  const [hostName, setHostName] = useState("");
+  const [relayUrl, setRelayUrl] = useState("");
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [timeout, setTimeoutValue] = useState(30);
+  const [maxAge, setMaxAge] = useState(168);
+  const [maxSize, setMaxSize] = useState(256);
+  const [status, setStatus] = useState("正在读取 Node 配置");
+  const [saving, setSaving] = useState(false);
+
+  const applyView = (value: NodeConfigView) => {
+    setView(value);
+    setHostName(value.host?.name ?? "");
+    setRelayUrl(value.relay?.url ?? "");
+    setProxyUrl(value.relay?.proxyUrl ?? "");
+    setTimeoutValue(value.relay?.connectTimeoutSeconds ?? 30);
+    setMaxAge(value.events?.maxAgeHours ?? 168);
+    setMaxSize(value.events?.maxSizeMiB ?? 256);
+  };
+
+  const read = async () => {
+    if (session.client.state !== "connected") {
+      setStatus("Node 当前离线，连接恢复后可以读取配置");
+      return;
+    }
+    setStatus("正在读取 Node 配置");
+    try {
+      const result = await session.request("config.read", {}, { nodeId });
+      const payload = result.payload as { config?: NodeConfigView };
+      if (!payload.config) throw new Error("Node 没有返回脱敏配置");
+      applyView(payload.config);
+      setStatus("已读取脱敏配置");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "读取 Node 配置失败");
+    }
+  };
+
+  useEffect(() => { void read(); }, [nodeId, session.client.state]);
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!view) return;
+    setSaving(true);
+    try {
+      const changes: Record<string, unknown> = {
+        hostName: hostName.trim(),
+        proxyUrl: proxyUrl.trim(),
+        connectTimeoutSeconds: Number(timeout),
+        eventsMaxAgeHours: Number(maxAge),
+        eventsMaxSizeMiB: Number(maxSize),
+      };
+      if (relayUrl.trim()) changes.relayUrl = relayUrl.trim();
+      const result = await session.request("config.update", { baseRevision: view.revision, changes }, { nodeId });
+      const payload = result.payload as { config?: NodeConfigView; requiresLocalConfirmation?: boolean; applied?: boolean };
+      if (payload.config) applyView(payload.config);
+      setStatus(payload.requiresLocalConfirmation ? "已提交，Relay 或代理变更需要 Node 本机确认" : payload.applied ? "已应用，Node 正在安全重载" : "更新已提交");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "更新失败，请重新读取 revision");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <section className="settings-card" aria-label="Node 设置">
+    <div className="settings-card-heading"><div><p>Node {nodeId.slice(0, 10)}</p><h2>脱敏配置与本机确认</h2></div><button className="icon-action" type="button" onClick={() => void read()} aria-label="重新读取 Node 配置"><Icon name="refresh" /></button></div>
+    <p className="settings-help">配置 revision：<code>{view?.revision ?? "未读取"}</code>。Relay、代理和工作区安全边界变更需要本机确认。凭据、路径、Server 监听和 TLS 私钥不可远程修改。</p>
+    <form onSubmit={(event) => void save(event)}>
+      <label><span>Node 显示名称</span><input value={hostName} onChange={(event) => setHostName(event.target.value)} maxLength={128} /></label>
+      <div className="settings-grid"><label><span>Relay URL（需本机确认）</span><input value={relayUrl} onChange={(event) => setRelayUrl(event.target.value)} inputMode="url" /></label><label><span>Relay Proxy URL（需本机确认）</span><input value={proxyUrl} onChange={(event) => setProxyUrl(event.target.value)} inputMode="url" /></label></div>
+      <div className="settings-grid three"><label><span>连接超时（秒）</span><input type="number" min={1} max={300} value={timeout} onChange={(event) => setTimeoutValue(Number(event.target.value))} /></label><label><span>事件保留（小时）</span><input type="number" min={1} max={8760} value={maxAge} onChange={(event) => setMaxAge(Number(event.target.value))} /></label><label><span>事件上限（MiB）</span><input type="number" min={1} max={16384} value={maxSize} onChange={(event) => setMaxSize(Number(event.target.value))} /></label></div>
+      {view?.adapter && <div className="config-facts"><span>Codex：{view.adapter.codexEnabled ? "已启用" : "未启用"}</span><span>运行时：{view.adapter.runtimeMode || "默认"}</span><span>凭据：{view.relay?.credentialConfigured ? "已配置，不展示" : "未配置"}</span><span>待确认：{view.pendingChanges ?? 0}</span></div>}
+      {view?.workspaces?.map((workspace) => <div className="workspace-fact" key={workspace.id}><b>{workspace.name || workspace.id}</b><span>{workspace.permissionProfile === "workspace-write" ? "可写" : "只读"}</span><span>{workspace.allowNetwork ? "网络开启" : "网络关闭"}</span></div>)}
+      <small className={/失败|离线/.test(status) ? "form-error" : "form-status"}>{status}</small>
+      <div className="form-actions"><button className="button primary" type="submit" disabled={saving || !view || session.client.state !== "connected"}>{saving ? "保存中" : "保存 Node 配置"}</button></div>
+    </form>
+  </section>;
+}
