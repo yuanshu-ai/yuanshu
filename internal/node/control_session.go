@@ -39,6 +39,8 @@ type ControlSessionOptions struct {
 	// callback so the host can make the remote control state unavailable
 	// without coupling this protocol boundary to host lifecycle code.
 	EventFailure func(error)
+	Config       configController
+	ConfigReload func()
 	Now          func() time.Time
 }
 
@@ -52,6 +54,8 @@ type ControlSession struct {
 	deviceName   string
 	refreshTrust func(context.Context) error
 	eventFailure func(error)
+	config       configController
+	configReload func()
 	now          func() time.Time
 
 	transportMu sync.RWMutex
@@ -84,7 +88,7 @@ func NewControlSession(options ControlSessionOptions) (*ControlSession, error) {
 			}
 			return &sessionTransport{value: options.Transport}
 		}(),
-		eventFailure: options.EventFailure,
+		eventFailure: options.EventFailure, config: options.Config, configReload: options.ConfigReload,
 		now: func() time.Time {
 			if options.Now != nil {
 				return options.Now()
@@ -265,14 +269,46 @@ func (s *ControlSession) handle(ctx context.Context, raw []byte) error {
 		return s.handleReplay(ctx, message)
 	}
 	status, code := protocol.ControlResultConfirmed, protocol.ErrorCode("")
-	if err := s.dispatch(ctx, message); err != nil {
-		status, code = classifyControlFailure(err)
+	var extra map[string]any
+	var reload bool
+	var dispatchErr error
+	if protocol.ControlType(message.Type) == protocol.ControlConfigRead || protocol.ControlType(message.Type) == protocol.ControlConfigUpdate {
+		extra, reload, dispatchErr = s.dispatchConfig(ctx, message)
+	} else {
+		dispatchErr = s.dispatch(ctx, message)
 	}
-	result, err := s.events.CompleteControl(ctx, message.MessageID, status, code, "")
+	if dispatchErr != nil {
+		status, code = classifyControlFailure(dispatchErr)
+	}
+	result, err := s.events.CompleteControlWithPayload(ctx, message.MessageID, status, code, "", extra)
 	if err != nil {
 		return errors.New("node control result persistence failed")
 	}
-	return s.send(ctx, result.Frame)
+	if err := s.send(ctx, result.Frame); err != nil {
+		return err
+	}
+	if reload && s.configReload != nil {
+		go s.configReload()
+	}
+	return nil
+}
+
+func (s *ControlSession) dispatchConfig(ctx context.Context, message protocol.YuanshuMessage) (map[string]any, bool, error) {
+	if s.config == nil {
+		return nil, false, adapter.ErrUnsupported
+	}
+	switch protocol.ControlType(message.Type) {
+	case protocol.ControlConfigRead:
+		value, err := s.config.Read(ctx)
+		return map[string]any{"config": value}, false, err
+	case protocol.ControlConfigUpdate:
+		baseRevision := stringPayload(message.Payload, "baseRevision")
+		changes := mapPayload(message.Payload, "changes")
+		result, err := s.config.Update(ctx, baseRevision, changes)
+		return result.Payload, result.Reload, err
+	default:
+		return nil, false, adapter.ErrUnsupported
+	}
 }
 
 func (s *ControlSession) handleReplay(ctx context.Context, message protocol.YuanshuMessage) error {
@@ -575,7 +611,7 @@ func classifyControlFailure(err error) (protocol.ControlResultStatus, protocol.E
 		return protocol.ControlResultRejected, protocol.ErrorForbidden
 	case errors.Is(err, adapter.ErrNotFound), errors.Is(err, store.ErrNotFound):
 		return protocol.ControlResultRejected, protocol.ErrorNotFound
-	case errors.Is(err, adapter.ErrConflict):
+	case errors.Is(err, adapter.ErrConflict), errors.Is(err, store.ErrConflict):
 		return protocol.ControlResultRejected, protocol.ErrorConflict
 	case errors.Is(err, adapter.ErrUnsupported):
 		return protocol.ControlResultRejected, protocol.ErrorUnsupportedControl
@@ -599,6 +635,11 @@ func value(pointer *string) string {
 
 func stringPayload(payload map[string]any, key string) string {
 	value, _ := payload[key].(string)
+	return value
+}
+
+func mapPayload(payload map[string]any, key string) map[string]any {
+	value, _ := payload[key].(map[string]any)
 	return value
 }
 

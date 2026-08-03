@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
@@ -27,17 +26,18 @@ type LocalNodeSession struct {
 }
 
 type Options struct {
-	DataDir         string
-	Listen          string
-	PublicURL       string
-	TLSCertFile     string
-	TLSKeyFile      string
-	Stdout          io.Writer
-	Random          io.Reader
-	Clock           func() time.Time
-	Listener        net.Listener
-	ShutdownTimeout time.Duration
-	LocalNode       *LocalNodeSession
+	DataDir               string
+	Listen                string
+	PublicURL             string
+	TLSCertFile           string
+	TLSKeyFile            string
+	AllowedControlOrigins []string
+	Stdout                io.Writer
+	Random                io.Reader
+	Clock                 func() time.Time
+	Listener              net.Listener
+	ShutdownTimeout       time.Duration
+	LocalNode             *LocalNodeSession
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -95,9 +95,9 @@ func Run(ctx context.Context, options Options) error {
 			return errors.New("server bootstrap output failed")
 		}
 	}
-	origins := []string(nil)
-	if options.PublicURL != "" {
-		origins = []string{strings.TrimSuffix(options.PublicURL, "/")}
+	origins := append([]string(nil), options.AllowedControlOrigins...)
+	if len(origins) == 0 && options.PublicURL != "" {
+		origins = []string{controlOrigin(options.PublicURL)}
 	}
 	hub, err := NewHub(local, HubOptions{Random: options.Random, Clock: options.Clock, AllowedControlOrigins: origins})
 	if err != nil {
@@ -165,7 +165,19 @@ func validateRunOptions(options Options) error {
 	if options.LocalNode != nil && (options.LocalNode.Transport == nil || options.LocalNode.OwnerID == "" || options.LocalNode.NodeID == "") {
 		return ErrInvalid
 	}
+	if !validControlOrigins(options.AllowedControlOrigins) {
+		return ErrInvalid
+	}
 	return nil
+}
+
+func validControlOrigins(origins []string) bool {
+	for _, origin := range origins {
+		if !validateControlOrigin(origin) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateListener(listener net.Listener, public bool) error {

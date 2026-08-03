@@ -31,6 +31,7 @@ type localRequest struct {
 	EnrollmentID string `json:"enrollmentId,omitempty"`
 	NodeID       string `json:"nodeId,omitempty"`
 	JoinURL      string `json:"joinUrl,omitempty"`
+	ChangeID     string `json:"changeId,omitempty"`
 }
 
 type localResponse struct {
@@ -44,6 +45,8 @@ type localResponse struct {
 	EnrollmentURL string                    `json:"enrollmentUrl,omitempty"`
 	Enrollments   []NodeEnrollmentCandidate `json:"enrollments,omitempty"`
 	Devices       []DeviceSummary           `json:"devices,omitempty"`
+	Config        map[string]any            `json:"config,omitempty"`
+	ConfigChanges []ConfigChangeSummary     `json:"configChanges,omitempty"`
 }
 
 type localServer struct {

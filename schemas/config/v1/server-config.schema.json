@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yuanshu.ai/schemas/config/v1/server-config.schema.json",
+  "title": "Yuanshu Server configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["config_version", "data_dir"],
+  "properties": {
+    "config_version": { "type": "integer", "const": 1 },
+    "data_dir": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "listen": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "public_url": { "type": "string", "maxLength": 2048 },
+    "tls_cert_file": { "type": "string", "maxLength": 4096 },
+    "tls_key_file": { "type": "string", "maxLength": 4096 },
+    "allowed_control_origins": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+    }
+  }
+}

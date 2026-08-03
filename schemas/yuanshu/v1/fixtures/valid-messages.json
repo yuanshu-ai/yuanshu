@@ -35,7 +35,9 @@
     { "type": "lease.release", "payload": { "leaseId": "lease_1", "epoch": 1 } },
     { "type": "lease.status", "payload": {} },
     { "type": "notifications.list", "payload": { "limit": 20 } },
-    { "type": "notifications.read", "payload": { "notificationId": "notification_1" } }
+    { "type": "notifications.read", "payload": { "notificationId": "notification_1" } },
+    { "type": "config.read", "payload": {} },
+    { "type": "config.update", "payload": { "baseRevision": "revision_1", "changes": { "hostName": "Office Node", "eventsMaxAgeHours": 168 } } }
   ],
   "eventBase": {
     "protocolVersion": "1.0",

@@ -31,6 +31,12 @@ export interface StoredControlIdentity {
   privateKey: CryptoKey;
 }
 
+export interface StoredRuntimeSettings {
+  relayUrl: string;
+  pairingUrl: string;
+  displayName?: string;
+}
+
 export interface ControlStorage {
   getEventCursor(key: CursorKey): Promise<number>;
   putEventCursor(key: CursorKey, sequence: number): Promise<void>;
@@ -40,14 +46,18 @@ export interface ControlStorage {
   listNodeBindings(ownerId: string): Promise<StoredNodeBinding[]>;
   putNodeBinding(binding: StoredNodeBinding): Promise<void>;
   removeNodeBinding(ownerId: string, nodeId: string): Promise<void>;
+  getRuntimeSettings(): Promise<StoredRuntimeSettings | undefined>;
+  putRuntimeSettings(settings: StoredRuntimeSettings): Promise<void>;
+  removeRuntimeSettings(): Promise<void>;
 }
 
 const DATABASE_NAME = "yuanshu-control-client";
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const KEYS_STORE = "keys";
 const CURSORS_STORE = "event-cursors";
 const SEQUENCES_STORE = "control-sequences";
 const NODES_STORE = "node-bindings";
+const RUNTIME_SETTINGS_STORE = "runtime-settings";
 
 export function cursorStorageKey(key: CursorKey): string {
   return [key.ownerId, key.nodeId, key.streamId].map(encodeURIComponent).join("\u001f");
@@ -130,6 +140,28 @@ export class IndexedDBControlStorage implements ControlStorage {
     transaction.objectStore(NODES_STORE).delete(nodeBindingStorageKey(ownerId, nodeId));
     await transactionComplete(transaction);
   }
+
+  async getRuntimeSettings(): Promise<StoredRuntimeSettings | undefined> {
+    const database = await this.database;
+    const transaction = database.transaction(RUNTIME_SETTINGS_STORE, "readonly");
+    const value = await requestValue<StoredRuntimeSettings | undefined>(transaction.objectStore(RUNTIME_SETTINGS_STORE).get("active"));
+    return value ? { ...value } : undefined;
+  }
+
+  async putRuntimeSettings(settings: StoredRuntimeSettings): Promise<void> {
+    validateRuntimeSettings(settings);
+    const database = await this.database;
+    const transaction = database.transaction(RUNTIME_SETTINGS_STORE, "readwrite");
+    transaction.objectStore(RUNTIME_SETTINGS_STORE).put({ ...settings }, "active");
+    await transactionComplete(transaction);
+  }
+
+  async removeRuntimeSettings(): Promise<void> {
+    const database = await this.database;
+    const transaction = database.transaction(RUNTIME_SETTINGS_STORE, "readwrite");
+    transaction.objectStore(RUNTIME_SETTINGS_STORE).delete("active");
+    await transactionComplete(transaction);
+  }
 }
 
 export class MemoryControlStorage implements ControlStorage {
@@ -177,6 +209,23 @@ export class MemoryControlStorage implements ControlStorage {
     this.nodes.delete(nodeBindingStorageKey(ownerId, nodeId));
     return Promise.resolve();
   }
+
+  getRuntimeSettings(): Promise<StoredRuntimeSettings | undefined> {
+    return Promise.resolve(this.runtimeSettings ? { ...this.runtimeSettings } : undefined);
+  }
+
+  putRuntimeSettings(settings: StoredRuntimeSettings): Promise<void> {
+    validateRuntimeSettings(settings);
+    this.runtimeSettings = { ...settings };
+    return Promise.resolve();
+  }
+
+  removeRuntimeSettings(): Promise<void> {
+    this.runtimeSettings = undefined;
+    return Promise.resolve();
+  }
+
+  private runtimeSettings?: StoredRuntimeSettings;
 }
 
 function openDatabase(databaseName: string): Promise<IDBDatabase> {
@@ -188,6 +237,7 @@ function openDatabase(databaseName: string): Promise<IDBDatabase> {
       if (!database.objectStoreNames.contains(CURSORS_STORE)) database.createObjectStore(CURSORS_STORE);
       if (!database.objectStoreNames.contains(SEQUENCES_STORE)) database.createObjectStore(SEQUENCES_STORE);
       if (!database.objectStoreNames.contains(NODES_STORE)) database.createObjectStore(NODES_STORE);
+      if (!database.objectStoreNames.contains(RUNTIME_SETTINGS_STORE)) database.createObjectStore(RUNTIME_SETTINGS_STORE);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error("IndexedDB could not be opened"));
@@ -198,6 +248,15 @@ function openDatabase(databaseName: string): Promise<IDBDatabase> {
 function validateNodeBinding(binding: StoredNodeBinding): void {
   if (!binding.ownerId || !binding.nodeId || (binding.online !== undefined && typeof binding.online !== "boolean")) {
     throw new Error("node binding is invalid");
+  }
+}
+
+function validateRuntimeSettings(settings: StoredRuntimeSettings): void {
+  if (!settings || typeof settings.relayUrl !== "string" || typeof settings.pairingUrl !== "string" || settings.relayUrl.length > 2048 || settings.pairingUrl.length > 2048) {
+    throw new Error("runtime settings are invalid");
+  }
+  if (settings.displayName !== undefined && (typeof settings.displayName !== "string" || settings.displayName.length > 128)) {
+    throw new Error("runtime settings are invalid");
   }
 }
 

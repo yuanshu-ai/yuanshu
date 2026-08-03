@@ -69,7 +69,9 @@ const protocolSchemaJSON = `{
         "lease.release",
         "lease.status",
         "notifications.list",
-        "notifications.read"
+        "notifications.read",
+        "config.read",
+        "config.update"
       ]
     },
     "eventType": {
@@ -262,6 +264,44 @@ const protocolSchemaJSON = `{
       "properties": { "notificationId": { "$ref": "#/$defs/opaqueId" } },
       "additionalProperties": false
     },
+    "configReadPayload": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "workspaceConfigChange": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/opaqueId" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "permissionProfile": { "type": "string", "enum": ["read-only", "workspace-write"] },
+        "allowNetwork": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "configUpdateChanges": {
+      "type": "object",
+      "properties": {
+        "hostName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "relayUrl": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "proxyUrl": { "type": "string", "maxLength": 2048 },
+        "connectTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 120 },
+        "eventsMaxAgeHours": { "type": "integer", "minimum": 1, "maximum": 720 },
+        "eventsMaxSizeMiB": { "type": "integer", "minimum": 16, "maximum": 4096 },
+        "workspaces": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/workspaceConfigChange" } }
+      },
+      "additionalProperties": false,
+      "minProperties": 1
+    },
+    "configUpdatePayload": {
+      "type": "object",
+      "required": ["baseRevision", "changes"],
+      "properties": {
+        "baseRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "changes": { "$ref": "#/$defs/configUpdateChanges" }
+      },
+      "additionalProperties": false
+    },
     "controlPayloadRules": {
       "allOf": [
         { "if": { "properties": { "type": { "const": "device.sync" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } },
@@ -281,7 +321,9 @@ const protocolSchemaJSON = `{
         { "if": { "properties": { "type": { "const": "lease.release" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/leaseMutationPayload" } } } },
         { "if": { "properties": { "type": { "const": "lease.status" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } },
         { "if": { "properties": { "type": { "const": "notifications.list" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/listPayload" } } } },
-        { "if": { "properties": { "type": { "const": "notifications.read" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/notificationReadPayload" } } } }
+        { "if": { "properties": { "type": { "const": "notifications.read" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/notificationReadPayload" } } } },
+        { "if": { "properties": { "type": { "const": "config.read" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/configReadPayload" } } } },
+        { "if": { "properties": { "type": { "const": "config.update" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/configUpdatePayload" } } } }
       ]
     },
     "statusPayload": {

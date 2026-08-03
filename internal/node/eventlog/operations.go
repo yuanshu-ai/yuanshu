@@ -33,6 +33,13 @@ func (m *Manager) MarkDispatching(ctx context.Context, messageID string) (store.
 }
 
 func (m *Manager) CompleteControl(ctx context.Context, messageID string, status protocol.ControlResultStatus, errorCode protocol.ErrorCode, message string) (Record, error) {
+	return m.CompleteControlWithPayload(ctx, messageID, status, errorCode, message, nil)
+}
+
+// CompleteControlWithPayload appends a terminal control.result with a small,
+// already-redacted payload extension. It is used for structured configuration
+// results; task bodies and secrets must never be supplied here.
+func (m *Manager) CompleteControlWithPayload(ctx context.Context, messageID string, status protocol.ControlResultStatus, errorCode protocol.ErrorCode, message string, extra map[string]any) (Record, error) {
 	if status != protocol.ControlResultConfirmed && status != protocol.ControlResultRejected && status != protocol.ControlResultAmbiguous {
 		return Record{}, ErrInvalid
 	}
@@ -59,6 +66,12 @@ func (m *Manager) CompleteControl(ctx context.Context, messageID string, status 
 	}
 	if message != "" {
 		payload["message"] = truncateUTF8(message, 4096)
+	}
+	for key, value := range extra {
+		if key != "config" && key != "pending" && key != "applied" && key != "requiresLocalConfirmation" && key != "changeId" && key != "revision" {
+			continue
+		}
+		payload[key] = value
 	}
 	specs, err := normalizeEvent(adapterEventForControl(control, messageID, payload))
 	if err != nil || len(specs) != 1 {

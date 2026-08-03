@@ -29,6 +29,8 @@ const (
 	ControlLeaseStatus       ControlType = "lease.status"
 	ControlNotificationsList ControlType = "notifications.list"
 	ControlNotificationsRead ControlType = "notifications.read"
+	ControlConfigRead        ControlType = "config.read"
+	ControlConfigUpdate      ControlType = "config.update"
 )
 
 var KnownControlTypes = []ControlType{
@@ -50,6 +52,8 @@ var KnownControlTypes = []ControlType{
 	ControlLeaseStatus,
 	ControlNotificationsList,
 	ControlNotificationsRead,
+	ControlConfigRead,
+	ControlConfigUpdate,
 }
 
 type EventType string

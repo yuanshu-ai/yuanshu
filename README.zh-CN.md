@@ -189,7 +189,7 @@ go run ./cmd/yuanshu standalone --help
 
 ### 正式 Server bootstrap
 
-最小 Server 要求显式绝对数据目录，并且只接受字面量 loopback 地址 `127.0.0.1` 或 `::1`：
+未提供 Server 配置文件时，最小 Server 要求显式绝对数据目录，并且只接受字面量 loopback 地址 `127.0.0.1` 或 `::1`：
 
 ```powershell
 yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
@@ -197,7 +197,7 @@ yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
 
 未初始化的数据目录首次启动时，Server 只向本地 stdout 显示一次 32 字节 bootstrap secret。待领取 Node 自己生成 Ed25519 密钥和连接凭据、在本地保留凭据正文，并仅向 `POST /v1/bootstrap/claim` 提交公钥和凭据 SHA-256。Server 在 `server.db` 中原子创建首个 Owner 与 Node，并在五分钟内支持完全相同的 claim 重试。HTTP初始化使用 `/healthz`、`/readyz`、`/v1/bootstrap/status` 和 `/v1/bootstrap/claim`；认证实时连接使用 `/node/connect` 与 `/web/connect`。
 
-正式实时Handler强制TLS，使用Node连接凭据和Ed25519 challenge认证，并且不重新编码地路由Protocol v1原始帧。Server Schema v3新增只保存散列的五分钟附加Node enrollment和Owner信任revision；每台Node的连接凭据仍只保留在本机。当前CLI仍启动loopback HTTP，因此两个WebSocket端点会返回 `tls_required`；证书参数和公网部署继续属于AC-306。Server 已提供 `/pair` 最小移动配对页，但真实手机访问仍须等待受信TLS与非loopback部署。不要通过反向代理或其他方式将loopback监听器暴露到本机以外。
+正式实时Handler强制TLS，使用Node连接凭据和Ed25519 challenge认证，并且不重新编码地路由Protocol v1原始帧。Server Schema v3新增只保存散列的五分钟附加Node enrollment和Owner信任revision；每台Node的连接凭据仍只保留在本机。配置后的非loopback Server使用下方的IP优先 HTTPS/WSS路径；`/pair` 与 WebSocket 端点不得在没有受信TLS时暴露。不得公开 Codex app-server 端口。
 
 ### 正式 Standalone 组装
 
@@ -207,7 +207,39 @@ Standalone 要求版本化 Node 配置使用 `transport.mode = "standalone"`，�
 yuanshu standalone --data-dir C:\path\to\yuanshu-standalone --config C:\path\to\config.toml --listen 127.0.0.1:7444
 ```
 
-当前命令仍只监听 loopback。Linux 进程/安全存储包装、受信 TLS、公开监听和产品容器明确留给 AC-306。
+Standalone 默认仍只监听 loopback。通过 `--server-config` 可以使用与 Server 相同的 IP 优先 HTTPS/WSS 监听和 TLS 配置；Linux 进程/安全存储包装与产品容器属于后续里程碑。
+
+### IP 优先的自托管
+
+当前自托管路径优先支持局域网 IP，也可以使用域名，但浏览器连接始终必须使用 HTTPS/WSS。非 loopback Server 必须使用 SAN 包含配置 IP 的证书；不支持 `ws://`、明文 HTTP、公开 Codex app-server 端口或关闭 TLS 的开关。
+
+Server 使用独立配置文件：
+
+```toml
+config_version = 1
+data_dir = "/absolute/path/yuanshu-server"
+listen = "0.0.0.0:7444"
+public_url = "https://192.168.1.20:7444"
+tls_cert_file = "/absolute/path/server.crt"
+tls_key_file = "/absolute/path/server.key"
+allowed_control_origins = ["https://192.168.1.20:4173"]
+```
+
+```shell
+yuanshu server --config /absolute/path/server.toml
+yuanshu server doctor --config /absolute/path/server.toml --json
+```
+
+Web 可以加载 `/yuanshu.config.json`，也可以在连接设置页面填写：
+
+```json
+{
+  "relayUrl": "wss://192.168.1.20:7444/web/connect",
+  "pairingUrl": "https://192.168.1.20:7444/pair"
+}
+```
+
+浏览器只在 IndexedDB 保存连接地址和控制端身份。Node 设置以脱敏形式读取；Relay、代理、工作区和执行边界的变更需要 Node 本机确认。Server 监听/TLS 设置和凭据仍只能由本机配置文件或 CLI 管理。
 
 仓库源文件统一使用 LF，以上命令面向 Windows、macOS 和 Linux。CI 在 Ubuntu 24.04 x64、Windows Server 2025 x64和 macOS 15 arm64原生运行 Go 门禁，并执行 Web/Protocol检查、固定容器中的 Linux race、依赖与 Secret扫描和 SPDX SBOM生成。成功的工作流会保留7天的 Windows amd64、Linux amd64和 Darwin arm64未签名构建工件；它们只是工程工件，不是可安装 Release，正式签名与产品容器镜像属于后续里程碑。
 

@@ -32,6 +32,10 @@ const Usage = `Usage:
   yuanshu node enrollment join <join-url>
   yuanshu node devices list
   yuanshu node devices revoke <node-id>
+  yuanshu node config show
+  yuanshu node config pending
+  yuanshu node config approve <change-id>
+  yuanshu node config reject <change-id>
   yuanshu node autostart enable [--config <absolute-path>]
   yuanshu node autostart disable
   yuanshu node autostart status [--json]
@@ -110,7 +114,7 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			return err
 		}
 		return commandAutostart(ctx, current, defaults, args, stdout)
-	case "pairing", "clients", "credential", "enrollment", "devices":
+	case "pairing", "clients", "credential", "enrollment", "devices", "config":
 		return commandLocalManagement(ctx, current.IPC(), command, args, stdout)
 	default:
 		return ErrUsage
@@ -182,6 +186,14 @@ func validateNodeArguments(args []string) error {
 			return nil
 		}
 		return ErrUsage
+	case "config":
+		if len(args) == 1 && (args[0] == "show" || args[0] == "pending") {
+			return nil
+		}
+		if len(args) == 2 && (args[0] == "approve" || args[0] == "reject") && validLocalID(args[1]) {
+			return nil
+		}
+		return ErrUsage
 	default:
 		return ErrUsage
 	}
@@ -227,6 +239,17 @@ func commandLocalManagement(ctx context.Context, ipc platform.LocalIPC, command 
 			request.Command = "device_list"
 		} else {
 			request.Command, request.NodeID = "device_revoke", args[1]
+		}
+	case "config":
+		switch args[0] {
+		case "show":
+			request.Command = "config_show"
+		case "pending":
+			request.Command = "config_pending"
+		case "approve":
+			request.Command, request.ChangeID = "config_approve", args[1]
+		case "reject":
+			request.Command, request.ChangeID = "config_reject", args[1]
 		}
 	}
 	response, err := callLocalRequest(ctx, ipc, request)
@@ -279,6 +302,21 @@ func commandLocalManagement(ctx context.Context, ipc platform.LocalIPC, command 
 		}
 	case "device_revoke":
 		fmt.Fprintln(stdout, "Node revoked.")
+	case "config_show":
+		if err := json.NewEncoder(stdout).Encode(response.Config); err != nil {
+			return err
+		}
+	case "config_pending":
+		if len(response.ConfigChanges) == 0 {
+			fmt.Fprintln(stdout, "No pending configuration changes.")
+		}
+		for _, item := range response.ConfigChanges {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", item.ID, item.State, item.BaseRevision, item.CreatedAt)
+		}
+	case "config_approve":
+		fmt.Fprintln(stdout, "Configuration change approved; Node is reloading safely.")
+	case "config_reject":
+		fmt.Fprintln(stdout, "Configuration change rejected.")
 	}
 	return nil
 }

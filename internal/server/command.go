@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,8 +15,10 @@ import (
 )
 
 const Usage = `Usage:
-  yuanshu server [run] --data-dir <absolute-path> [--listen <ip:port>]
+  yuanshu server [run] [--config <absolute-path>] [--data-dir <absolute-path>] [--listen <ip:port>]
     [--public-url https://host[:port] --tls-cert <absolute-path> --tls-key <absolute-path>]
+    [--allowed-control-origin https://web-host[:port]]
+  yuanshu server doctor [--config <absolute-path>] [--json]
   yuanshu server healthcheck [--address 127.0.0.1:7444]
 `
 
@@ -31,6 +34,9 @@ func Command(ctx context.Context, args []string, stdout, _ io.Writer) error {
 	}
 	if len(args) > 0 && args[0] == "healthcheck" {
 		return healthcheck(ctx, args[1:])
+	}
+	if len(args) > 0 && args[0] == "doctor" {
+		return doctor(ctx, args[1:], stdout)
 	}
 	options, err := parseServerOptions(args)
 	if err != nil {
@@ -54,51 +60,181 @@ func parseServerOptions(args []string) (Options, error) {
 	}
 	options := Options{Listen: "127.0.0.1:7444"}
 	seen := make(map[string]bool)
+	var configPath string
+	var dataDir, listen, publicURL, tlsCert, tlsKey string
+	var origins []string
+	var hasDataDir, hasListen, hasPublicURL, hasTLSCert, hasTLSKey bool
 	for index := 0; index < len(args); index++ {
 		name := args[index]
-		if seen[name] {
+		if seen[name] && name != "--allowed-control-origin" {
 			return Options{}, ErrUsage
 		}
 		seen[name] = true
 		switch name {
+		case "--config":
+			index++
+			if index >= len(args) || !filepath.IsAbs(args[index]) {
+				return Options{}, ErrUsage
+			}
+			configPath = filepath.Clean(args[index])
 		case "--data-dir":
 			index++
 			if index >= len(args) || !filepath.IsAbs(args[index]) {
 				return Options{}, ErrUsage
 			}
-			options.DataDir = filepath.Clean(args[index])
+			dataDir, hasDataDir = filepath.Clean(args[index]), true
 		case "--listen":
 			index++
 			if index >= len(args) {
 				return Options{}, ErrUsage
 			}
-			options.Listen = args[index]
+			listen, hasListen = args[index], true
 		case "--public-url":
 			index++
 			if index >= len(args) {
 				return Options{}, ErrUsage
 			}
-			options.PublicURL = args[index]
+			publicURL, hasPublicURL = args[index], true
 		case "--tls-cert":
 			index++
 			if index >= len(args) || !filepath.IsAbs(args[index]) {
 				return Options{}, ErrUsage
 			}
-			options.TLSCertFile = filepath.Clean(args[index])
+			tlsCert, hasTLSCert = filepath.Clean(args[index]), true
 		case "--tls-key":
 			index++
 			if index >= len(args) || !filepath.IsAbs(args[index]) {
 				return Options{}, ErrUsage
 			}
-			options.TLSKeyFile = filepath.Clean(args[index])
+			tlsKey, hasTLSKey = filepath.Clean(args[index]), true
+		case "--allowed-control-origin":
+			index++
+			if index >= len(args) || !validateControlOrigin(args[index]) {
+				return Options{}, ErrUsage
+			}
+			origins = append(origins, strings.TrimSuffix(args[index], "/"))
 		default:
 			return Options{}, ErrUsage
 		}
 	}
-	if options.DataDir == "" || !validListen(options.Listen) || !validPublicOptions(options) {
+	if configPath != "" {
+		file, err := LoadConfigFile(configPath)
+		if err != nil {
+			return Options{}, ErrUsage
+		}
+		options.DataDir, options.Listen, options.PublicURL = file.DataDir, file.Listen, file.PublicURL
+		options.TLSCertFile, options.TLSKeyFile = file.TLSCertFile, file.TLSKeyFile
+		options.AllowedControlOrigins = append([]string(nil), file.AllowedControlOrigins...)
+		if options.Listen == "" {
+			options.Listen = "127.0.0.1:7444"
+		}
+	}
+	if hasDataDir {
+		options.DataDir = dataDir
+	}
+	if hasListen {
+		options.Listen = listen
+	}
+	if hasPublicURL {
+		options.PublicURL = publicURL
+	}
+	if hasTLSCert {
+		options.TLSCertFile = tlsCert
+	}
+	if hasTLSKey {
+		options.TLSKeyFile = tlsKey
+	}
+	if len(origins) > 0 {
+		options.AllowedControlOrigins = origins
+	}
+	if options.DataDir == "" || !validListen(options.Listen) || !validPublicOptions(options) || !validControlOrigins(options.AllowedControlOrigins) {
 		return Options{}, ErrUsage
 	}
 	return options, nil
+}
+
+type doctorStatus struct {
+	Version               int      `json:"version"`
+	State                 string   `json:"state"`
+	Config                string   `json:"config"`
+	DataDir               string   `json:"dataDir,omitempty"`
+	Listen                string   `json:"listen,omitempty"`
+	PublicURL             string   `json:"publicUrl,omitempty"`
+	TLS                   string   `json:"tls"`
+	TLSSAN                []string `json:"tlsSan,omitempty"`
+	TLSNotAfter           string   `json:"tlsNotAfter,omitempty"`
+	TLSError              string   `json:"tlsError,omitempty"`
+	AllowedControlOrigins []string `json:"allowedControlOrigins,omitempty"`
+	Revision              string   `json:"revision,omitempty"`
+}
+
+func doctor(ctx context.Context, args []string, stdout io.Writer) error {
+	var configPath string
+	var jsonOutput bool
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--config":
+			index++
+			if index >= len(args) || !filepath.IsAbs(args[index]) || configPath != "" {
+				return ErrUsage
+			}
+			configPath = filepath.Clean(args[index])
+		case "--json":
+			if jsonOutput {
+				return ErrUsage
+			}
+			jsonOutput = true
+		default:
+			return ErrUsage
+		}
+	}
+	status := doctorStatus{Version: 1, State: "needs_attention", Config: "unavailable", TLS: "not_configured"}
+	if configPath == "" {
+		status.Config = "not_configured"
+		return writeDoctorStatus(stdout, status, jsonOutput, false)
+	}
+	value, err := LoadConfigFile(configPath)
+	if err != nil {
+		return writeDoctorStatus(stdout, status, jsonOutput, false)
+	}
+	status.Config, status.DataDir, status.Listen, status.PublicURL = "ready", value.DataDir, value.Listen, value.PublicURL
+	if status.Listen == "" {
+		status.Listen = "127.0.0.1:7444"
+	}
+	status.AllowedControlOrigins = append([]string(nil), value.AllowedControlOrigins...)
+	status.Revision = configRevision(value)
+	if value.PublicURL != "" {
+		tlsConfig, tlsErr := loadTLSConfig(Options{PublicURL: value.PublicURL, TLSCertFile: value.TLSCertFile, TLSKeyFile: value.TLSKeyFile})
+		if tlsErr != nil {
+			status.TLS, status.TLSError, status.State = "invalid", "certificate_unavailable_or_mismatched", "needs_attention"
+			return writeDoctorStatus(stdout, status, jsonOutput, false)
+		}
+		status.TLS = "ready"
+		if len(tlsConfig.Certificates) > 0 && tlsConfig.Certificates[0].Leaf != nil {
+			leaf := tlsConfig.Certificates[0].Leaf
+			status.TLSSAN = append([]string(nil), leaf.DNSNames...)
+			for _, ip := range leaf.IPAddresses {
+				status.TLSSAN = append(status.TLSSAN, ip.String())
+			}
+			status.TLSNotAfter = leaf.NotAfter.UTC().Format(time.RFC3339)
+		}
+	}
+	status.State = "ready"
+	return writeDoctorStatus(stdout, status, jsonOutput, true)
+}
+
+func writeDoctorStatus(stdout io.Writer, status doctorStatus, jsonOutput, healthy bool) error {
+	if jsonOutput {
+		if err := json.NewEncoder(stdout).Encode(status); err != nil {
+			return err
+		}
+	} else {
+		_, _ = fmt.Fprintf(stdout, "Yuanshu Server: %s\nConfig: %s\nListen: %s\nPublic URL: %s\nTLS: %s\n", status.State, status.Config, status.Listen, status.PublicURL, status.TLS)
+	}
+	if !healthy {
+		return errors.New("server requires attention")
+	}
+	return nil
 }
 
 func validListen(value string) bool {

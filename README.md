@@ -215,7 +215,7 @@ go run ./cmd/yuanshu standalone --help
 
 ### Formal Server bootstrap
 
-The minimal Server requires an explicit absolute data directory and listens only on the literal loopback addresses `127.0.0.1` or `::1`:
+Without a Server configuration file, the Server requires an explicit absolute data directory and listens only on the literal loopback addresses `127.0.0.1` or `::1`:
 
 ```powershell
 yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
@@ -223,7 +223,7 @@ yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
 
 On an uninitialized data directory, the Server prints a 32-byte bootstrap secret once to local stdout. The enrolling Node generates its own Ed25519 key and connection credential, retains the credential locally, and sends only the public key and SHA-256 credential hash to `POST /v1/bootstrap/claim`. The Server persists `server.db`, creates the first Owner and Node atomically, and supports exact claim retries for five minutes. HTTP initialization uses `/healthz`, `/readyz`, `/v1/bootstrap/status`, and `/v1/bootstrap/claim`; authenticated realtime connections use `/node/connect` and `/web/connect`.
 
-The formal realtime handlers require TLS, authenticate Node credentials plus Ed25519 challenges, and route immutable Protocol v1 frames without re-encoding them. Server Schema v3 adds hashed, five-minute additional-Node enrollment and Owner trust revisions; connection credentials remain local to each Node. The current CLI still starts loopback HTTP, so its WebSocket endpoints return `tls_required`; certificate flags and public deployment remain AC-306. The Server now exposes a minimal mobile pairing page at `/pair`, but real-phone access still waits for trusted TLS and non-loopback deployment. Do not expose the loopback listener through a reverse proxy or outside the local machine.
+The formal realtime handlers require TLS, authenticate Node credentials plus Ed25519 challenges, and route immutable Protocol v1 frames without re-encoding them. Server Schema v3 adds hashed, five-minute additional-Node enrollment and Owner trust revisions; connection credentials remain local to each Node. A configured non-loopback Server uses the IP-first HTTPS/WSS path described below; the `/pair` page and WebSocket endpoints must not be exposed without trusted TLS. Do not expose Codex app-server ports.
 
 ### Formal Standalone composition
 
@@ -233,7 +233,48 @@ Standalone requires a versioned Node configuration with `transport.mode = "stand
 yuanshu standalone --data-dir C:\path\to\yuanshu-standalone --config C:\path\to\config.toml --listen 127.0.0.1:7444
 ```
 
-The current command remains loopback-only. Linux process/security-store packaging, trusted TLS, public listening, and product containers are deliberately deferred to AC-306.
+Standalone remains loopback by default. A separate `--server-config` can provide the same IP-first HTTPS/WSS listener and TLS material as the Server command; Linux process/security-store packaging and product containers are later milestones.
+
+### IP-first self-hosting
+
+The self-hosting configuration is IP-first: a LAN IPv4 or IPv6 address may be
+used instead of a domain, but every browser connection remains HTTPS/WSS. A
+non-loopback Server must use a certificate whose SAN contains the configured IP
+address; `ws://`, plaintext HTTP, public Codex app-server ports, and TLS
+disable switches are not supported.
+
+Create a separate Server configuration file and start it with:
+
+```toml
+config_version = 1
+data_dir = "/absolute/path/yuanshu-server"
+listen = "0.0.0.0:7444"
+public_url = "https://192.168.1.20:7444"
+tls_cert_file = "/absolute/path/server.crt"
+tls_key_file = "/absolute/path/server.key"
+allowed_control_origins = ["https://192.168.1.20:4173"]
+```
+
+```shell
+yuanshu server --config /absolute/path/server.toml
+yuanshu server doctor --config /absolute/path/server.toml --json
+```
+
+The Web build can load `/yuanshu.config.json`, or a user can enter these
+addresses in the connection settings page:
+
+```json
+{
+  "relayUrl": "wss://192.168.1.20:7444/web/connect",
+  "pairingUrl": "https://192.168.1.20:7444/pair"
+}
+```
+
+The browser stores only connection settings and the control identity in
+IndexedDB. Node settings are redacted; Relay, proxy, workspace, and execution
+boundary changes require confirmation on the Node machine. Server listen/TLS
+settings and all credentials remain local file/CLI configuration. See the
+published [IP-first self-hosting runbook](https://github.com/yuanshu-ai/docs/blob/main/docs/ip-first-self-hosting.md).
 
 The repository uses LF source files and supports these commands on Windows, macOS, and Linux. CI runs native Go checks on Ubuntu 24.04 x64, Windows Server 2025 x64, and macOS 15 arm64; Web/Protocol checks, a pinned-container Linux race suite, dependency and Secret scanning, and an SPDX SBOM are release gates. Successful runs retain unsigned Windows amd64, Linux amd64, and Darwin arm64 build artifacts for seven days. These are engineering artifacts, not installable releases; signed releases and product container images remain later milestones.
 

@@ -229,6 +229,22 @@ var nodeMigrations = []migration{
 			`CREATE INDEX approval_state_thread ON approval_state(thread_id, turn_id, status)`,
 		},
 	},
+	{
+		version: 7,
+		name:    "pending_node_config_changes",
+		statements: []string{
+			`CREATE TABLE config_changes (
+				id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+				base_revision TEXT NOT NULL CHECK (length(base_revision) BETWEEN 1 AND 128),
+				changes BLOB NOT NULL CHECK (length(changes) BETWEEN 2 AND 262144),
+				state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'rejected')),
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				error_code TEXT
+			) STRICT`,
+			`CREATE INDEX config_changes_state ON config_changes(state, created_at)`,
+		},
+	},
 }
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -297,6 +313,8 @@ func sqlLiteralInt(value int) string {
 		return "5"
 	case 6:
 		return "6"
+	case 7:
+		return "7"
 	default:
 		panic(errors.New("unsupported schema version"))
 	}

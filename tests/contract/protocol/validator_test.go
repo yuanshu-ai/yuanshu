@@ -518,6 +518,8 @@ func payloadForControl(messageType string) map[string]any {
 		return map[string]any{"notificationId": "notification_test"}
 	case "events.replay":
 		return map[string]any{"afterSequence": 0}
+	case "config.update":
+		return map[string]any{"baseRevision": "revision_test", "changes": map[string]any{"hostName": "synthetic node"}}
 	default:
 		return map[string]any{}
 	}

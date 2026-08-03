@@ -42,22 +42,26 @@ const standaloneCredentialRef = platform.SecretRef("yuanshu/standalone/node-cred
 
 const Usage = `Usage:
   yuanshu standalone [run] --data-dir <absolute-path> --config <absolute-path> [--listen <ip:port>]
+    [--server-config <absolute-path>]
     [--public-url https://host[:port] --tls-cert <absolute-path> --tls-key <absolute-path>]
+    [--allowed-control-origin https://web-host[:port]]
     [--master-key-file <absolute-path>]
 `
 
 type Options struct {
-	DataDir       string
-	Config        string
-	Listen        string
-	PublicURL     string
-	TLSCertFile   string
-	TLSKeyFile    string
-	MasterKeyFile string
-	Stdout        io.Writer
-	Platform      platform.Platform
-	Random        io.Reader
-	Clock         func() time.Time
+	DataDir               string
+	Config                string
+	ServerConfig          string
+	Listen                string
+	PublicURL             string
+	TLSCertFile           string
+	TLSKeyFile            string
+	AllowedControlOrigins []string
+	MasterKeyFile         string
+	Stdout                io.Writer
+	Platform              platform.Platform
+	Random                io.Reader
+	Clock                 func() time.Time
 }
 
 // Command runs the formal combined Server and local Node entry point.
@@ -82,9 +86,10 @@ func parseArguments(args []string) (Options, error) {
 	}
 	options := Options{Listen: "127.0.0.1:7444"}
 	seen := make(map[string]bool)
+	var origins []string
 	for index := 0; index < len(args); index++ {
 		name := args[index]
-		if seen[name] {
+		if seen[name] && name != "--allowed-control-origin" {
 			return Options{}, ErrUsage
 		}
 		seen[name] = true
@@ -101,6 +106,12 @@ func parseArguments(args []string) (Options, error) {
 				return Options{}, ErrUsage
 			}
 			options.Config = filepath.Clean(args[index])
+		case "--server-config":
+			index++
+			if index >= len(args) || options.ServerConfig != "" || !filepath.IsAbs(args[index]) {
+				return Options{}, ErrUsage
+			}
+			options.ServerConfig = filepath.Clean(args[index])
 		case "--listen":
 			index++
 			if index >= len(args) {
@@ -131,14 +142,26 @@ func parseArguments(args []string) (Options, error) {
 				return Options{}, ErrUsage
 			}
 			options.MasterKeyFile = filepath.Clean(args[index])
+		case "--allowed-control-origin":
+			index++
+			if index >= len(args) || !validControlOrigin(args[index]) {
+				return Options{}, ErrUsage
+			}
+			origins = append(origins, strings.TrimSuffix(args[index], "/"))
 		default:
 			return Options{}, ErrUsage
 		}
 	}
+	options.AllowedControlOrigins = origins
 	if options.DataDir == "" || options.Config == "" || !validListen(options.Listen) || !validPublicOptions(options) {
 		return Options{}, ErrUsage
 	}
 	return options, nil
+}
+
+func validControlOrigin(value string) bool {
+	parsed, err := url.Parse(value)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && (parsed.Path == "" || parsed.Path == "/")
 }
 
 func validListen(value string) bool {
@@ -203,7 +226,28 @@ func Run(ctx context.Context, options Options) error {
 	if options.Stdout == nil {
 		options.Stdout = io.Discard
 	}
-	if options.DataDir == "" || options.Config == "" || !filepath.IsAbs(options.DataDir) || !filepath.IsAbs(options.Config) || !validListen(options.Listen) || !validPublicOptions(options) || options.Platform == nil {
+	if options.ServerConfig != "" {
+		serverConfig, configErr := server.LoadConfigFile(options.ServerConfig)
+		if configErr != nil {
+			return errors.Join(ErrUnavailable, errors.New("server configuration is unavailable"))
+		}
+		if options.Listen == "127.0.0.1:7444" && serverConfig.Listen != "" {
+			options.Listen = serverConfig.Listen
+		}
+		if options.PublicURL == "" {
+			options.PublicURL = serverConfig.PublicURL
+		}
+		if options.TLSCertFile == "" {
+			options.TLSCertFile = serverConfig.TLSCertFile
+		}
+		if options.TLSKeyFile == "" {
+			options.TLSKeyFile = serverConfig.TLSKeyFile
+		}
+		if len(options.AllowedControlOrigins) == 0 {
+			options.AllowedControlOrigins = append([]string(nil), serverConfig.AllowedControlOrigins...)
+		}
+	}
+	if options.DataDir == "" || options.Config == "" || !filepath.IsAbs(options.DataDir) || !filepath.IsAbs(options.Config) || !validListen(options.Listen) || !validPublicOptions(options) || !validControlOrigins(options.AllowedControlOrigins) || options.Platform == nil {
 		return ErrUsage
 	}
 
@@ -305,7 +349,7 @@ func Run(ctx context.Context, options Options) error {
 	go func() { results <- session.Run(runCtx) }()
 	go func() {
 		results <- server.Run(runCtx, server.Options{
-			DataDir: serverDir, Listen: options.Listen, PublicURL: options.PublicURL, TLSCertFile: options.TLSCertFile, TLSKeyFile: options.TLSKeyFile,
+			DataDir: serverDir, Listen: options.Listen, PublicURL: options.PublicURL, TLSCertFile: options.TLSCertFile, TLSKeyFile: options.TLSKeyFile, AllowedControlOrigins: options.AllowedControlOrigins,
 			Stdout: options.Stdout, Random: options.Random, Clock: options.Clock,
 			LocalNode: &server.LocalNodeSession{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID, Transport: serverSide},
 		})
@@ -322,6 +366,15 @@ func Run(ctx context.Context, options Options) error {
 		return first
 	}
 	return second
+}
+
+func validControlOrigins(values []string) bool {
+	for _, value := range values {
+		if !validControlOrigin(value) {
+			return false
+		}
+	}
+	return true
 }
 
 func ensureServerBinding(ctx context.Context, serverDir, name string, family platform.Family, current identity.Identity, manager *identity.Manager, secrets platform.SecureStore, random io.Reader, clock func() time.Time) (identity.Identity, []byte, error) {

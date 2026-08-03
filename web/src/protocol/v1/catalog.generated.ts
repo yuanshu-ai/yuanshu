@@ -22,7 +22,9 @@ export const KNOWN_CONTROL_TYPES = [
   "lease.release",
   "lease.status",
   "notifications.list",
-  "notifications.read"
+  "notifications.read",
+  "config.read",
+  "config.update"
 ] as const;
 export type ControlType = (typeof KNOWN_CONTROL_TYPES)[number];
 

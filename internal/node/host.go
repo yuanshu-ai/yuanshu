@@ -47,6 +47,7 @@ type host struct {
 	controlValidator *protocolv1.Validator
 	controlTarget    protocolv1.Target
 	controlName      string
+	configController configController
 }
 
 func runHost(ctx context.Context, options runOptions) error {
@@ -154,6 +155,11 @@ func (h *host) reload(ctx context.Context) error {
 	}
 	h.local = local
 	h.status.update(func(value *Status) { value.Database = "ready" })
+	configurationController, err := newNodeConfigController(h.options.configPath, local, time.Now)
+	if err != nil {
+		return h.fail("config_invalid")
+	}
+	h.configController = configurationController
 	workspaceManager, err := workspace.NewManager(h.options.platform.Workspaces(), local)
 	if err != nil || workspaceManager.Reconcile(ctx, loaded.Config.Workspaces) != nil {
 		return h.fail("workspace_unavailable")
@@ -362,6 +368,7 @@ func (h *host) closeResourcesLocked() error {
 	}
 	h.controlEvents, h.controlValidator = nil, nil
 	h.controlTarget, h.controlName = protocolv1.Target{}, ""
+	h.configController = nil
 	if h.trustCancel != nil {
 		h.trustCancel()
 		h.trustCancel = nil
@@ -408,10 +415,65 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 		return response
 	}
 	if h.pairing == nil {
-		response.Error = "remote_not_available"
-		return response
+		switch request.Command {
+		case "config_show", "config_pending", "config_approve", "config_reject":
+			// Configuration management is local and remains available even if
+			// Relay trust has not been established.
+		default:
+			response.Error = "remote_not_available"
+			return response
+		}
 	}
 	switch request.Command {
+	case "config_show":
+		if h.configController == nil {
+			response.Error = "config_unavailable"
+			break
+		}
+		value, err := h.configController.Read(ctx)
+		if err != nil {
+			response.Error = "config_read_failed"
+			break
+		}
+		response.OK, response.Config = true, value
+	case "config_pending":
+		if h.configController == nil {
+			response.Error = "config_unavailable"
+			break
+		}
+		changes, err := h.configController.Pending(ctx)
+		if err != nil {
+			response.Error = "config_pending_failed"
+			break
+		}
+		response.OK = true
+		for _, change := range changes {
+			response.ConfigChanges = append(response.ConfigChanges, configChangeSummary(change))
+		}
+	case "config_approve":
+		if h.configController == nil {
+			response.Error = "config_unavailable"
+			break
+		}
+		result, err := h.configController.Approve(ctx, request.ChangeID)
+		if err != nil {
+			response.Error = "config_approve_failed"
+			break
+		}
+		response.OK = true
+		if result.Reload {
+			go func() { _ = h.reload(h.runCtx) }()
+		}
+	case "config_reject":
+		if h.configController == nil {
+			response.Error = "config_unavailable"
+			break
+		}
+		if err := h.configController.Reject(ctx, request.ChangeID); err != nil {
+			response.Error = "config_reject_failed"
+			break
+		}
+		response.OK = true
 	case "pairing_create":
 		value, err := h.pairing.Create(ctx)
 		if err == nil {
@@ -523,6 +585,8 @@ func (h *host) startControlSessionLocked() error {
 			h.options.trayUpdate(h.status.snapshot())
 			h.log.write("node_error", "eventlog_failure", 0)
 		},
+		Config:       h.configController,
+		ConfigReload: func() { _ = h.reload(h.runCtx) },
 	})
 	if err != nil {
 		return err

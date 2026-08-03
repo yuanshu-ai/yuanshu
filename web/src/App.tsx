@@ -1,17 +1,16 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { ControlClient, type ControlClientState, type LeaseScope, type LeaseState } from "./relay/control-client";
-import { IndexedDBControlStorage, type ControlStorage, type StoredControlIdentity } from "./relay/storage";
+import { IndexedDBControlStorage, type ControlStorage, type StoredControlIdentity, type StoredRuntimeSettings } from "./relay/storage";
+import { loadRuntimeSettings, normalizeRuntimeSettings } from "./relay/runtime-config";
+import { RELAY_SUBPROTOCOL } from "./relay/session";
 import { DataProjection, threadKey, turnKey, type ProjectionState, type ThreadItemProjection } from "./state/projection";
 
 type BootState =
   | { status: "loading" }
-  | { status: "pairing"; reason?: string }
-  | { status: "config"; identity: StoredControlIdentity; storage: ControlStorage }
-  | { status: "ready"; client: ControlClient; projection: DataProjection };
-
-const relayURL = import.meta.env.VITE_YUANSHU_RELAY_URL?.trim() ?? "";
-const pairingURL = import.meta.env.VITE_YUANSHU_PAIRING_URL?.trim() || "/pair";
+  | { status: "pairing"; reason?: string; storage?: ControlStorage; settings: StoredRuntimeSettings }
+  | { status: "config"; identity: StoredControlIdentity; storage: ControlStorage; settings: StoredRuntimeSettings }
+  | { status: "ready"; client: ControlClient; projection: DataProjection; storage: ControlStorage; settings: StoredRuntimeSettings };
 
 export function App() {
   const [boot, setBoot] = useState<BootState>({ status: "loading" });
@@ -24,6 +23,7 @@ export function App() {
   const [composeMode, setComposeMode] = useState<"new" | "turn">("new");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const contextRestored = useRef(false);
   const loadedWorkspaces = useRef(new Set<string>());
   const loadedThreads = useRef(new Set<string>());
@@ -33,20 +33,24 @@ export function App() {
   useEffect(() => {
     let disposed = false;
     const bootstrap = async () => {
+      let storage: ControlStorage | undefined;
+      let settings: StoredRuntimeSettings = { relayUrl: "", pairingUrl: "/pair" };
       try {
-        const storage = new IndexedDBControlStorage();
-        const identity = await storage.getActiveIdentity();
+        const currentStorage = new IndexedDBControlStorage();
+        storage = currentStorage;
+        const identity = await currentStorage.getActiveIdentity();
+        settings = await loadRuntimeSettings(currentStorage);
         if (!identity) {
-          if (!disposed) setBoot({ status: "pairing", reason: "尚未找到控制端身份" });
+          if (!disposed) setBoot({ status: "pairing", reason: "尚未找到控制端身份", storage, settings });
           return;
         }
-        if (!relayURL) {
-          if (!disposed) setBoot({ status: "config", identity, storage });
+        if (!settings.relayUrl) {
+          if (!disposed) setBoot({ status: "config", identity, storage, settings });
           return;
         }
         const projection = new DataProjection();
         const client = new ControlClient({
-          url: relayURL,
+          url: settings.relayUrl,
           identity,
           storage,
           onState: (state) => { if (!disposed) setConnectionState(state); },
@@ -74,14 +78,14 @@ export function App() {
           client.close();
           return;
         }
-        setBoot({ status: "ready", client, projection });
+        setBoot({ status: "ready", client, projection, storage, settings });
         const saved = readContext();
         const firstNode = client.listNodes().find((node) => node.nodeId === saved.nodeId) ?? client.listNodes()[0];
         if (firstNode) setSelectedNodeId(firstNode.nodeId);
         contextRestored.current = true;
         client.connect();
       } catch (error) {
-        if (!disposed) setBoot({ status: "pairing", reason: error instanceof Error ? error.message : "浏览器安全存储不可用" });
+        if (!disposed) setBoot({ status: "pairing", reason: error instanceof Error ? error.message : "浏览器安全存储不可用", storage, settings });
       }
     };
     void bootstrap();
@@ -170,7 +174,7 @@ export function App() {
   }, [boot.status, selectedNodeId, selectedWorkspaceId, selectedThreadId, connectionState]);
 
   if (boot.status === "loading") return <LoadingScreen />;
-  if (boot.status === "pairing" || boot.status === "config") return <PairingScreen pairingURL={pairingURL} reason={boot.status === "pairing" ? boot.reason : undefined} configured={boot.status === "config"} />;
+  if (boot.status === "pairing" || boot.status === "config") return <PairingScreen pairingURL={boot.settings.pairingUrl} settings={boot.settings} storage={boot.storage} reason={boot.status === "pairing" ? boot.reason : undefined} configured={boot.status === "config"} />;
   if (!state || !contextRestored.current) return <LoadingScreen />;
 
   const runControl = async (type: "thread.start" | "thread.resume" | "turn.start" | "turn.interrupt", payload: Record<string, unknown>, target: { workspaceId?: string; threadId?: string; turnId?: string }) => {
@@ -252,8 +256,12 @@ export function App() {
       <header className="topbar">
         <div className="brand-lockup"><span className="brand-mark">枢</span><div><strong>远枢</strong><span>Yuanshu workspace</span></div></div>
         <div className={`connection-pill ${connectionState}`}><span className="status-dot" />{connectionLabel(connectionState)}{unreadNotifications.length > 0 && <span className="notification-count">{unreadNotifications.length}</span>}</div>
-        <a className="pair-link" href={pairingURL}>配对新设备</a>
+      <div className="topbar-actions"><a className="pair-link" href={boot.settings.pairingUrl}>配对新设备</a><button className="pair-link settings-link" type="button" onClick={() => setSettingsOpen((value) => !value)}>连接设置</button></div>
       </header>
+      {settingsOpen && <>
+        <SettingsPanel initial={boot.settings} storage={boot.storage} onSaved={() => window.location.reload()} onClose={() => setSettingsOpen(false)} />
+        {selectedNodeId && <NodeSettingsPanel client={boot.client} nodeId={selectedNodeId} connectionState={connectionState} />}
+      </>}
 
       <section className="node-strip" aria-label="选择设备">
         <div className="section-kicker">你的节点</div>
@@ -337,11 +345,154 @@ function ItemCard({ item }: { item: ThreadItemProjection }) {
 
 function LoadingScreen() { return <main className="loading-screen"><span className="brand-mark">枢</span><h1>正在恢复你的工作区</h1><p>从浏览器安全存储读取控制端身份和本地上下文…</p><div className="loading-line" /></main>; }
 
-function PairingScreen({ pairingURL, reason, configured }: { pairingURL: string; reason?: string; configured: boolean }) {
-  return <main className="pairing-screen"><div className="pairing-card"><span className="brand-mark">枢</span><span className="section-kicker">个人控制端</span><h1>{configured ? "Web 还没有连接地址" : "连接你的 Codex 工作区"}</h1><p>{configured ? "请在独立 Web 构建中配置 VITE_YUANSHU_RELAY_URL，再重新加载页面。" : "先从办公室或家庭电脑生成配对链接。控制端身份只保存在本浏览器的 IndexedDB 中。"}</p>{reason && <small className="error-copy">{reason}</small>}{!configured && <a className="primary-link" href={pairingURL}>打开配对页 <span>↗</span></a>}<div className="trust-note"><span>✓</span> 私钥不进入 URL、日志或 Server</div></div></main>;
+function PairingScreen({ pairingURL, settings, storage, reason, configured }: { pairingURL: string; settings: StoredRuntimeSettings; storage?: ControlStorage; reason?: string; configured: boolean }) {
+  return <main className="pairing-screen"><div className="pairing-card"><span className="brand-mark">枢</span><span className="section-kicker">个人控制端</span><h1>连接你的 Codex 工作区</h1><p>{configured ? "先填写办公室或家庭电脑的 HTTPS/WSS 地址，保存后即可从手机连接。" : "先从办公室或家庭电脑生成配对链接。控制端身份只保存在本浏览器的 IndexedDB 中。"}</p>{reason && <small className="error-copy">{reason}</small>}{!configured && pairingURL && <a className="primary-link" href={pairingURL}>打开配对页 <span>↗</span></a>}{storage ? <SettingsPanel initial={settings} storage={storage} compact onSaved={() => window.location.reload()} /> : <small className="error-copy">浏览器 IndexedDB 不可用，无法保存连接设置。</small>}<div className="trust-note"><span>✓</span> 私钥不进入 URL、日志或 Server</div></div></main>;
+}
+
+function SettingsPanel({ initial, storage, compact = false, onSaved, onClose }: { initial: StoredRuntimeSettings; storage: ControlStorage; compact?: boolean; onSaved: () => void; onClose?: () => void }) {
+  const [relayUrl, setRelayUrl] = useState(initial.relayUrl);
+  const [pairingUrl, setPairingUrl] = useState(initial.pairingUrl);
+  const [displayName, setDisplayName] = useState(initial.displayName ?? "");
+  const [error, setError] = useState("");
+  const [testStatus, setTestStatus] = useState("");
+  const [saving, setSaving] = useState(false);
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const settings = normalizeRuntimeSettings({ relayUrl, pairingUrl, displayName });
+      setSaving(true);
+      await storage.putRuntimeSettings(settings);
+      onSaved();
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "连接设置无效");
+      setSaving(false);
+    }
+  };
+  const testConnection = () => {
+    setError("");
+    setTestStatus("");
+    let settings: StoredRuntimeSettings;
+    try {
+      settings = normalizeRuntimeSettings({ relayUrl, pairingUrl, displayName });
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "连接设置无效");
+      return;
+    }
+    if (typeof WebSocket === "undefined") {
+      setTestStatus("当前浏览器不支持 WebSocket");
+      return;
+    }
+    setTestStatus("正在测试 WSS/TLS…");
+    let finished = false;
+    const socket = new WebSocket(settings.relayUrl, RELAY_SUBPROTOCOL);
+    const timer = window.setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      socket.close();
+      setTestStatus("连接超时，请检查 IP、端口和证书信任");
+    }, 5000);
+    socket.onopen = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(timer);
+      socket.close();
+      setTestStatus("WSS/TLS 可达；保存后会完成身份认证");
+    };
+    socket.onerror = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(timer);
+      setTestStatus("WSS/TLS 测试失败，请检查证书 SAN、Origin 和网络");
+    };
+  };
+  const reset = async () => {
+    setError("");
+    await storage.removeRuntimeSettings();
+    onSaved();
+  };
+  return <section className={`settings-panel ${compact ? "compact" : ""}`} aria-label="连接设置"><div className="settings-heading"><div><span className="section-kicker">连接设置</span><h2>通过 IP 或域名连接</h2></div>{onClose && <button className="text-button" type="button" onClick={onClose}>关闭</button>}</div><p className="settings-help">Relay 必须使用 <code>wss://</code>，配对页必须使用 <code>https://</code>。局域网 IP 也需要设备信任对应的 TLS 证书。</p><form onSubmit={(event) => void save(event)}><label>Relay URL<input value={relayUrl} onChange={(event) => setRelayUrl(event.target.value)} placeholder="wss://192.168.1.20:7444/web/connect" inputMode="url" /></label><label>Pairing URL<input value={pairingUrl} onChange={(event) => setPairingUrl(event.target.value)} placeholder="https://192.168.1.20:7444/pair" inputMode="url" /></label><label>设备显示名称（可选）<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={128} /></label>{error && <small className="error-copy">{error}</small>}{testStatus && <small className="settings-status">{testStatus}</small>}<div className="settings-actions"><button className="secondary-button" type="button" onClick={testConnection}>测试连接</button><button className="text-button" type="button" onClick={() => void reset()}>恢复部署默认</button><button className="primary-link" type="submit" disabled={saving}>{saving ? "保存中…" : "保存并重新连接"}</button></div></form></section>;
+}
+
+type NodeConfigView = {
+  revision: string;
+  host?: { name?: string };
+  relay?: { url?: string; proxyUrl?: string; connectTimeoutSeconds?: number; credentialConfigured?: boolean };
+  events?: { maxAgeHours?: number; maxSizeMiB?: number };
+  adapter?: { codexEnabled?: boolean; binaryConfigured?: boolean; homeConfigured?: boolean; runtimeMode?: string };
+  workspaces?: Array<{ id: string; name?: string; permissionProfile?: string; allowNetwork?: boolean }>;
+  pendingChanges?: number;
+};
+
+function NodeSettingsPanel({ client, nodeId, connectionState }: { client: ControlClient; nodeId: string; connectionState: ControlClientState }) {
+  const [view, setView] = useState<NodeConfigView>();
+  const [hostName, setHostName] = useState("");
+  const [relayUrl, setRelayUrl] = useState("");
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [timeout, setTimeoutValue] = useState(30);
+  const [maxAge, setMaxAge] = useState(168);
+  const [maxSize, setMaxSize] = useState(256);
+  const [status, setStatus] = useState("正在读取节点配置…");
+  const [saving, setSaving] = useState(false);
+
+  const applyView = (value: NodeConfigView) => {
+    setView(value);
+    setHostName(value.host?.name ?? "");
+    setRelayUrl(value.relay?.url ?? "");
+    setProxyUrl(value.relay?.proxyUrl ?? "");
+    setTimeoutValue(value.relay?.connectTimeoutSeconds ?? 30);
+    setMaxAge(value.events?.maxAgeHours ?? 168);
+    setMaxSize(value.events?.maxSizeMiB ?? 256);
+  };
+
+  const read = async () => {
+    if (connectionState !== "connected") {
+      setStatus("节点当前离线，连接恢复后可读取配置");
+      return;
+    }
+    setStatus("正在读取节点配置…");
+    try {
+      const result = await client.request("config.read", {}, { nodeId });
+      const payload = result.payload as { config?: NodeConfigView };
+      if (!payload.config) throw new Error("节点没有返回脱敏配置");
+      applyView(payload.config);
+      setStatus("已读取脱敏配置");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "读取节点配置失败");
+    }
+  };
+
+  useEffect(() => { void read(); }, [nodeId, connectionState]);
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!view) return;
+    setSaving(true);
+    try {
+      const changes: Record<string, unknown> = {
+        hostName: hostName.trim(),
+        proxyUrl: proxyUrl.trim(),
+        connectTimeoutSeconds: Number(timeout),
+        eventsMaxAgeHours: Number(maxAge),
+        eventsMaxSizeMiB: Number(maxSize),
+      };
+      if (relayUrl.trim()) changes.relayUrl = relayUrl.trim();
+      const result = await client.request("config.update", { baseRevision: view.revision, changes }, { nodeId });
+      const payload = result.payload as { config?: NodeConfigView; requiresLocalConfirmation?: boolean; applied?: boolean };
+      if (payload.config) applyView(payload.config);
+      setStatus(payload.requiresLocalConfirmation ? "已提交；Relay/代理变更需要 Node 本机确认" : payload.applied ? "已应用，Node 正在安全重载" : "更新已提交");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "更新节点配置失败，请重新读取 revision");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <section className="settings-panel node-settings-panel" aria-label="Node 设置"><div className="settings-heading"><div><span className="section-kicker">Node 设置 · {nodeId.slice(0, 12)}</span><h2>脱敏配置与本机确认</h2></div><button className="text-button" type="button" onClick={() => void read()}>重新读取</button></div><p className="settings-help">配置 revision：<code>{view?.revision ?? "—"}</code>。Relay 地址、代理和工作区安全边界变更会保存为待确认项；凭据、路径、Server 监听与 TLS 私钥不可远程修改。</p><form onSubmit={(event) => void save(event)}><label>Node 显示名称<input value={hostName} onChange={(event) => setHostName(event.target.value)} maxLength={128} /></label><div className="settings-grid"><label>Relay URL（需本机确认）<input value={relayUrl} onChange={(event) => setRelayUrl(event.target.value)} inputMode="url" /></label><label>Relay Proxy URL（需本机确认）<input value={proxyUrl} onChange={(event) => setProxyUrl(event.target.value)} inputMode="url" /></label></div><div className="settings-grid"><label>连接超时（秒）<input type="number" min={1} max={300} value={timeout} onChange={(event) => setTimeoutValue(Number(event.target.value))} /></label><label>事件保留时间（小时）<input type="number" min={1} max={8760} value={maxAge} onChange={(event) => setMaxAge(Number(event.target.value))} /></label><label>事件上限（MiB）<input type="number" min={1} max={16384} value={maxSize} onChange={(event) => setMaxSize(Number(event.target.value))} /></label></div>{view?.adapter && <div className="settings-status-row"><span>Codex：{view.adapter.codexEnabled ? "已启用" : "未启用"} · {view.adapter.runtimeMode || "默认运行时"}</span><span>凭据：{view.relay?.credentialConfigured ? "已配置（不展示）" : "未配置"}</span><span>待确认：{view.pendingChanges ?? 0}</span></div>}{view?.workspaces?.map((workspace) => <div className="settings-status-row" key={workspace.id}><span>{workspace.name || workspace.id}</span><span>{workspace.permissionProfile === "workspace-write" ? "可写" : "只读"}</span><span>{workspace.allowNetwork ? "网络开启" : "网络关闭"}</span></div>)}<small className={status.includes("失败") || status.includes("离线") ? "error-copy" : "settings-status"}>{status}</small><div className="settings-actions"><button className="primary-link" type="submit" disabled={saving || !view || connectionState !== "connected"}>{saving ? "保存中…" : "保存 Node 配置"}</button></div></form></section>;
 }
 
 async function request(client: ControlClient, type: "device.sync" | "workspace.list" | "thread.list" | "thread.read", payload: Record<string, unknown>, target: { nodeId: string; workspaceId?: string; threadId?: string }) { return client.request(type, payload, target); }
+
 
 function connectionLabel(state: ControlClientState): string { return ({ idle: "未连接", connecting: "连接中", authenticating: "安全认证", connected: "已连接", reconnecting: "正在重连", paused: "已暂停", closed: "已关闭", reauth_required: "需要重新配对" })[state]; }
 function statusLabel(status?: string): string { return ({ running: "执行中", active: "执行中", inProgress: "执行中", completed: "已完成", failed: "失败", interrupted: "已停止", idle: "待继续", waiting_approval: "等待审批", uncertain: "待确认", ambiguous: "结果不确定", unavailable: "运行时不可用" }[status ?? ""] ?? "待同步"); }
