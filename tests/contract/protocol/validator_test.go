@@ -512,6 +512,10 @@ func payloadForControl(messageType string) map[string]any {
 		return map[string]any{"input": "synthetic input"}
 	case "approval.resolve":
 		return map[string]any{"approvalId": "approval_test", "decision": "decline", "operationDigest": strings.Repeat("A", 43)}
+	case "lease.renew", "lease.release":
+		return map[string]any{"leaseId": "lease_test", "epoch": 1}
+	case "notifications.read":
+		return map[string]any{"notificationId": "notification_test"}
 	case "events.replay":
 		return map[string]any{"afterSequence": 0}
 	default:
