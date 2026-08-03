@@ -231,6 +231,38 @@ func TestHubLeaseGuardsTurnControlsAndAllowsCurrentHolder(t *testing.T) {
 	}
 }
 
+func TestHubNotificationsStayOwnerScopedAndCanBeMarkedRead(t *testing.T) {
+	fixture := newHubFixture(t)
+	control := fixture.dialControl(t)
+	defer control.Close()
+	if err := fixture.hub.notifications.SaveNotification(context.Background(), serverstore.Notification{ID: "notice", OwnerID: "own_test", NodeID: "nod_test", Type: "task.completed", Summary: "任务已完成", SourceSequence: 7, DedupKey: "turn:7", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	list := signedControl(t, fixture, protocolv1.ControlNotificationsList, 1, map[string]any{"limit": 20}, "", "", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(list)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := receiveJSONType(control, string(protocolv1.EventControlResult))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := result["payload"].(map[string]any)
+	if !ok || result["correlationId"] != "control-1" {
+		t.Fatalf("list result=%v", result)
+	}
+	items, ok := payload["notifications"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("notification list=%v", payload)
+	}
+	read := signedControl(t, fixture, protocolv1.ControlNotificationsRead, 2, map[string]any{"notificationId": "notice"}, "", "", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(read)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receiveJSONType(control, string(protocolv1.EventControlResult)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func signedControl(t *testing.T, fixture hubFixture, kind protocolv1.ControlType, sequence int64, payload map[string]any, workspaceID, threadID, turnID, itemID string) []byte {
 	t.Helper()
 	now := time.Now().UTC()

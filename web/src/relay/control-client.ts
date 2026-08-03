@@ -240,7 +240,16 @@ export class ControlClient {
   }
 
   getLease(scope: LeaseScope): LeaseState {
+    this.leaseScopes.set(leaseStorageKey(scope), { ...scope });
     return this.leases.get(leaseStorageKey(scope)) ?? { state: "none", epoch: 0 };
+  }
+
+  /** Remembers a visible Thread scope and re-checks it after authentication. */
+  registerLeaseScope(scope: LeaseScope): void {
+    this.leaseScopes.set(leaseStorageKey(scope), { ...scope });
+    if (this.stateValue === "connected") {
+      void this.request("lease.status", {}, scope).then((result) => this.setLease(scope, this.leaseFromResult(scope, result))).catch(() => undefined);
+    }
   }
 
   canMutate(scope: LeaseScope, controlType: string): boolean {

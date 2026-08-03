@@ -164,6 +164,7 @@ export function App() {
 
   useEffect(() => {
     if (boot.status !== "ready" || !selectedNodeId || !selectedWorkspaceId || !selectedThreadId || connectionState !== "connected") return;
+    boot.client.registerLeaseScope({ nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, threadId: selectedThreadId });
     void request(boot.client, "thread.read", { includeTurns: true }, { nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, threadId: selectedThreadId }).catch(() => undefined);
     writeContext({ nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, threadId: selectedThreadId });
   }, [boot.status, selectedNodeId, selectedWorkspaceId, selectedThreadId, connectionState]);
