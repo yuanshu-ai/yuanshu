@@ -1,6 +1,9 @@
 import type { ControlStorage, StoredRuntimeSettings } from "./storage";
 
-export interface RuntimeSettings extends StoredRuntimeSettings {}
+export interface RuntimeSettings extends StoredRuntimeSettings {
+  adminEnabled?: boolean;
+  adminUrl?: string;
+}
 
 const DEFAULT_RUNTIME_CONFIG_PATH = "/yuanshu.config.json";
 
@@ -23,14 +26,15 @@ export function normalizeRuntimeSettings(value: Partial<RuntimeSettings>): Runti
     relayUrl,
     pairingUrl,
     ...(value.displayName?.trim() ? { displayName: value.displayName.trim() } : {}),
+    ...(typeof value.adminEnabled === "boolean" ? { adminEnabled: value.adminEnabled } : {}),
+    ...(value.adminUrl?.startsWith("/") && !value.adminUrl.startsWith("//") ? { adminUrl: value.adminUrl } : {}),
   };
 }
 
 export async function loadRuntimeSettings(storage: ControlStorage, fetcher?: typeof fetch): Promise<RuntimeSettings> {
   const stored = await storage.getRuntimeSettings().catch(() => undefined);
-  if (stored && !validateRelayURL(stored.relayUrl) && !validatePairingURL(stored.pairingUrl)) return stored;
-
 	const runtime = await loadRuntimeFile(fetcher ?? (typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : undefined));
+  if (stored && !validateRelayURL(stored.relayUrl) && !validatePairingURL(stored.pairingUrl)) return { ...stored, adminEnabled: runtime?.adminEnabled, adminUrl: runtime?.adminUrl };
   if (runtime) return runtime;
 
   const relayUrl = import.meta.env.VITE_YUANSHU_RELAY_URL?.trim() ?? "";

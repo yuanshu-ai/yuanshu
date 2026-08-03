@@ -51,6 +51,12 @@ type HubSnapshot struct {
 	ControlConnections int    `json:"controlConnections"`
 }
 
+type HubConnectionSnapshot struct {
+	SubjectID   string    `json:"subjectId"`
+	Role        string    `json:"role"`
+	ConnectedAt time.Time `json:"connectedAt"`
+}
+
 type Hub struct {
 	store         sessionStore
 	leases        hubLeaseStore
@@ -71,12 +77,13 @@ type Hub struct {
 }
 
 type hubConnection struct {
-	ownerID   string
-	subjectID string
-	keyID     string
-	publicKey ed25519.PublicKey
-	role      transport.SessionRole
-	relay     transport.Transport
+	ownerID     string
+	subjectID   string
+	keyID       string
+	publicKey   ed25519.PublicKey
+	role        transport.SessionRole
+	relay       transport.Transport
+	connectedAt time.Time
 }
 
 // AttachLocalNode registers an already authenticated in-process Node
@@ -85,7 +92,7 @@ func (h *Hub) AttachLocalNode(ctx context.Context, ownerID, nodeID string, local
 	if ctx == nil || local == nil || !validOpaque(ownerID, 128) || !validOpaque(nodeID, 128) {
 		return ErrInvalid
 	}
-	connection := &hubConnection{ownerID: ownerID, subjectID: nodeID, role: transport.SessionRoleNode, relay: local}
+	connection := &hubConnection{ownerID: ownerID, subjectID: nodeID, role: transport.SessionRoleNode, relay: local, connectedAt: h.clock().UTC()}
 	if !h.register(connection) {
 		return errors.New("server hub is closed")
 	}
@@ -244,7 +251,7 @@ func (h *Hub) serve(writer http.ResponseWriter, request *http.Request, role tran
 		_ = conn.CloseNow()
 		return
 	}
-	connection := &hubConnection{ownerID: ownerID, subjectID: subjectID, keyID: keyID, publicKey: append(ed25519.PublicKey(nil), publicKey...), role: role, relay: relay}
+	connection := &hubConnection{ownerID: ownerID, subjectID: subjectID, keyID: keyID, publicKey: append(ed25519.PublicKey(nil), publicKey...), role: role, relay: relay, connectedAt: h.clock().UTC()}
 	if !h.register(connection) {
 		_ = relay.Close()
 		return
@@ -406,10 +413,37 @@ func (h *Hub) register(connection *hubConnection) bool {
 		h.controls[key] = connection
 	}
 	h.mu.Unlock()
+	if touch, ok := h.store.(interface {
+		TouchNode(context.Context, string, string, time.Time) error
+		TouchControlClient(context.Context, string, string, time.Time) error
+	}); ok {
+		if connection.role == transport.SessionRoleNode {
+			_ = touch.TouchNode(context.Background(), connection.ownerID, connection.subjectID, h.clock().UTC())
+		} else {
+			_ = touch.TouchControlClient(context.Background(), connection.ownerID, connection.subjectID, h.clock().UTC())
+		}
+	}
 	if previous != nil {
 		_ = previous.relay.Close()
 	}
 	return true
+}
+
+func (h *Hub) OwnerConnections(ownerID string) []HubConnectionSnapshot {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	result := make([]HubConnectionSnapshot, 0)
+	for _, connection := range h.nodes {
+		if connection.ownerID == ownerID {
+			result = append(result, HubConnectionSnapshot{SubjectID: connection.subjectID, Role: string(connection.role), ConnectedAt: connection.connectedAt})
+		}
+	}
+	for _, connection := range h.controls {
+		if connection.ownerID == ownerID {
+			result = append(result, HubConnectionSnapshot{SubjectID: connection.subjectID, Role: string(connection.role), ConnectedAt: connection.connectedAt})
+		}
+	}
+	return result
 }
 
 func (h *Hub) unregister(connection *hubConnection) {

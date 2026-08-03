@@ -261,7 +261,7 @@ func (s *Store) OwnerNodes(ctx context.Context, ownerID string) ([]Node, error) 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT id,owner_id,public_key,name,os,version,status,created_at FROM nodes WHERE owner_id=? ORDER BY created_at,id`, ownerID)
+	rows, err := db.QueryContext(ctx, `SELECT id,owner_id,public_key,name,os,version,status,created_at,COALESCE(last_seen_at,'') FROM nodes WHERE owner_id=? ORDER BY created_at,id`, ownerID)
 	if err != nil {
 		return nil, internal("nodes read")
 	}
@@ -269,13 +269,20 @@ func (s *Store) OwnerNodes(ctx context.Context, ownerID string) ([]Node, error) 
 	var result []Node
 	for rows.Next() {
 		var item Node
-		var created string
-		if err := rows.Scan(&item.ID, &item.OwnerID, &item.PublicKey, &item.Name, &item.OS, &item.Version, &item.Status, &created); err != nil {
+		var created, lastSeen string
+		if err := rows.Scan(&item.ID, &item.OwnerID, &item.PublicKey, &item.Name, &item.OS, &item.Version, &item.Status, &created, &lastSeen); err != nil {
 			return nil, internal("nodes read")
 		}
 		item.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
 		if err != nil {
 			return nil, ErrCorrupt
+		}
+		if lastSeen != "" {
+			value, parseErr := time.Parse(time.RFC3339Nano, lastSeen)
+			if parseErr != nil {
+				return nil, ErrCorrupt
+			}
+			item.LastSeenAt = &value
 		}
 		item.PublicKey = append([]byte(nil), item.PublicKey...)
 		result = append(result, item)

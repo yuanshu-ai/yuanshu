@@ -54,6 +54,17 @@ func NewHandler(service *BootstrapService, ready readiness, hubs ...*Hub) (http.
 	if service == nil || ready == nil || len(hubs) > 1 || (len(hubs) == 1 && hubs[0] == nil) {
 		return nil, ErrInvalid
 	}
+	var hub *Hub
+	if len(hubs) == 1 {
+		hub = hubs[0]
+	}
+	return newHandler(service, ready, hub, adminHandlerOptions{})
+}
+
+func newHandler(service *BootstrapService, ready readiness, hub *Hub, adminOptions adminHandlerOptions) (http.Handler, error) {
+	if service == nil || ready == nil || (adminOptions.Enabled && hub == nil) {
+		return nil, ErrInvalid
+	}
 	limiter := newAttemptLimiter(service.clock)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
@@ -135,11 +146,11 @@ func NewHandler(service *BootstrapService, ready readiness, hubs ...*Hub) (http.
 		}
 		writeJSON(writer, status, response)
 	})
-	if len(hubs) == 1 {
-		mux.HandleFunc("GET /node/connect", hubs[0].NodeHandler)
-		mux.HandleFunc("GET /web/connect", hubs[0].ControlHandler)
+	if hub != nil {
+		mux.HandleFunc("GET /node/connect", hub.NodeHandler)
+		mux.HandleFunc("GET /web/connect", hub.ControlHandler)
 		if local, ok := ready.(*serverstore.Store); ok {
-			pairing, err := NewPairingService(local, hubs[0], PairingOptions{Clock: service.clock})
+			pairing, err := NewPairingService(local, hub, PairingOptions{Clock: service.clock})
 			if err != nil {
 				return nil, err
 			}
@@ -153,6 +164,13 @@ func NewHandler(service *BootstrapService, ready readiness, hubs ...*Hub) (http.
 			mux.Handle("/v1/nodes/", pairing.Handler())
 			mux.Handle("/pair", PairingPageHandler())
 			mux.Handle("/pair/", PairingPageHandler())
+			if adminOptions.Enabled {
+				admin, err := newAdminService(local, hub, adminOptions)
+				if err != nil {
+					return nil, err
+				}
+				mux.Handle("/v1/admin/", admin.Handler())
+			}
 		}
 	}
 	return noStore(methodBoundary(mux)), nil

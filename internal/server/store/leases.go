@@ -11,10 +11,10 @@ import (
 const DefaultLeaseTTL = 60 * time.Second
 
 type LeaseScope struct {
-	OwnerID     string
-	NodeID      string
-	WorkspaceID string
-	ThreadID    string
+	OwnerID     string `json:"-"`
+	NodeID      string `json:"nodeId"`
+	WorkspaceID string `json:"workspaceId"`
+	ThreadID    string `json:"threadId"`
 }
 
 type LeaseRecord struct {

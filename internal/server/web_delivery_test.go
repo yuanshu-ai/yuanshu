@@ -37,7 +37,7 @@ func TestEmbeddedWebDeliveryServesWorkbenchRuntimeConfigAndAssets(t *testing.T) 
 
 	runtime := httptest.NewRecorder()
 	handler.ServeHTTP(runtime, httptest.NewRequest(http.MethodGet, "/yuanshu.config.json", nil))
-	var settings map[string]string
+	var settings map[string]any
 	if err := json.Unmarshal(runtime.Body.Bytes(), &settings); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestEmbeddedWebRuntimeConfigUsesTLSRequestHost(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "https://[fd00::20]:7444/yuanshu.config.json", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	var settings map[string]string
+	var settings map[string]any
 	if err := json.Unmarshal(response.Body.Bytes(), &settings); err != nil {
 		t.Fatal(err)
 	}

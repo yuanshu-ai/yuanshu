@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const CurrentSchemaVersion = 5
+const CurrentSchemaVersion = 6
 
 type migration struct {
 	version    int
@@ -185,6 +185,35 @@ var serverMigrations = []migration{{
 		) STRICT`,
 		`CREATE INDEX notifications_owner_unread ON notifications(owner_id, read_at, created_at)`,
 	},
+}, {
+	version: 6,
+	name:    "server_admin_and_audit",
+	statements: []string{
+		`ALTER TABLE control_clients ADD COLUMN last_seen_at TEXT`,
+		`CREATE TABLE server_security_settings (
+			owner_id TEXT PRIMARY KEY,
+			control_pairing_enabled INTEGER NOT NULL CHECK (control_pairing_enabled IN (0, 1)),
+			node_enrollment_enabled INTEGER NOT NULL CHECK (node_enrollment_enabled IN (0, 1)),
+			revision INTEGER NOT NULL CHECK (revision >= 1),
+			updated_at TEXT NOT NULL,
+			updated_by TEXT NOT NULL CHECK (length(updated_by) BETWEEN 1 AND 128),
+			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
+		) STRICT`,
+		`CREATE TABLE admin_audit_logs (
+			id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+			owner_id TEXT NOT NULL,
+			actor_client_id TEXT NOT NULL CHECK (length(actor_client_id) BETWEEN 1 AND 128),
+			action TEXT NOT NULL CHECK (length(action) BETWEEN 1 AND 96),
+			resource_type TEXT NOT NULL CHECK (length(resource_type) BETWEEN 1 AND 64),
+			resource_ref TEXT NOT NULL CHECK (length(resource_ref) BETWEEN 1 AND 256),
+			result TEXT NOT NULL CHECK (result IN ('succeeded', 'rejected', 'failed')),
+			error_code TEXT CHECK (error_code IS NULL OR length(error_code) BETWEEN 1 AND 96),
+			correlation_id TEXT NOT NULL CHECK (length(correlation_id) BETWEEN 1 AND 128),
+			created_at TEXT NOT NULL,
+			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
+		) STRICT`,
+		`CREATE INDEX admin_audit_owner_created ON admin_audit_logs(owner_id, created_at DESC, id DESC)`,
+	},
 }}
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -253,6 +282,8 @@ func schemaLiteral(version int) string {
 		return "5"
 	case 6:
 		return "6"
+	case 7:
+		return "7"
 	default:
 		panic("unsupported server schema version")
 	}

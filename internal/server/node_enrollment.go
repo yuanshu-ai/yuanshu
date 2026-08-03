@@ -40,6 +40,15 @@ func (s *PairingService) createNodeEnrollment(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusConflict, "node_offline")
 		return
 	}
+	settings, err := s.store.SecuritySettings(r.Context(), node.OwnerID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if !settings.NodeEnrollmentEnabled {
+		writeError(w, http.StatusForbidden, "node_enrollment_disabled")
+		return
+	}
 	var request createNodeEnrollmentRequest
 	if !decodeStrict(w, r, &request) {
 		return
@@ -114,6 +123,15 @@ func (s *PairingService) claimNodeEnrollment(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusInternalServerError, "internal")
 			return
 		}
+	}
+	settings, settingsErr := s.store.SecuritySettings(r.Context(), existing.OwnerID)
+	if settingsErr != nil {
+		writeStoreError(w, settingsErr)
+		return
+	}
+	if !settings.NodeEnrollmentEnabled {
+		writeError(w, http.StatusForbidden, "node_enrollment_disabled")
+		return
 	}
 	item, err := s.store.ClaimNodeEnrollment(r.Context(), serverstore.NodeEnrollmentClaim{EnrollmentID: r.PathValue("id"), CandidateNodeID: candidateID, Name: request.Name, OS: request.OS, Version: request.Version, CodeHash: digest[:], PublicKey: publicKey, CredentialHash: credentialHash, Now: now})
 	if err != nil {

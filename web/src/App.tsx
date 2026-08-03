@@ -2,17 +2,17 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { ControlClient, type ControlClientState, type LeaseScope, type LeaseState } from "./relay/control-client";
 import { IndexedDBControlStorage, type ControlStorage, type StoredControlIdentity, type StoredRuntimeSettings } from "./relay/storage";
-import { loadRuntimeSettings, normalizeRuntimeSettings } from "./relay/runtime-config";
+import { loadRuntimeSettings, normalizeRuntimeSettings, type RuntimeSettings } from "./relay/runtime-config";
 import { RELAY_SUBPROTOCOL } from "./relay/session";
 import { DataProjection, threadKey, turnKey, type ProjectionState, type ThreadItemProjection } from "./state/projection";
 
 type BootState =
   | { status: "loading" }
-  | { status: "pairing"; reason?: string; storage?: ControlStorage; settings: StoredRuntimeSettings }
-  | { status: "config"; identity: StoredControlIdentity; storage: ControlStorage; settings: StoredRuntimeSettings }
-  | { status: "ready"; client: ControlClient; projection: DataProjection; storage: ControlStorage; settings: StoredRuntimeSettings };
+  | { status: "pairing"; reason?: string; storage?: ControlStorage; settings: RuntimeSettings }
+  | { status: "config"; identity: StoredControlIdentity; storage: ControlStorage; settings: RuntimeSettings }
+  | { status: "ready"; client: ControlClient; projection: DataProjection; storage: ControlStorage; settings: RuntimeSettings };
 
-export function App() {
+export function WorkbenchApp() {
   const [boot, setBoot] = useState<BootState>({ status: "loading" });
   const [connectionState, setConnectionState] = useState<ControlClientState>("idle");
   const [revision, setRevision] = useState(0);
@@ -34,7 +34,7 @@ export function App() {
     let disposed = false;
     const bootstrap = async () => {
       let storage: ControlStorage | undefined;
-      let settings: StoredRuntimeSettings = { relayUrl: "", pairingUrl: "/pair" };
+      let settings: RuntimeSettings = { relayUrl: "", pairingUrl: "/pair" };
       try {
         const currentStorage = new IndexedDBControlStorage();
         storage = currentStorage;
@@ -256,7 +256,7 @@ export function App() {
       <header className="topbar">
         <div className="brand-lockup"><span className="brand-mark">枢</span><div><strong>远枢</strong><span>Yuanshu workspace</span></div></div>
         <div className={`connection-pill ${connectionState}`}><span className="status-dot" />{connectionLabel(connectionState)}{unreadNotifications.length > 0 && <span className="notification-count">{unreadNotifications.length}</span>}</div>
-      <div className="topbar-actions"><a className="pair-link" href={boot.settings.pairingUrl}>配对新设备</a><button className="pair-link settings-link" type="button" onClick={() => setSettingsOpen((value) => !value)}>连接设置</button></div>
+      <div className="topbar-actions">{boot.settings.adminEnabled && <a className="pair-link" href={boot.settings.adminUrl ?? "/admin"}>Server 管理</a>}<a className="pair-link" href={boot.settings.pairingUrl}>配对新设备</a><button className="pair-link settings-link" type="button" onClick={() => setSettingsOpen((value) => !value)}>连接设置</button></div>
       </header>
       {settingsOpen && <>
         <SettingsPanel initial={boot.settings} storage={boot.storage} onSaved={() => window.location.reload()} onClose={() => setSettingsOpen(false)} />
@@ -324,6 +324,8 @@ export function App() {
     </main>
   );
 }
+
+export const App = WorkbenchApp;
 
 function LeaseControl({ lease, held, onAcquire, onTakeover, onRelease }: { lease: LeaseState; held: boolean; onAcquire: () => void; onTakeover: () => void; onRelease: () => void }) {
   if (held) return <div className="lease-control"><span className="lease-badge held">你可操作</span><button className="text-button" onClick={onRelease}>释放</button></div>;

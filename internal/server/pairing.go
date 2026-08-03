@@ -101,6 +101,15 @@ func (s *PairingService) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "node_offline")
 		return
 	}
+	settings, err := s.store.SecuritySettings(r.Context(), node.OwnerID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if !settings.ControlPairingEnabled {
+		writeError(w, http.StatusForbidden, "pairing_disabled")
+		return
+	}
 	var request createPairingRequest
 	if !decodeStrict(w, r, &request) {
 		return
@@ -164,6 +173,20 @@ func (s *PairingService) claim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	digest := sha256.Sum256([]byte(secret))
+	existing, err := s.store.Pairing(r.Context(), r.PathValue("id"), digest[:], s.clock().UTC())
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	settings, err := s.store.SecuritySettings(r.Context(), existing.OwnerID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if !settings.ControlPairingEnabled {
+		writeError(w, http.StatusForbidden, "pairing_disabled")
+		return
+	}
 	item, err := s.store.ClaimPairing(r.Context(), serverstore.PairingClaim{PairingID: r.PathValue("id"), ClientID: request.ClientID, KeyID: request.KeyID, ClientName: request.Name, CodeHash: digest[:], PublicKey: publicKey, Now: s.clock().UTC()})
 	if err != nil {
 		writeStoreError(w, err)

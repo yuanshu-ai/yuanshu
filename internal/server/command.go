@@ -140,6 +140,11 @@ func parseServerOptions(args []string) (Options, error) {
 		options.TLSCertFile, options.TLSKeyFile = file.TLSCertFile, file.TLSKeyFile
 		options.AllowedControlOrigins = append([]string(nil), file.AllowedControlOrigins...)
 		options.WebEnabled = cloneBool(file.Web.Enabled)
+		options.AdminEnabled = cloneBool(file.Admin.Enabled)
+		options.AdminSessionIdle = adminIdleDuration(file.Admin.SessionIdleMinutes)
+		options.AdminSessionMax = adminMaxDuration(file.Admin.SessionMaxHours)
+		options.AdminAuditRetention = adminAuditRetention(file.Admin.AuditRetentionDays)
+		options.ConfigRevision = configRevision(file)
 		if options.Listen == "" {
 			options.Listen = "127.0.0.1:7444"
 		}

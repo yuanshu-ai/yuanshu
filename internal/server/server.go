@@ -34,6 +34,11 @@ type Options struct {
 	TLSKeyFile            string
 	AllowedControlOrigins []string
 	WebEnabled            *bool
+	AdminEnabled          *bool
+	AdminSessionIdle      time.Duration
+	AdminSessionMax       time.Duration
+	AdminAuditRetention   time.Duration
+	ConfigRevision        string
 	Stdout                io.Writer
 	Random                io.Reader
 	Clock                 func() time.Time
@@ -106,13 +111,32 @@ func Run(ctx context.Context, options Options) error {
 		return err
 	}
 	defer hub.Close()
-	handler, err := NewHandler(service, local, hub)
+	var tlsSAN []string
+	var tlsNotAfter time.Time
+	if tlsConfig != nil && len(tlsConfig.Certificates) > 0 && tlsConfig.Certificates[0].Leaf != nil {
+		leaf := tlsConfig.Certificates[0].Leaf
+		tlsSAN = append(tlsSAN, leaf.DNSNames...)
+		for _, ip := range leaf.IPAddresses {
+			tlsSAN = append(tlsSAN, ip.String())
+		}
+		tlsNotAfter = leaf.NotAfter.UTC()
+	}
+	handler, err := newHandler(service, local, hub, adminHandlerOptions{
+		Enabled: adminEnabled(options.AdminEnabled), PublicURL: options.PublicURL,
+		Listen: options.Listen, WebEnabled: embeddedWebEnabled(options.WebEnabled),
+		TLSConfigured: options.PublicURL != "", AllowedOrigins: origins,
+		SessionIdle: options.AdminSessionIdle, SessionMax: options.AdminSessionMax,
+		AuditRetention: options.AdminAuditRetention, Random: options.Random, Clock: options.Clock,
+		StartedAt: time.Now().UTC(), DatabasePath: filepath.Join(options.DataDir, "server.db"), ConfigRevision: options.ConfigRevision,
+		TLSSAN: tlsSAN, TLSNotAfter: tlsNotAfter,
+	})
 	if err != nil {
 		return err
 	}
 	handler, err = newWebDeliveryHandler(handler, webDeliveryOptions{
-		Enabled:   embeddedWebEnabled(options.WebEnabled),
-		PublicURL: options.PublicURL,
+		Enabled:      embeddedWebEnabled(options.WebEnabled),
+		PublicURL:    options.PublicURL,
+		AdminEnabled: adminEnabled(options.AdminEnabled),
 	})
 	if err != nil {
 		return err

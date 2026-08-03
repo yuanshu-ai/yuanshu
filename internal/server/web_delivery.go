@@ -14,16 +14,18 @@ import (
 )
 
 type webDeliveryOptions struct {
-	Enabled   bool
-	PublicURL string
+	Enabled      bool
+	PublicURL    string
+	AdminEnabled bool
 }
 
 type webDeliveryHandler struct {
-	api       http.Handler
-	assets    fs.FS
-	files     http.Handler
-	indexHTML []byte
-	publicURL string
+	api          http.Handler
+	assets       fs.FS
+	files        http.Handler
+	indexHTML    []byte
+	publicURL    string
+	adminEnabled bool
 }
 
 func newWebDeliveryHandler(api http.Handler, options webDeliveryOptions) (http.Handler, error) {
@@ -43,7 +45,7 @@ func newWebDeliveryHandler(api http.Handler, options webDeliveryOptions) (http.H
 	}
 	return &webDeliveryHandler{
 		api: api, assets: assets, files: http.FileServer(http.FS(assets)),
-		indexHTML: indexHTML, publicURL: strings.TrimSuffix(options.PublicURL, "/"),
+		indexHTML: indexHTML, publicURL: strings.TrimSuffix(options.PublicURL, "/"), adminEnabled: options.AdminEnabled,
 	}, nil
 }
 
@@ -64,6 +66,10 @@ func (h *webDeliveryHandler) ServeHTTP(writer http.ResponseWriter, request *http
 	}
 	if request.URL.Path == "/yuanshu.config.json" {
 		h.serveRuntimeConfig(writer, request)
+		return
+	}
+	if (request.URL.Path == "/admin" || strings.HasPrefix(request.URL.Path, "/admin/")) && !h.adminEnabled {
+		h.api.ServeHTTP(writer, request)
 		return
 	}
 	if request.URL.Path == "/" || spaRoute(request.URL.Path) {
@@ -109,7 +115,7 @@ func (h *webDeliveryHandler) serveRuntimeConfig(writer http.ResponseWriter, requ
 	}
 	writer.WriteHeader(http.StatusOK)
 	if request.Method != http.MethodHead {
-		_ = json.NewEncoder(writer).Encode(map[string]string{"relayUrl": relayURL, "pairingUrl": pairingURL})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"relayUrl": relayURL, "pairingUrl": pairingURL, "adminEnabled": h.adminEnabled, "adminUrl": "/admin"})
 	}
 }
 

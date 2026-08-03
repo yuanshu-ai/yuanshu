@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -26,20 +27,28 @@ const (
 // are referenced by path and are never read into this structure for logging or
 // transport purposes.
 type ConfigFile struct {
-	ConfigVersion         int       `toml:"config_version" json:"config_version"`
-	DataDir               string    `toml:"data_dir" json:"data_dir"`
-	Listen                string    `toml:"listen" json:"listen"`
-	PublicURL             string    `toml:"public_url" json:"public_url"`
-	TLSCertFile           string    `toml:"tls_cert_file" json:"tls_cert_file"`
-	TLSKeyFile            string    `toml:"tls_key_file" json:"tls_key_file"`
-	AllowedControlOrigins []string  `toml:"allowed_control_origins" json:"allowed_control_origins"`
-	Web                   WebConfig `toml:"web" json:"web"`
+	ConfigVersion         int         `toml:"config_version" json:"config_version"`
+	DataDir               string      `toml:"data_dir" json:"data_dir"`
+	Listen                string      `toml:"listen" json:"listen"`
+	PublicURL             string      `toml:"public_url" json:"public_url"`
+	TLSCertFile           string      `toml:"tls_cert_file" json:"tls_cert_file"`
+	TLSKeyFile            string      `toml:"tls_key_file" json:"tls_key_file"`
+	AllowedControlOrigins []string    `toml:"allowed_control_origins" json:"allowed_control_origins"`
+	Web                   WebConfig   `toml:"web" json:"web"`
+	Admin                 AdminConfig `toml:"admin" json:"admin"`
 }
 
 // WebConfig controls delivery of the embedded personal workbench. A nil
 // Enabled value preserves the secure, single-service default: enabled.
 type WebConfig struct {
 	Enabled *bool `toml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
+type AdminConfig struct {
+	Enabled            *bool `toml:"enabled,omitempty" json:"enabled,omitempty"`
+	SessionIdleMinutes int   `toml:"session_idle_minutes,omitempty" json:"session_idle_minutes,omitempty"`
+	SessionMaxHours    int   `toml:"session_max_hours,omitempty" json:"session_max_hours,omitempty"`
+	AuditRetentionDays int   `toml:"audit_retention_days,omitempty" json:"audit_retention_days,omitempty"`
 }
 
 type ConfigFileStore struct {
@@ -132,12 +141,37 @@ func ValidateConfigFile(value ConfigFile) error {
 	if !validControlOrigins(value.AllowedControlOrigins) {
 		return ErrInvalid
 	}
+	if (value.Admin.SessionIdleMinutes != 0 && (value.Admin.SessionIdleMinutes < 5 || value.Admin.SessionIdleMinutes > 120)) ||
+		(value.Admin.SessionMaxHours != 0 && (value.Admin.SessionMaxHours < 1 || value.Admin.SessionMaxHours > 24)) ||
+		(value.Admin.AuditRetentionDays != 0 && (value.Admin.AuditRetentionDays < 7 || value.Admin.AuditRetentionDays > 365)) {
+		return ErrInvalid
+	}
 	for _, path := range []string{value.TLSCertFile, value.TLSKeyFile} {
 		if path != "" && (!filepath.IsAbs(path) || strings.IndexByte(path, 0) >= 0) {
 			return ErrInvalid
 		}
 	}
 	return nil
+}
+
+func adminEnabled(value *bool) bool { return value == nil || *value }
+func adminIdleDuration(minutes int) time.Duration {
+	if minutes == 0 {
+		minutes = 30
+	}
+	return time.Duration(minutes) * time.Minute
+}
+func adminMaxDuration(hours int) time.Duration {
+	if hours == 0 {
+		hours = 8
+	}
+	return time.Duration(hours) * time.Hour
+}
+func adminAuditRetention(days int) time.Duration {
+	if days == 0 {
+		days = 90
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 func loadServerConfigFile(path string) (ConfigFile, error) {
