@@ -6,18 +6,23 @@ import "sync"
 const LocalStatusVersion = 1
 
 type Status struct {
-	Version        int    `json:"version"`
-	State          string `json:"state"`
-	Platform       string `json:"platform"`
-	Config         string `json:"config"`
-	Identity       string `json:"identity"`
-	Database       string `json:"database"`
-	Workspaces     int    `json:"workspaces"`
-	Codex          string `json:"codex"`
-	Authentication string `json:"authentication"`
-	Recovery       string `json:"recovery"`
-	RemoteControl  string `json:"remoteControl"`
-	Autostart      string `json:"autostart"`
+	Version         int    `json:"version"`
+	State           string `json:"state"`
+	Platform        string `json:"platform"`
+	Config          string `json:"config"`
+	Identity        string `json:"identity"`
+	Database        string `json:"database"`
+	Workspaces      int    `json:"workspaces"`
+	Codex           string `json:"codex"`
+	Authentication  string `json:"authentication"`
+	Recovery        string `json:"recovery"`
+	RemoteControl   string `json:"remoteControl"`
+	RelayLastError  string `json:"relayLastError,omitempty"`
+	RelayLastSeen   string `json:"relayLastSeen,omitempty"`
+	Compatibility   string `json:"compatibility,omitempty"`
+	WorkspaceStatus string `json:"workspaceStatus,omitempty"`
+	Credential      string `json:"credential,omitempty"`
+	Autostart       string `json:"autostart"`
 }
 
 type statusStore struct {
@@ -30,7 +35,7 @@ func newStatusStore(family string) *statusStore {
 		Version: LocalStatusVersion, State: "starting", Platform: family,
 		Config: "unchecked", Identity: "unchecked", Database: "unchecked",
 		Codex: "unchecked", Authentication: "unchecked", Recovery: "not_required",
-		RemoteControl: "not_available", Autostart: "unchecked",
+		RemoteControl: "not_available", WorkspaceStatus: "unchecked", Credential: "unchecked", Autostart: "unchecked",
 	}}
 }
 

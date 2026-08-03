@@ -408,10 +408,10 @@ func writeStatus(writer io.Writer, status Status, jsonOutput bool) error {
 		return json.NewEncoder(writer).Encode(status)
 	}
 	_, err := fmt.Fprintf(writer,
-		"Yuanshu Node: %s\nPlatform: %s\nConfig: %s\nIdentity: %s\nDatabase: %s\nWorkspaces: %d\nCodex: %s\nAuthentication: %s\nRecovery: %s\nRemote control: %s\nStart at login: %s\n",
+		"Yuanshu Node: %s\nPlatform: %s\nConfig: %s\nIdentity: %s\nDatabase: %s\nWorkspaces: %d (%s)\nCodex: %s\nCompatibility: %s\nAuthentication: %s\nCredential: %s\nRecovery: %s\nRemote control: %s\nRelay last error: %s\nRelay last seen: %s\nStart at login: %s\n",
 		status.State, status.Platform, status.Config, status.Identity, status.Database,
-		status.Workspaces, status.Codex, status.Authentication, status.Recovery,
-		status.RemoteControl, status.Autostart,
+		status.Workspaces, status.WorkspaceStatus, status.Codex, status.Compatibility, status.Authentication, status.Credential, status.Recovery,
+		status.RemoteControl, status.RelayLastError, status.RelayLastSeen, status.Autostart,
 	)
 	return err
 }

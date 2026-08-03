@@ -221,6 +221,11 @@ export class DataProjection {
     }
   }
 
+  markNotificationRead(notificationId: string): void {
+    const current = this.stateValue.notifications[notificationId];
+    if (current) current.read = true;
+  }
+
   apply(event: YuanshuMessage): void {
     if (event.ownerId === "" || event.nodeId === "") return;
     const eventKey = `${event.ownerId}\u001f${event.nodeId}\u001f${event.streamId}\u001f${event.sequence}`;

@@ -519,7 +519,7 @@ func (h *host) startControlSessionLocked() error {
 			if supervisor != nil {
 				supervisor.Close()
 			}
-			h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
+			h.status.update(func(value *Status) { value.RemoteControl, value.RelayLastError = "unavailable", "eventlog_failure" })
 			h.options.trayUpdate(h.status.snapshot())
 			h.log.write("node_error", "eventlog_failure", 0)
 		},
@@ -532,9 +532,15 @@ func (h *host) startControlSessionLocked() error {
 	}
 	supervisor, err = newRelaySupervisor(h.runCtx, relaySupervisorOptions{
 		Connect: h.pairing.Connect,
-		Serve:  session.Serve,
+		Serve:   session.Serve,
 		OnState: func(value string) {
-			h.status.update(func(status *Status) { status.RemoteControl = value })
+			h.status.update(func(status *Status) {
+				status.RemoteControl = value
+				status.RelayLastSeen = time.Now().UTC().Format(time.RFC3339Nano)
+				if value == relayStateRevoked {
+					status.RelayLastError = "credential_revoked"
+				}
+			})
 			h.options.trayUpdate(h.status.snapshot())
 		},
 	})

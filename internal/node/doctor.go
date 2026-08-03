@@ -51,6 +51,16 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 		return status, false
 	}
 	identityState := report[config.SecretIdentityPrivateKey]
+	switch report[config.SecretRelayCredential] {
+	case config.SecretAvailable:
+		status.Credential = "available"
+	case config.SecretMissing:
+		status.Credential = "missing"
+	case config.SecretUnset:
+		status.Credential = "not_configured"
+	default:
+		status.Credential = "unavailable"
+	}
 	switch identityState {
 	case config.SecretAvailable:
 		status.Identity = "available"
@@ -71,9 +81,11 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 		status.Database = "ready"
 	}
 	status.Workspaces = len(loaded.Config.Workspaces)
+	status.WorkspaceStatus = "ready"
 	for _, configured := range loaded.Config.Workspaces {
 		if _, err := current.Workspaces().Inspect(ctx, configured.Path); err != nil {
 			status.State = "needs_attention"
+			status.WorkspaceStatus = "unavailable"
 			return status, false
 		}
 	}
@@ -89,12 +101,15 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 	if _, err := adapterInstance.Detect(ctx); err != nil {
 		if errors.Is(err, adapter.ErrUnsupported) {
 			status.Codex = "unsupported"
+			status.Compatibility = "unsupported"
 		} else {
 			status.Codex = "unavailable"
+			status.Compatibility = "unavailable"
 		}
 		return status, false
 	}
 	status.Codex = "ready"
+	status.Compatibility = "supported"
 	runtime, err := adapterInstance.StartRuntime(ctx)
 	if err != nil {
 		status.Authentication = "unavailable"

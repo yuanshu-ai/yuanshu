@@ -28,6 +28,7 @@ export function App() {
   const loadedWorkspaces = useRef(new Set<string>());
   const loadedThreads = useRef(new Set<string>());
   const loadedNotifications = useRef(new Set<string>());
+  const readNotifications = useRef(new Set<string>());
 
   useEffect(() => {
     let disposed = false;
@@ -115,6 +116,18 @@ export function App() {
     void request(boot.client, "device.sync", {}, { nodeId: selectedNodeId }).catch(() => undefined);
     void request(boot.client, "workspace.list", { limit: 100 }, { nodeId: selectedNodeId }).catch(() => undefined);
   }, [boot.status, selectedNodeId, connectionState]);
+
+  useEffect(() => {
+    if (boot.status !== "ready" || !selectedThreadId || connectionState !== "connected") return;
+    for (const notification of notifications.filter((item) => item.threadId === selectedThreadId && !item.read && !readNotifications.current.has(item.id))) {
+      readNotifications.current.add(notification.id);
+      boot.projection.markNotificationRead(notification.id);
+      void boot.client.request("notifications.read", { notificationId: notification.id }, { nodeId: notification.nodeId }).catch(() => {
+        readNotifications.current.delete(notification.id);
+        boot.projection.markNotificationRead(notification.id);
+      });
+    }
+  }, [boot.status, selectedThreadId, connectionState, notifications, revision]);
 
   useEffect(() => {
     if (boot.status !== "ready" || !selectedNodeId || connectionState !== "connected" || loadedNotifications.current.has(selectedNodeId)) return;
