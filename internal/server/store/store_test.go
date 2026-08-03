@@ -30,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, string) {
 
 func TestOpenCreatesServerSchemaAndReopens(t *testing.T) {
 	local, path := openTestStore(t)
-	for _, table := range []string{"bootstrap", "control_clients", "node_credentials", "node_enrollments", "nodes", "owners", "pairings", "schema_migrations"} {
+	for _, table := range []string{"bootstrap", "control_clients", "node_credentials", "node_enrollments", "nodes", "owners", "pairings", "control_leases", "notifications", "schema_migrations"} {
 		var count int
 		if err := local.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("table %s count=%d err=%v", table, count, err)
@@ -51,6 +51,87 @@ func TestOpenCreatesServerSchemaAndReopens(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNotificationsAreRedactedDeduplicatedAndReadable(t *testing.T) {
+	local, _ := openTestStore(t)
+	if _, err := local.db.Exec(`INSERT INTO owners(id,singleton,status,created_at) VALUES('owner',1,'active',?)`, timestamp(testNow)); err != nil {
+		t.Fatal(err)
+	}
+	item := Notification{ID: "notification", OwnerID: "owner", NodeID: "node", WorkspaceID: "workspace", ThreadID: "thread", Type: "task.completed", Summary: "任务已完成", SourceSequence: 9, DedupKey: "turn.completed:node:9", CreatedAt: testNow}
+	if err := local.SaveNotification(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.SaveNotification(context.Background(), Notification{ID: "other", OwnerID: item.OwnerID, NodeID: item.NodeID, Type: item.Type, Summary: item.Summary, SourceSequence: item.SourceSequence, DedupKey: item.DedupKey, CreatedAt: item.CreatedAt}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := local.ListNotifications(context.Background(), "owner", 20)
+	if err != nil || len(items) != 1 || items[0].Summary != item.Summary {
+		t.Fatalf("notifications=%+v err=%v", items, err)
+	}
+	if err := local.MarkNotificationRead(context.Background(), "owner", "notification", testNow.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	items, err = local.ListNotifications(context.Background(), "owner", 20)
+	if err != nil || items[0].ReadAt == nil {
+		t.Fatalf("read notifications=%+v err=%v", items, err)
+	}
+}
+
+func TestLeaseAcquireRenewReleaseAndTakeover(t *testing.T) {
+	local, _ := openTestStore(t)
+	if _, err := local.db.Exec(`INSERT INTO owners(id,singleton,status,created_at) VALUES('owner',1,'active',?)`, timestamp(testNow)); err != nil {
+		t.Fatal(err)
+	}
+	scope := LeaseScope{OwnerID: "owner", NodeID: "node", WorkspaceID: "workspace", ThreadID: "thread"}
+	first, err := local.AcquireLease(context.Background(), LeaseAcquireRequest{Scope: scope, ClientID: "client-a", LeaseID: "lease-a", Now: testNow, TTL: DefaultLeaseTTL})
+	if err != nil || first.State != "held" || first.Epoch != 1 {
+		t.Fatalf("first acquire=%+v err=%v", first, err)
+	}
+	if _, err := local.AcquireLease(context.Background(), LeaseAcquireRequest{Scope: scope, ClientID: "client-b", LeaseID: "lease-b", Now: testNow, TTL: DefaultLeaseTTL}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("occupied acquire error=%v", err)
+	}
+	second, err := local.AcquireLease(context.Background(), LeaseAcquireRequest{Scope: scope, ClientID: "client-b", LeaseID: "lease-b", Force: true, ExpectedEpoch: int64Ptr(1), Now: testNow, TTL: DefaultLeaseTTL})
+	if err != nil || second.State != "held" || second.HolderClientID != "client-b" || second.Epoch != 2 {
+		t.Fatalf("takeover=%+v err=%v", second, err)
+	}
+	if _, err := local.RenewLease(context.Background(), LeaseMutationRequest{Scope: scope, ClientID: "client-a", LeaseID: "lease-a", Epoch: 1, Now: testNow, TTL: DefaultLeaseTTL}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale renew error=%v", err)
+	}
+	renewed, err := local.RenewLease(context.Background(), LeaseMutationRequest{Scope: scope, ClientID: "client-b", LeaseID: "lease-b", Epoch: 2, Now: testNow.Add(time.Second), TTL: DefaultLeaseTTL})
+	if err != nil || !renewed.ExpiresAt.After(testNow.Add(time.Second)) {
+		t.Fatalf("renewed=%+v err=%v", renewed, err)
+	}
+	released, err := local.ReleaseLease(context.Background(), LeaseMutationRequest{Scope: scope, ClientID: "client-b", LeaseID: "lease-b", Epoch: 2, Now: testNow.Add(2 * time.Second)})
+	if err != nil || released.State != "released" || released.Epoch != 3 {
+		t.Fatalf("released=%+v err=%v", released, err)
+	}
+	current, err := local.Lease(context.Background(), scope, testNow.Add(2*time.Second))
+	if err != nil || current.State != "released" || current.Epoch != 3 {
+		t.Fatalf("current=%+v err=%v", current, err)
+	}
+}
+
+func TestLeaseExpiryAllowsNewHolder(t *testing.T) {
+	local, _ := openTestStore(t)
+	if _, err := local.db.Exec(`INSERT INTO owners(id,singleton,status,created_at) VALUES('owner',1,'active',?)`, timestamp(testNow)); err != nil {
+		t.Fatal(err)
+	}
+	scope := LeaseScope{OwnerID: "owner", NodeID: "node", WorkspaceID: "workspace", ThreadID: "thread"}
+	_, err := local.AcquireLease(context.Background(), LeaseAcquireRequest{Scope: scope, ClientID: "client-a", LeaseID: "lease-a", Now: testNow, TTL: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := local.Lease(context.Background(), scope, testNow.Add(2*time.Second))
+	if err != nil || current.State != "expired" {
+		t.Fatalf("expired=%+v err=%v", current, err)
+	}
+	next, err := local.AcquireLease(context.Background(), LeaseAcquireRequest{Scope: scope, ClientID: "client-b", LeaseID: "lease-b", Now: testNow.Add(2 * time.Second), TTL: DefaultLeaseTTL})
+	if err != nil || next.State != "held" || next.Epoch != 2 {
+		t.Fatalf("next=%+v err=%v", next, err)
+	}
+}
+
+func int64Ptr(value int64) *int64 { return &value }
 
 func TestOpenRejectsInvalidFutureAndCorruptFiles(t *testing.T) {
 	if _, err := Open(context.Background(), "relative.db", Options{}); !errors.Is(err, ErrInvalid) {

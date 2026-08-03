@@ -19,6 +19,16 @@ export interface RecoveryTarget {
   threadId: string;
 }
 
+export interface LeaseScope {
+  nodeId: string;
+  workspaceId: string;
+  threadId: string;
+}
+
+export type LeaseState =
+  | { state: "none" | "expired" | "lost"; epoch: number; holderClientId?: string; expiresAt?: string }
+  | { state: "held" | "occupied"; leaseId?: string; holderClientId?: string; epoch: number; expiresAt?: string };
+
 export interface ControlClientIdentity {
   ownerId: string;
   clientId: string;
@@ -65,6 +75,7 @@ export interface ControlClientOptions {
   onControlResult?: (event: YuanshuMessage) => void;
   onControlAction?: (action: ControlAction) => void;
   onUnknownControl?: (control: { messageId: string; nodeId: string; type: string }) => void;
+  onLease?: (scope: LeaseScope, state: LeaseState) => void;
 }
 
 export interface ControlTarget {
@@ -91,6 +102,7 @@ interface ReplayState {
 
 const CONTROL_STREAM_ID = "control-stream";
 const EVENT_STREAM_ID = "node-events-v1";
+const SERVER_CONTROL_STREAM_PREFIX = "server-control-v1-";
 const REPLAY_PAGE_SIZE = 256;
 const PENDING_LIMIT = 512;
 const RECONNECT_INITIAL = 500;
@@ -98,6 +110,7 @@ const RECONNECT_MAX = 30_000;
 const STABLE_WINDOW = 5_000;
 const MAX_AUTH_FAILURES = 10;
 const MUTATING_CONTROLS = new Set(["turn.start", "turn.steer", "turn.interrupt", "approval.resolve"]);
+const SERVER_CONTROLS = new Set(["lease.acquire", "lease.renew", "lease.release", "lease.status", "notifications.list", "notifications.read"]);
 const knownEvents = new Set<string>(KNOWN_EVENT_TYPES);
 
 export class ControlClient {
@@ -112,6 +125,9 @@ export class ControlClient {
   private readonly gapStreams = new Set<string>();
   private readonly historyGapStreams = new Set<string>();
   private readonly recoveryTargets = new Map<string, RecoveryTarget>();
+  private readonly leases = new Map<string, LeaseState>();
+  private readonly leaseScopes = new Map<string, LeaseScope>();
+  private readonly leaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly snapshotRequests = new Set<string>();
   private readonly pendingControls = new Map<string, PendingControl>();
   private readonly completedResults = new Map<string, YuanshuMessage>();
@@ -205,6 +221,7 @@ export class ControlClient {
     const socket = this.socket;
     this.socket = undefined;
     this.replays.clear();
+    for (const scope of this.leaseScopes.values()) this.clearLeaseTimer(scope);
     if (socket) socket.close();
     this.setState("closed");
   }
@@ -222,16 +239,101 @@ export class ControlClient {
     return () => this.recoveryTargets.delete(key);
   }
 
+  getLease(scope: LeaseScope): LeaseState {
+    return this.leases.get(leaseStorageKey(scope)) ?? { state: "none", epoch: 0 };
+  }
+
+  canMutate(scope: LeaseScope, controlType: string): boolean {
+    if (!MUTATING_CONTROLS.has(controlType)) return true;
+    const lease = this.getLease(scope);
+    return lease.state === "held" && !!lease.leaseId && !!lease.expiresAt && Date.parse(lease.expiresAt) > this.now().getTime();
+  }
+
+  async acquireLease(scope: LeaseScope, options: { force?: boolean; expectedEpoch?: number } = {}): Promise<LeaseState> {
+    const payload: Record<string, unknown> = {};
+    if (options.force !== undefined) payload.force = options.force;
+    if (options.expectedEpoch !== undefined) payload.expectedEpoch = options.expectedEpoch;
+    const result = await this.request("lease.acquire", payload, scope);
+    const state = this.leaseFromResult(scope, result);
+    this.setLease(scope, state);
+    if (state.state === "held") this.scheduleLeaseRenew(scope);
+    return state;
+  }
+
+  async renewLease(scope: LeaseScope): Promise<LeaseState> {
+    const current = this.getLease(scope);
+    if (current.state !== "held" || !current.leaseId) return current;
+    const result = await this.request("lease.renew", { leaseId: current.leaseId, epoch: current.epoch }, scope);
+    const state = this.leaseFromResult(scope, result);
+    this.setLease(scope, state);
+    if (state.state === "held") this.scheduleLeaseRenew(scope);
+    return state;
+  }
+
+  async releaseLease(scope: LeaseScope): Promise<LeaseState> {
+    const current = this.getLease(scope);
+    if (current.state !== "held" || !current.leaseId) return current;
+    this.clearLeaseTimer(scope);
+    const result = await this.request("lease.release", { leaseId: current.leaseId, epoch: current.epoch }, scope);
+    const state = this.leaseFromResult(scope, result);
+    this.setLease(scope, state);
+    return state;
+  }
+
+  private scheduleLeaseRenew(scope: LeaseScope): void {
+    this.clearLeaseTimer(scope);
+    const current = this.getLease(scope);
+    if (current.state !== "held" || !current.expiresAt) return;
+    const delay = Math.max(1000, Math.min(20_000, Math.floor((Date.parse(current.expiresAt) - this.now().getTime()) / 3)));
+    this.leaseTimers.set(leaseStorageKey(scope), setTimeout(() => {
+      this.leaseTimers.delete(leaseStorageKey(scope));
+      if (this.desired && this.stateValue === "connected") void this.renewLease(scope).catch(() => this.setLease(scope, { state: "lost", epoch: current.epoch }));
+    }, delay));
+  }
+
+  private clearLeaseTimer(scope: LeaseScope): void {
+    const timer = this.leaseTimers.get(leaseStorageKey(scope));
+    if (timer) clearTimeout(timer);
+    this.leaseTimers.delete(leaseStorageKey(scope));
+  }
+
+  private setLease(scope: LeaseScope, state: LeaseState): void {
+    const key = leaseStorageKey(scope);
+    this.leaseScopes.set(key, { ...scope });
+    this.leases.set(key, state);
+    if (state.state !== "held") this.clearLeaseTimer(scope);
+    this.options.onLease?.({ ...scope }, { ...state });
+  }
+
+  private leaseFromResult(scope: LeaseScope, result: YuanshuMessage): LeaseState {
+    const raw = isPlainObject(result.payload.lease) ? result.payload.lease : result.payload;
+    const epoch = numberValue(raw.epoch) ?? this.getLease(scope).epoch;
+    const status = stringValue(result.payload.status);
+    const state = typeof raw.state === "string" ? raw.state : status === "confirmed" ? "held" : "lost";
+    if (state === "held" && status !== "rejected") return { state: "held", leaseId: stringValue(raw.leaseId), holderClientId: stringValue(raw.holderClientId) ?? this.options.identity.clientId, epoch, expiresAt: stringValue(raw.expiresAt) };
+    if (state === "occupied") return { state: "occupied", holderClientId: stringValue(raw.holderClientId), epoch, expiresAt: stringValue(raw.expiresAt) };
+    if (result.payload.errorCode === "expired") return { state: "expired", holderClientId: stringValue(raw.holderClientId), epoch, expiresAt: stringValue(raw.expiresAt) };
+    if (state === "none" || state === "released") return { state: "none", epoch };
+    if (state === "held" && stringValue(raw.holderClientId) && stringValue(raw.holderClientId) !== this.options.identity.clientId) return { state: "occupied", holderClientId: stringValue(raw.holderClientId), epoch, expiresAt: stringValue(raw.expiresAt) };
+    return { state: "lost", holderClientId: stringValue(raw.holderClientId), epoch, expiresAt: stringValue(raw.expiresAt) };
+  }
+
   async sendControl(type: ControlType, payload: Record<string, unknown>, target: ControlTarget = {}): Promise<string> {
     const nodeId = this.resolveNodeId(target);
     const node = this.nodes.get(nodeId);
     if (!node) throw new Error("node is not registered");
     const messageId = randomID(this.random());
-    if (node.online === false) {
+    const scope = target.workspaceId && target.threadId ? { nodeId, workspaceId: target.workspaceId, threadId: target.threadId } : undefined;
+    if (node.online === false && !SERVER_CONTROLS.has(type)) {
       const action: ControlAction = { messageId, nodeId, type, state: "offline", ...targetWithoutNode(target) };
       this.options.onControlAction?.(action);
       if (MUTATING_CONTROLS.has(type)) this.options.onUnknownControl?.({ messageId, nodeId, type });
       throw new Error("node is offline");
+    }
+    if (MUTATING_CONTROLS.has(type) && (!scope || !this.canMutate(scope, type))) {
+      const action: ControlAction = { messageId, nodeId, type, state: "rejected", errorCode: "lease_lost", ...targetWithoutNode(target) };
+      this.options.onControlAction?.(action);
+      throw new Error("thread control lease is not held");
     }
     if (!this.socket || this.stateValue !== "connected") throw new Error("control client is not connected");
     const sequenceKey: ControlSequenceKey = {
@@ -242,7 +344,12 @@ export class ControlClient {
     };
     const sequence = await this.storage.nextControlSequence(sequenceKey);
     const sentAt = this.now().toISOString();
-    const expiresAt = new Date(this.now().getTime() + 120_000).toISOString();
+    const lease = scope && MUTATING_CONTROLS.has(type) ? this.getLease(scope) : undefined;
+    const leaseExpiry = lease?.state === "held" && lease.expiresAt ? Date.parse(lease.expiresAt) : Number.POSITIVE_INFINITY;
+    const expiresAt = new Date(Math.min(this.now().getTime() + 120_000, leaseExpiry)).toISOString();
+    const signedPayload = lease?.state === "held" && lease.leaseId
+      ? { ...payload, lease: { leaseId: lease.leaseId, epoch: lease.epoch } }
+      : payload;
     const message: YuanshuMessage = {
       protocolVersion: CURRENT_VERSION,
       messageId,
@@ -256,7 +363,7 @@ export class ControlClient {
       correlationId: messageId,
       nonce: randomID(this.random()),
       signer: { clientId: this.options.identity.clientId, keyId: this.options.identity.keyId },
-      payload,
+      payload: signedPayload,
       ...(target.workspaceId ? { workspaceId: target.workspaceId } : {}),
       ...(target.threadId ? { threadId: target.threadId } : {}),
       ...(target.turnId ? { turnId: target.turnId } : {}),
@@ -382,7 +489,19 @@ export class ControlClient {
     this.authFailures = 0;
     this.reconnectAttempt = 0;
     this.setState("connected");
+    void this.refreshLeases();
     await this.startReplay();
+  }
+
+  private async refreshLeases(): Promise<void> {
+    for (const scope of this.leaseScopes.values()) {
+      try {
+        const result = await this.request("lease.status", {}, scope);
+        this.setLease(scope, this.leaseFromResult(scope, result));
+      } catch {
+        // A reconnect must never acquire or replace a lease implicitly.
+      }
+    }
   }
 
   private handleClose(socket: RelaySocket): void {
@@ -420,6 +539,16 @@ export class ControlClient {
   }
 
   private async handleEvent(event: YuanshuMessage): Promise<void> {
+    if (this.isServerControlResult(event)) {
+      this.options.onControlResult?.(event);
+      this.applyLeaseResult(event);
+      this.resolveControl(event);
+      return;
+    }
+    if (this.isLeaseChanged(event)) {
+      this.applyLeaseChanged(event);
+      return;
+    }
     if (!this.validEvent(event)) return;
     if (!this.nodes.has(event.nodeId)) {
       this.registerNode({ ownerId: event.ownerId, nodeId: event.nodeId, status: "discovered", discovered: true, online: true });
@@ -588,6 +717,33 @@ export class ControlClient {
     }
   }
 
+  private applyLeaseResult(event: YuanshuMessage): void {
+    const pending = this.pendingControls.get(event.correlationId);
+    if (!pending || !pending.action.workspaceId || !pending.action.threadId) return;
+    if (!pending.action.type.startsWith("lease.")) return;
+    const scope: LeaseScope = { nodeId: pending.action.nodeId, workspaceId: pending.action.workspaceId, threadId: pending.action.threadId };
+    this.setLease(scope, this.leaseFromResult(scope, event));
+  }
+
+  private applyLeaseChanged(event: YuanshuMessage): void {
+    if (!event.workspaceId || !event.threadId || !isPlainObject(event.payload)) return;
+    const scope: LeaseScope = { nodeId: event.nodeId, workspaceId: event.workspaceId, threadId: event.threadId };
+    const epoch = numberValue(event.payload.epoch) ?? 0;
+    const current = this.getLease(scope);
+    if (epoch < current.epoch) return;
+    const state = stringValue(event.payload.state);
+    if (state === "held") {
+      const holder = stringValue(event.payload.holderClientId);
+      this.setLease(scope, holder === this.options.identity.clientId
+        ? { state: "held", leaseId: stringValue(event.payload.leaseId), holderClientId: holder, epoch, expiresAt: stringValue(event.payload.expiresAt) }
+        : { state: "occupied", holderClientId: holder, epoch, expiresAt: stringValue(event.payload.expiresAt) });
+    } else if (state === "expired") {
+      this.setLease(scope, { state: "expired", epoch, holderClientId: stringValue(event.payload.holderClientId) });
+    } else {
+      this.setLease(scope, { state: "none", epoch });
+    }
+  }
+
   private markUnknownControls(): void {
     for (const [messageId, pending] of this.pendingControls) {
       const { action } = pending;
@@ -633,6 +789,14 @@ export class ControlClient {
     return event.protocolVersion === CURRENT_VERSION && knownEvents.has(event.type) && event.ownerId === this.options.identity.ownerId && !!event.nodeId && event.streamId === EVENT_STREAM_ID && Number.isSafeInteger(event.sequence) && event.sequence > 0 && isPlainObject(event.payload);
   }
 
+  private isServerControlResult(event: YuanshuMessage): boolean {
+    return event.protocolVersion === CURRENT_VERSION && event.type === "control.result" && event.ownerId === this.options.identity.ownerId && !!event.nodeId && event.streamId === `${SERVER_CONTROL_STREAM_PREFIX}${this.options.identity.clientId}` && Number.isSafeInteger(event.sequence) && event.sequence > 0 && isPlainObject(event.payload);
+  }
+
+  private isLeaseChanged(event: YuanshuMessage): boolean {
+    return event.protocolVersion === CURRENT_VERSION && event.type === "lease.changed" && event.ownerId === this.options.identity.ownerId && !!event.nodeId && event.streamId.startsWith("lease.") && Number.isSafeInteger(event.sequence) && event.sequence > 0 && isPlainObject(event.payload);
+  }
+
   private observeNodeEvent(event: YuanshuMessage): void {
     const node = this.nodes.get(event.nodeId);
     if (!node) return;
@@ -673,6 +837,18 @@ export class ControlClient {
 function targetWithoutNode(target: ControlTarget): Pick<ControlTarget, "workspaceId" | "threadId" | "turnId" | "itemId"> {
   const { workspaceId, threadId, turnId, itemId } = target;
   return { ...(workspaceId ? { workspaceId } : {}), ...(threadId ? { threadId } : {}), ...(turnId ? { turnId } : {}), ...(itemId ? { itemId } : {}) };
+}
+
+function leaseStorageKey(scope: LeaseScope): string {
+  return `${scope.nodeId}\u001f${scope.workspaceId}\u001f${scope.threadId}`;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

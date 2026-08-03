@@ -63,6 +63,11 @@ describe("ControlClient recovery", () => {
     await tick();
     expect(await storage.getEventCursor({ ownerId: "owner", nodeId: "node", streamId: "node-events-v1" })).toBe(1);
 
+    const acquire = client.acquireLease({ nodeId: "node", workspaceId: "workspace", threadId: "thread" });
+    await tick();
+    const acquireMessage = JSON.parse(sockets[0].sent.at(-1) as string);
+    sockets[0].receive(serverResult("node", 1, acquireMessage.messageId, { state: "held", leaseId: "lease-1", holderClientId: "client", epoch: 1, expiresAt: "2099-01-01T00:01:00Z" }));
+    await acquire;
     await client.sendControl("turn.start", { input: "do not resend" }, { workspaceId: "workspace", threadId: "thread" });
     const mutation = JSON.parse(sockets[0].sent.at(-1) as string);
     sockets[0].close();
@@ -78,7 +83,7 @@ describe("ControlClient recovery", () => {
     expect(resentTypes).toContain("authenticate");
     expect(resentTypes).toContain("events.replay");
     expect(resentTypes).not.toContain("turn.start");
-    expect(mutation.sequence).toBe(2);
+    expect(mutation.sequence).toBe(3);
     expect(JSON.parse(sockets[1].sent.at(-1) as string).payload.afterSequence).toBe(1);
     client.close();
   });
@@ -186,6 +191,13 @@ function eventFor(nodeId: string, type: string, sequence: number, correlationId:
   return {
     protocolVersion: "1.0", messageId: `${nodeId}-event-${sequence}`, type, ownerId: "owner", nodeId, streamId: "node-events-v1",
     sequence, correlationId, sentAt: "2026-08-03T00:00:00Z", payload,
+  };
+}
+
+function serverResult(nodeId: string, sequence: number, correlationId: string, lease: Record<string, unknown>): Record<string, unknown> {
+  return {
+    protocolVersion: "1.0", messageId: `server-result-${sequence}`, type: "control.result", ownerId: "owner", nodeId,
+    streamId: "server-control-v1-client", sequence, correlationId, sentAt: "2026-08-03T00:00:00Z", payload: { status: "confirmed", lease },
   };
 }
 

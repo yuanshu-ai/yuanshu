@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import { ControlClient, type ControlClientState } from "./relay/control-client";
+import { ControlClient, type ControlClientState, type LeaseScope, type LeaseState } from "./relay/control-client";
 import { IndexedDBControlStorage, type ControlStorage, type StoredControlIdentity } from "./relay/storage";
 import { DataProjection, threadKey, turnKey, type ProjectionState, type ThreadItemProjection } from "./state/projection";
 
@@ -27,6 +27,7 @@ export function App() {
   const contextRestored = useRef(false);
   const loadedWorkspaces = useRef(new Set<string>());
   const loadedThreads = useRef(new Set<string>());
+  const loadedNotifications = useRef(new Set<string>());
 
   useEffect(() => {
     let disposed = false;
@@ -60,6 +61,11 @@ export function App() {
             projection.applyControlAction(action);
             if (!disposed) setRevision((value) => value + 1);
           },
+          onControlResult: (event) => {
+            projection.applyServerControlResult(event);
+            if (!disposed) setRevision((value) => value + 1);
+          },
+          onLease: () => { if (!disposed) setRevision((value) => value + 1); },
         });
         await client.ready;
         for (const node of client.listNodes()) projection.registerNode(node);
@@ -84,11 +90,16 @@ export function App() {
   const state = boot.status === "ready" ? boot.projection.state : undefined;
   const nodes = useMemo(() => state ? Object.values(state.nodes) : [], [state, revision]);
   const selectedNode = nodes.find((node) => node.nodeId === selectedNodeId);
+  const notifications = state ? Object.values(state.notifications).sort((left, right) => right.createdAt.localeCompare(left.createdAt)) : [];
+  const unreadNotifications = notifications.filter((item) => !item.read);
   const workspaces = useMemo(() => state ? Object.values(state.workspaces).filter((workspace) => workspace.nodeId === selectedNodeId) : [], [state, selectedNodeId, revision]);
   const threads = useMemo(() => state ? Object.values(state.threads)
     .filter((thread) => thread.nodeId === selectedNodeId && thread.workspaceId === selectedWorkspaceId)
     .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "")) : [], [state, selectedNodeId, selectedWorkspaceId, revision]);
   const selectedThread = state && selectedThreadId ? state.threads[threadKey(selectedNodeId, selectedWorkspaceId, selectedThreadId)] : undefined;
+  const leaseScope: LeaseScope | undefined = selectedThreadId && selectedNodeId && selectedWorkspaceId ? { nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, threadId: selectedThreadId } : undefined;
+  const lease = boot.status === "ready" && leaseScope ? boot.client.getLease(leaseScope) : { state: "none" as const, epoch: 0 };
+  const leaseHeld = lease.state === "held" && !!leaseScope && boot.status === "ready" && boot.client.canMutate(leaseScope, "turn.start");
   const turns = useMemo(() => selectedThread && state ? selectedThread.turnIds
     .map((turnId) => state.turns[turnKey(selectedNodeId, selectedWorkspaceId, selectedThreadId, turnId)])
     .filter((turn): turn is NonNullable<typeof turn> => Boolean(turn)) : [], [state, selectedThread, selectedNodeId, selectedWorkspaceId, selectedThreadId, revision]);
@@ -103,6 +114,12 @@ export function App() {
     loadedWorkspaces.current.add(key);
     void request(boot.client, "device.sync", {}, { nodeId: selectedNodeId }).catch(() => undefined);
     void request(boot.client, "workspace.list", { limit: 100 }, { nodeId: selectedNodeId }).catch(() => undefined);
+  }, [boot.status, selectedNodeId, connectionState]);
+
+  useEffect(() => {
+    if (boot.status !== "ready" || !selectedNodeId || connectionState !== "connected" || loadedNotifications.current.has(selectedNodeId)) return;
+    loadedNotifications.current.add(selectedNodeId);
+    void boot.client.request("notifications.list", { limit: 50 }, { nodeId: selectedNodeId }).catch(() => loadedNotifications.current.delete(selectedNodeId));
   }, [boot.status, selectedNodeId, connectionState]);
 
   useEffect(() => {
@@ -156,6 +173,42 @@ export function App() {
     }
   };
 
+  const changeLease = async (force: boolean) => {
+    if (boot.status !== "ready" || !leaseScope) return;
+    if (force && !window.confirm("当前 Thread 已被其他控制端占用。确认接管后，对方会立即变为只读。")) return;
+    try {
+      const next = await boot.client.acquireLease(leaseScope, { force, expectedEpoch: lease.epoch });
+      setMessage(next.state === "held" ? (force ? "已接管 Thread 控制权" : "已获得 Thread 控制权") : "Thread 仍由其他控制端控制");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "获取控制权失败");
+    }
+  };
+
+  const releaseCurrentLease = async () => {
+    if (boot.status !== "ready" || !leaseScope) return;
+    try {
+      await boot.client.releaseLease(leaseScope);
+      setMessage("已释放 Thread 控制权");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "释放控制权失败");
+    }
+  };
+
+  const resolveApproval = async (approval: (typeof approvals)[number], decision: "accept" | "decline") => {
+    if (boot.status !== "ready" || !leaseScope || !approval.operationDigest) {
+      setMessage("审批缺少可验证摘要，已保持只读");
+      return;
+    }
+    const highRisk = !approval.kind || /command|file|write|delete|shell/i.test(approval.kind);
+    if (!window.confirm(highRisk ? "这是高风险审批。确认后将把决定发送到本机 Codex？" : "确认发送审批决定？")) return;
+    try {
+      await boot.client.request("approval.resolve", { approvalId: approval.approvalId, decision, operationDigest: approval.operationDigest }, { nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, threadId: selectedThreadId, turnId: approval.turnId, itemId: approval.itemId });
+      setMessage(decision === "accept" ? "已发送批准，等待 Codex 确认" : "已发送拒绝，等待 Codex 确认");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "审批结果未知");
+    }
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const value = input.trim();
@@ -164,6 +217,10 @@ export function App() {
     if (composeMode === "new" || !selectedThreadId) {
       await runControl("thread.start", { input: value }, { workspaceId: selectedWorkspaceId });
       setComposeMode("turn");
+      return;
+    }
+    if (!leaseHeld) {
+      setMessage("追加 Turn 需要先获得这个 Thread 的控制权");
       return;
     }
     await runControl("turn.start", { input: value }, { workspaceId: selectedWorkspaceId, threadId: selectedThreadId });
@@ -179,7 +236,7 @@ export function App() {
     <main className="workbench-shell">
       <header className="topbar">
         <div className="brand-lockup"><span className="brand-mark">枢</span><div><strong>远枢</strong><span>Yuanshu workspace</span></div></div>
-        <div className={`connection-pill ${connectionState}`}><span className="status-dot" />{connectionLabel(connectionState)}</div>
+        <div className={`connection-pill ${connectionState}`}><span className="status-dot" />{connectionLabel(connectionState)}{unreadNotifications.length > 0 && <span className="notification-count">{unreadNotifications.length}</span>}</div>
         <a className="pair-link" href={pairingURL}>配对新设备</a>
       </header>
 
@@ -219,7 +276,10 @@ export function App() {
         <section className="detail-column">
           <div className="detail-heading">
             <div><span className="section-kicker">Thread 详情</span><h1>{selectedThread?.title || selectedThread?.preview || (selectedThreadId ? `Thread ${selectedThreadId.slice(0, 12)}` : "开始一个新任务")}</h1>{selectedThread?.preview && selectedThread.title && <p>{selectedThread.preview}</p>}</div>
-            <div className="detail-actions">{selectedThread && !activeTurn && <button className="secondary-button" disabled={busy || connectionState !== "connected"} onClick={() => void runControl("thread.resume", {}, { workspaceId: selectedWorkspaceId, threadId: selectedThreadId })}>恢复 Thread</button>}</div>
+            <div className="detail-actions">
+              {selectedThread && <LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => void releaseCurrentLease()} />}
+              {selectedThread && !activeTurn && <button className="secondary-button" disabled={busy || connectionState !== "connected"} onClick={() => void runControl("thread.resume", {}, { workspaceId: selectedWorkspaceId, threadId: selectedThreadId })}>恢复 Thread</button>}
+            </div>
           </div>
           {selectedThread && (selectedThread.recovery === "history_gap" || selectedThread.historyState === "partial" || selectedThread.historyState === "unavailable") && <div className="notice-banner"><span>!</span><div><b>{selectedThread.recovery === "history_gap" ? "历史存在缺口" : "历史内容不完整"}</b><small>源头事件或当前 Codex 版本无法提供全部历史，下面内容可能是部分视图。</small></div></div>}
           {selectedNode?.runtimeStatus === "unavailable" && <div className="notice-banner warning"><span>×</span><div><b>Codex app-server 暂不可用</b><small>Node 仍在保留本地状态，恢复连接后会继续同步。</small></div></div>}
@@ -227,18 +287,25 @@ export function App() {
             {turns.map((turn) => <TurnCard key={turn.key} turn={turn} />)}
             {!turns.length && <div className="detail-empty"><span className="signal-line" /><b>{selectedThreadId ? "正在读取 Thread 历史" : "选择一个 Thread，或直接开始新任务"}</b><p>源头的消息、命令、工具活动和文件变化会按时间顺序出现在这里。</p></div>}
           </div>
-          {approvals.length > 0 && <div className="read-only-panel"><div className="panel-title"><span>审批请求</span><em>只读</em></div>{approvals.map((approval) => <div className="approval-row" key={approval.key}><span className="approval-icon">!</span><div><b>{approval.kind ?? "高风险操作"}</b><p>{approval.summary ?? "Codex 正在等待本机审批"}</p></div><span className="muted-label">待处理</span></div>)}</div>}
+          {approvals.length > 0 && <div className="read-only-panel"><div className="panel-title"><span>审批请求</span><em>{leaseHeld ? "控制权已持有" : "需要控制权"}</em></div>{approvals.map((approval) => <div className="approval-row" key={approval.key}><span className="approval-icon">!</span><div><b>{approval.kind ?? "高风险操作"}</b><p>{approval.summary ?? "Codex 正在等待本机审批"}</p></div><div className="approval-actions"><button disabled={!leaseHeld || !approval.operationDigest} onClick={() => void resolveApproval(approval, "decline")}>拒绝</button><button disabled={!leaseHeld || !approval.operationDigest} onClick={() => void resolveApproval(approval, "accept")}>批准</button></div></div>)}</div>}
           {action && <div className={`action-feedback ${action.state}`}><span className="status-dot" /><span>{actionLabel(action.state)}</span><small>{action.type}</small></div>}
+          {unreadNotifications.length > 0 && <div className="notification-strip"><b>最近动态</b><span>{unreadNotifications[0].summary}</span></div>}
           {message && <div className="inline-message">{message}</div>}
           <form className="composer" onSubmit={(event) => void submit(event)}>
             <div className="composer-mode"><button type="button" className={composeMode === "new" ? "active" : ""} onClick={() => { setComposeMode("new"); setSelectedThreadId(""); }}>新 Thread</button><button type="button" className={composeMode === "turn" ? "active" : ""} disabled={!selectedThreadId} onClick={() => setComposeMode("turn")}>追加 Turn</button></div>
             <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={composeMode === "new" ? "告诉 Codex 你想在这个工作区完成什么…" : "继续这个上下文…"} disabled={busy || connectionState !== "connected" || !selectedWorkspaceId} rows={3} />
-            <div className="composer-footer"><span>{selectedWorkspaceId ? `${selectedNode?.name ?? "节点"} · ${workspaces.find((workspace) => workspace.workspaceId === selectedWorkspaceId)?.name ?? "工作区"}` : "选择工作区后开始"}</span><div>{activeTurn && <button type="button" className="stop-button" disabled={busy} onClick={() => void runControl("turn.interrupt", {}, { workspaceId: selectedWorkspaceId, threadId: selectedThreadId, turnId: activeTurn.turnId })}>停止 Turn</button>}<button className="send-button" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId}>{busy ? "发送中…" : composeMode === "new" ? "开始任务" : "发送"}<span>↗</span></button></div></div>
+            <div className="composer-footer"><span>{selectedWorkspaceId ? `${selectedNode?.name ?? "节点"} · ${workspaces.find((workspace) => workspace.workspaceId === selectedWorkspaceId)?.name ?? "工作区"}` : "选择工作区后开始"}</span><div>{activeTurn && <button type="button" className="stop-button" disabled={busy || !leaseHeld} onClick={() => void runControl("turn.interrupt", {}, { workspaceId: selectedWorkspaceId, threadId: selectedThreadId, turnId: activeTurn.turnId })}>停止 Turn</button>}<button className="send-button" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId || (composeMode === "turn" && !leaseHeld)}>{busy ? "发送中…" : composeMode === "new" ? "开始任务" : leaseHeld ? "发送" : "需控制权"}<span>↗</span></button></div></div>
           </form>
         </section>
       </div>
     </main>
   );
+}
+
+function LeaseControl({ lease, held, onAcquire, onTakeover, onRelease }: { lease: LeaseState; held: boolean; onAcquire: () => void; onTakeover: () => void; onRelease: () => void }) {
+  if (held) return <div className="lease-control"><span className="lease-badge held">你可操作</span><button className="text-button" onClick={onRelease}>释放</button></div>;
+  if (lease.state === "occupied") return <div className="lease-control"><span className="lease-badge occupied">他人控制 · {lease.expiresAt ? formatLeaseTime(lease.expiresAt) : ""}</span><button className="text-button" onClick={onTakeover}>接管</button></div>;
+  return <div className="lease-control"><span className="lease-badge">只读</span><button className="secondary-button" onClick={onAcquire}>获取控制权</button></div>;
 }
 
 function TurnCard({ turn }: { turn: ProjectionState["turns"][string] }) {
@@ -265,5 +332,6 @@ function connectionLabel(state: ControlClientState): string { return ({ idle: "�
 function statusLabel(status?: string): string { return ({ running: "执行中", active: "执行中", inProgress: "执行中", completed: "已完成", failed: "失败", interrupted: "已停止", idle: "待继续", waiting_approval: "等待审批", uncertain: "待确认", ambiguous: "结果不确定", unavailable: "运行时不可用" }[status ?? ""] ?? "待同步"); }
 function actionLabel(state: string): string { return ({ sent: "已发送", confirmed: "源头已确认", rejected: "已拒绝", ambiguous: "结果不确定", unknown: "结果未知", offline: "节点离线" }[state] ?? state); }
 function formatTime(value?: string): string { if (!value) return "刚刚"; const date = new Date(value); if (Number.isNaN(date.getTime())) return "刚刚"; return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
+function formatLeaseTime(value: string): string { const remaining = Math.max(0, Math.round((Date.parse(value) - Date.now()) / 1000)); return remaining > 0 ? `${remaining}s` : "已过期"; }
 function readContext(): { nodeId?: string; workspaceId?: string; threadId?: string } { try { const raw = sessionStorage.getItem("yuanshu-workbench-context"); return raw ? JSON.parse(raw) as { nodeId?: string; workspaceId?: string; threadId?: string } : {}; } catch { return {}; } }
 function writeContext(value: { nodeId: string; workspaceId: string; threadId: string }): void { try { sessionStorage.setItem("yuanshu-workbench-context", JSON.stringify(value)); } catch { /* browser storage is optional */ } }

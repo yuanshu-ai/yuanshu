@@ -63,7 +63,13 @@ const protocolSchemaJSON = `{
         "turn.interrupt",
         "approval.resolve",
         "events.replay",
-        "snapshot.request"
+        "snapshot.request",
+        "lease.acquire",
+        "lease.renew",
+        "lease.release",
+        "lease.status",
+        "notifications.list",
+        "notifications.read"
       ]
     },
     "eventType": {
@@ -89,6 +95,7 @@ const protocolSchemaJSON = `{
         "approval.requested",
         "approval.resolved",
         "control.result",
+        "lease.changed",
         "history.gap",
         "error"
       ]
@@ -175,7 +182,10 @@ const protocolSchemaJSON = `{
     "threadReadPayload": {
       "type": "object",
       "properties": {
-        "includeTurns": { "type": "boolean" }
+        "includeTurns": { "type": "boolean" },
+        "includeDiffs": { "type": "boolean" },
+        "diffPath": { "$ref": "#/$defs/logicalPath" },
+        "maxDiffBytes": { "type": "integer", "minimum": 1, "maximum": 65536 }
       },
       "additionalProperties": false
     },
@@ -187,13 +197,37 @@ const protocolSchemaJSON = `{
       },
       "additionalProperties": false
     },
+    "leaseProof": {
+      "type": "object",
+      "required": ["leaseId", "epoch"],
+      "properties": {
+        "leaseId": { "$ref": "#/$defs/opaqueId" },
+        "epoch": { "$ref": "#/$defs/sequence" }
+      },
+      "additionalProperties": false
+    },
+    "turnTextPayload": {
+      "type": "object",
+      "required": ["input"],
+      "properties": {
+        "input": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "lease": { "$ref": "#/$defs/leaseProof" }
+      },
+      "additionalProperties": false
+    },
+    "turnInterruptPayload": {
+      "type": "object",
+      "properties": { "lease": { "$ref": "#/$defs/leaseProof" } },
+      "additionalProperties": false
+    },
     "approvalResolvePayload": {
       "type": "object",
       "required": ["approvalId", "decision", "operationDigest"],
       "properties": {
         "approvalId": { "$ref": "#/$defs/opaqueId" },
         "decision": { "type": "string", "enum": ["accept", "decline"] },
-        "operationDigest": { "$ref": "#/$defs/operationDigest" }
+        "operationDigest": { "$ref": "#/$defs/operationDigest" },
+        "lease": { "$ref": "#/$defs/leaseProof" }
       },
       "additionalProperties": false
     },
@@ -205,6 +239,29 @@ const protocolSchemaJSON = `{
       },
       "additionalProperties": false
     },
+    "leaseAcquirePayload": {
+      "type": "object",
+      "properties": {
+        "force": { "type": "boolean" },
+        "expectedEpoch": { "$ref": "#/$defs/sequence" }
+      },
+      "additionalProperties": false
+    },
+    "leaseMutationPayload": {
+      "type": "object",
+      "required": ["leaseId", "epoch"],
+      "properties": {
+        "leaseId": { "$ref": "#/$defs/opaqueId" },
+        "epoch": { "$ref": "#/$defs/sequence" }
+      },
+      "additionalProperties": false
+    },
+    "notificationReadPayload": {
+      "type": "object",
+      "required": ["notificationId"],
+      "properties": { "notificationId": { "$ref": "#/$defs/opaqueId" } },
+      "additionalProperties": false
+    },
     "controlPayloadRules": {
       "allOf": [
         { "if": { "properties": { "type": { "const": "device.sync" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } },
@@ -213,12 +270,18 @@ const protocolSchemaJSON = `{
         { "if": { "properties": { "type": { "const": "thread.read" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/threadReadPayload" } } } },
         { "if": { "properties": { "type": { "const": "thread.start" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/textInputPayload" } } } },
         { "if": { "properties": { "type": { "const": "thread.resume" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } },
-        { "if": { "properties": { "type": { "const": "turn.start" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/textInputPayload" } } } },
-        { "if": { "properties": { "type": { "const": "turn.steer" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/textInputPayload" } } } },
-        { "if": { "properties": { "type": { "const": "turn.interrupt" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } },
+        { "if": { "properties": { "type": { "const": "turn.start" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/turnTextPayload" } } } },
+        { "if": { "properties": { "type": { "const": "turn.steer" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/turnTextPayload" } } } },
+        { "if": { "properties": { "type": { "const": "turn.interrupt" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/turnInterruptPayload" } } } },
         { "if": { "properties": { "type": { "const": "approval.resolve" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/approvalResolvePayload" } } } },
         { "if": { "properties": { "type": { "const": "events.replay" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/eventsReplayPayload" } } } },
-        { "if": { "properties": { "type": { "const": "snapshot.request" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } }
+        { "if": { "properties": { "type": { "const": "snapshot.request" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } },
+        { "if": { "properties": { "type": { "const": "lease.acquire" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/leaseAcquirePayload" } } } },
+        { "if": { "properties": { "type": { "const": "lease.renew" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/leaseMutationPayload" } } } },
+        { "if": { "properties": { "type": { "const": "lease.release" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/leaseMutationPayload" } } } },
+        { "if": { "properties": { "type": { "const": "lease.status" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/emptyControlPayload" } } } },
+        { "if": { "properties": { "type": { "const": "notifications.list" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/listPayload" } } } },
+        { "if": { "properties": { "type": { "const": "notifications.read" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/notificationReadPayload" } } } }
       ]
     },
     "statusPayload": {
@@ -245,6 +308,8 @@ const protocolSchemaJSON = `{
         "path": { "$ref": "#/$defs/logicalPath" },
         "changeType": { "type": "string", "enum": ["created", "modified", "deleted", "renamed"] },
         "diff": { "type": "string", "maxLength": 262144 },
+        "totalBytes": { "type": "integer", "minimum": 0 },
+        "digest": { "$ref": "#/$defs/operationDigest" },
         "exitCode": { "type": "integer" },
         "errorCode": { "$ref": "#/$defs/errorCode" },
         "errorMessage": { "type": "string", "maxLength": 4096 },
@@ -351,7 +416,10 @@ const protocolSchemaJSON = `{
       "required": ["path", "changeType"],
       "properties": {
         "path": { "$ref": "#/$defs/logicalPath" },
-        "changeType": { "type": "string", "enum": ["created", "modified", "deleted", "renamed"] }
+        "changeType": { "type": "string", "enum": ["created", "modified", "deleted", "renamed"] },
+        "totalBytes": { "type": "integer", "minimum": 0 },
+        "digest": { "$ref": "#/$defs/operationDigest" },
+        "truncated": { "type": "boolean" }
       },
       "additionalProperties": true
     },
@@ -360,7 +428,10 @@ const protocolSchemaJSON = `{
       "required": ["path", "diff"],
       "properties": {
         "path": { "$ref": "#/$defs/logicalPath" },
-        "diff": { "type": "string", "maxLength": 1048576 }
+        "diff": { "type": "string", "maxLength": 1048576 },
+        "totalBytes": { "type": "integer", "minimum": 0 },
+        "digest": { "$ref": "#/$defs/operationDigest" },
+        "truncated": { "type": "boolean" }
       },
       "additionalProperties": true
     },
@@ -381,6 +452,19 @@ const protocolSchemaJSON = `{
       "properties": {
         "approvalId": { "$ref": "#/$defs/opaqueId" },
         "decision": { "type": "string", "enum": ["accept", "decline"] }
+      },
+      "additionalProperties": true
+    },
+    "leaseChangedPayload": {
+      "type": "object",
+      "required": ["state", "epoch"],
+      "properties": {
+        "state": { "type": "string", "enum": ["held", "released", "expired"] },
+        "leaseId": { "$ref": "#/$defs/opaqueId" },
+        "holderClientId": { "$ref": "#/$defs/opaqueId" },
+        "epoch": { "$ref": "#/$defs/sequence" },
+        "expiresAt": { "$ref": "#/$defs/timestamp" },
+        "reason": { "type": "string", "maxLength": 64 }
       },
       "additionalProperties": true
     },
@@ -440,6 +524,7 @@ const protocolSchemaJSON = `{
         { "if": { "properties": { "type": { "const": "approval.requested" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/approvalRequestedPayload" } } } },
         { "if": { "properties": { "type": { "const": "approval.resolved" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/approvalResolvedPayload" } } } },
         { "if": { "properties": { "type": { "const": "control.result" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/controlResultPayload" } } } },
+        { "if": { "properties": { "type": { "const": "lease.changed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/leaseChangedPayload" } } } },
         { "if": { "properties": { "type": { "const": "history.gap" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/historyGapPayload" } } } },
         { "if": { "properties": { "type": { "const": "error" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/errorPayload" } } } }
       ]

@@ -11,18 +11,24 @@ const (
 type ControlType string
 
 const (
-	ControlDeviceSync      ControlType = "device.sync"
-	ControlWorkspaceList   ControlType = "workspace.list"
-	ControlThreadList      ControlType = "thread.list"
-	ControlThreadRead      ControlType = "thread.read"
-	ControlThreadStart     ControlType = "thread.start"
-	ControlThreadResume    ControlType = "thread.resume"
-	ControlTurnStart       ControlType = "turn.start"
-	ControlTurnSteer       ControlType = "turn.steer"
-	ControlTurnInterrupt   ControlType = "turn.interrupt"
-	ControlApprovalResolve ControlType = "approval.resolve"
-	ControlEventsReplay    ControlType = "events.replay"
-	ControlSnapshotRequest ControlType = "snapshot.request"
+	ControlDeviceSync        ControlType = "device.sync"
+	ControlWorkspaceList     ControlType = "workspace.list"
+	ControlThreadList        ControlType = "thread.list"
+	ControlThreadRead        ControlType = "thread.read"
+	ControlThreadStart       ControlType = "thread.start"
+	ControlThreadResume      ControlType = "thread.resume"
+	ControlTurnStart         ControlType = "turn.start"
+	ControlTurnSteer         ControlType = "turn.steer"
+	ControlTurnInterrupt     ControlType = "turn.interrupt"
+	ControlApprovalResolve   ControlType = "approval.resolve"
+	ControlEventsReplay      ControlType = "events.replay"
+	ControlSnapshotRequest   ControlType = "snapshot.request"
+	ControlLeaseAcquire      ControlType = "lease.acquire"
+	ControlLeaseRenew        ControlType = "lease.renew"
+	ControlLeaseRelease      ControlType = "lease.release"
+	ControlLeaseStatus       ControlType = "lease.status"
+	ControlNotificationsList ControlType = "notifications.list"
+	ControlNotificationsRead ControlType = "notifications.read"
 )
 
 var KnownControlTypes = []ControlType{
@@ -38,6 +44,12 @@ var KnownControlTypes = []ControlType{
 	ControlApprovalResolve,
 	ControlEventsReplay,
 	ControlSnapshotRequest,
+	ControlLeaseAcquire,
+	ControlLeaseRenew,
+	ControlLeaseRelease,
+	ControlLeaseStatus,
+	ControlNotificationsList,
+	ControlNotificationsRead,
 }
 
 type EventType string
@@ -63,6 +75,7 @@ const (
 	EventApprovalRequested     EventType = "approval.requested"
 	EventApprovalResolved      EventType = "approval.resolved"
 	EventControlResult         EventType = "control.result"
+	EventLeaseChanged          EventType = "lease.changed"
 	EventHistoryGap            EventType = "history.gap"
 	EventError                 EventType = "error"
 )
@@ -88,6 +101,7 @@ var KnownEventTypes = []EventType{
 	EventApprovalRequested,
 	EventApprovalResolved,
 	EventControlResult,
+	EventLeaseChanged,
 	EventHistoryGap,
 	EventError,
 }

@@ -29,7 +29,13 @@
     { "type": "turn.interrupt", "payload": {} },
     { "type": "approval.resolve", "payload": { "approvalId": "approval_1", "decision": "accept", "operationDigest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } },
     { "type": "events.replay", "payload": { "afterSequence": 42 } },
-    { "type": "snapshot.request", "payload": {} }
+    { "type": "snapshot.request", "payload": {} },
+    { "type": "lease.acquire", "payload": { "force": false, "expectedEpoch": 0 } },
+    { "type": "lease.renew", "payload": { "leaseId": "lease_1", "epoch": 1 } },
+    { "type": "lease.release", "payload": { "leaseId": "lease_1", "epoch": 1 } },
+    { "type": "lease.status", "payload": {} },
+    { "type": "notifications.list", "payload": { "limit": 20 } },
+    { "type": "notifications.read", "payload": { "notificationId": "notification_1" } }
   ],
   "eventBase": {
     "protocolVersion": "1.0",
@@ -76,6 +82,7 @@
     { "type": "approval.requested", "payload": { "approvalId": "approval_1", "operationDigest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "kind": "file-change" } },
     { "type": "approval.resolved", "payload": { "approvalId": "approval_1", "decision": "decline" } },
     { "type": "control.result", "payload": { "status": "confirmed" } },
+    { "type": "lease.changed", "payload": { "state": "held", "epoch": 1, "leaseId": "lease_1", "holderClientId": "client_1", "expiresAt": "2026-08-01T00:01:00Z" } },
     { "type": "history.gap", "payload": { "afterSequence": 1, "earliestSequence": 5 } },
     { "type": "error", "payload": { "code": "runtime_failed", "message": "synthetic failure", "retryable": true } }
   ],

@@ -16,7 +16,13 @@ export const KNOWN_CONTROL_TYPES = [
   "turn.interrupt",
   "approval.resolve",
   "events.replay",
-  "snapshot.request"
+  "snapshot.request",
+  "lease.acquire",
+  "lease.renew",
+  "lease.release",
+  "lease.status",
+  "notifications.list",
+  "notifications.read"
 ] as const;
 export type ControlType = (typeof KNOWN_CONTROL_TYPES)[number];
 
@@ -41,6 +47,7 @@ export const KNOWN_EVENT_TYPES = [
   "approval.requested",
   "approval.resolved",
   "control.result",
+  "lease.changed",
   "history.gap",
   "error"
 ] as const;

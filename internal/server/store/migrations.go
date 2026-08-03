@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const CurrentSchemaVersion = 3
+const CurrentSchemaVersion = 5
 
 type migration struct {
 	version    int
@@ -141,6 +141,50 @@ var serverMigrations = []migration{{
 		) STRICT`,
 		`CREATE INDEX node_enrollments_issuer_status ON node_enrollments(issuer_node_id, status, expires_at)`,
 	},
+}, {
+	version: 4,
+	name:    "control_leases",
+	statements: []string{
+		`CREATE TABLE control_leases (
+			owner_id TEXT NOT NULL,
+			node_id TEXT NOT NULL,
+			workspace_id TEXT NOT NULL,
+			thread_id TEXT NOT NULL,
+			lease_id TEXT,
+			holder_client_id TEXT,
+			epoch INTEGER NOT NULL CHECK (epoch >= 0),
+			acquired_at TEXT,
+			expires_at TEXT,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (owner_id, node_id, workspace_id, thread_id),
+			CHECK ((lease_id IS NULL AND holder_client_id IS NULL AND acquired_at IS NULL AND expires_at IS NULL) OR
+				(lease_id IS NOT NULL AND holder_client_id IS NOT NULL AND acquired_at IS NOT NULL AND expires_at IS NOT NULL)),
+			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
+		) STRICT`,
+		`CREATE INDEX control_leases_expiry ON control_leases(owner_id, expires_at)`,
+	},
+}, {
+	version: 5,
+	name:    "redacted_owner_notifications",
+	statements: []string{
+		`CREATE TABLE notifications (
+			id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+			owner_id TEXT NOT NULL,
+			node_id TEXT NOT NULL CHECK (length(node_id) BETWEEN 1 AND 128),
+			workspace_id TEXT,
+			thread_id TEXT,
+			turn_id TEXT,
+			type TEXT NOT NULL CHECK (type IN ('task.completed', 'task.failed', 'approval.required', 'node.offline', 'node.online')),
+			summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 512),
+			source_sequence INTEGER NOT NULL CHECK (source_sequence >= 0),
+			dedup_key TEXT NOT NULL CHECK (length(dedup_key) BETWEEN 1 AND 256),
+			created_at TEXT NOT NULL,
+			read_at TEXT,
+			UNIQUE(owner_id, dedup_key),
+			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
+		) STRICT`,
+		`CREATE INDEX notifications_owner_unread ON notifications(owner_id, read_at, created_at)`,
+	},
 }}
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -205,6 +249,10 @@ func schemaLiteral(version int) string {
 		return "3"
 	case 4:
 		return "4"
+	case 5:
+		return "5"
+	case 6:
+		return "6"
 	default:
 		panic("unsupported server schema version")
 	}

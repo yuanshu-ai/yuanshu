@@ -52,23 +52,29 @@ type HubSnapshot struct {
 }
 
 type Hub struct {
-	store        sessionStore
-	random       io.Reader
-	clock        func() time.Time
-	origins      map[string]struct{}
-	authTimeout  time.Duration
-	challengeTTL time.Duration
-	relayOptions transport.RelayOptions
-	limit        chan struct{}
-	mu           sync.RWMutex
-	nodes        map[string]*hubConnection
-	controls     map[string]*hubConnection
-	closed       bool
+	store         sessionStore
+	leases        hubLeaseStore
+	notifications hubNotificationStore
+	random        io.Reader
+	clock         func() time.Time
+	origins       map[string]struct{}
+	authTimeout   time.Duration
+	challengeTTL  time.Duration
+	relayOptions  transport.RelayOptions
+	limit         chan struct{}
+	mu            sync.RWMutex
+	leaseMu       sync.Mutex
+	leaseLocks    map[string]*sync.Mutex
+	nodes         map[string]*hubConnection
+	controls      map[string]*hubConnection
+	closed        bool
 }
 
 type hubConnection struct {
 	ownerID   string
 	subjectID string
+	keyID     string
+	publicKey ed25519.PublicKey
 	role      transport.SessionRole
 	relay     transport.Transport
 }
@@ -122,10 +128,18 @@ func NewHub(store sessionStore, options HubOptions) (*Hub, error) {
 		}
 		origins[origin] = struct{}{}
 	}
+	leases, ok := store.(hubLeaseStore)
+	if !ok {
+		leases = newMemoryLeaseStore(clock)
+	}
+	notifications, ok := store.(hubNotificationStore)
+	if !ok {
+		notifications = newMemoryNotificationStore(clock)
+	}
 	return &Hub{
-		store: store, random: random, clock: clock, origins: origins, authTimeout: authTimeout, challengeTTL: challengeTTL,
+		store: store, leases: leases, notifications: notifications, random: random, clock: clock, origins: origins, authTimeout: authTimeout, challengeTTL: challengeTTL,
 		relayOptions: transport.RelayOptions{QueueCapacity: options.QueueCapacity, HeartbeatInterval: options.HeartbeatInterval, IdleTimeout: options.IdleTimeout},
-		limit:        make(chan struct{}, connectionLimit), nodes: make(map[string]*hubConnection), controls: make(map[string]*hubConnection),
+		limit:        make(chan struct{}, connectionLimit), nodes: make(map[string]*hubConnection), controls: make(map[string]*hubConnection), leaseLocks: make(map[string]*sync.Mutex),
 	}, nil
 }
 
@@ -159,7 +173,7 @@ func (h *Hub) NodeHandler(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	h.serve(writer, request, transport.SessionRoleNode, record.OwnerID, record.NodeID, record.PublicKey)
+	h.serve(writer, request, transport.SessionRoleNode, record.OwnerID, record.NodeID, "", record.PublicKey)
 }
 
 func (h *Hub) ControlHandler(writer http.ResponseWriter, request *http.Request) {
@@ -195,10 +209,10 @@ func (h *Hub) ControlHandler(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	h.serve(writer, request, transport.SessionRoleControl, record.OwnerID, record.ClientID, record.PublicKey)
+	h.serve(writer, request, transport.SessionRoleControl, record.OwnerID, record.ClientID, record.KeyID, record.PublicKey)
 }
 
-func (h *Hub) serve(writer http.ResponseWriter, request *http.Request, role transport.SessionRole, ownerID, subjectID string, publicKey []byte) {
+func (h *Hub) serve(writer http.ResponseWriter, request *http.Request, role transport.SessionRole, ownerID, subjectID, keyID string, publicKey []byte) {
 	conn, err := websocket.Accept(writer, request, &websocket.AcceptOptions{
 		Subprotocols: []string{transport.RelaySubprotocol}, InsecureSkipVerify: true,
 	})
@@ -230,7 +244,7 @@ func (h *Hub) serve(writer http.ResponseWriter, request *http.Request, role tran
 		_ = conn.CloseNow()
 		return
 	}
-	connection := &hubConnection{ownerID: ownerID, subjectID: subjectID, role: role, relay: relay}
+	connection := &hubConnection{ownerID: ownerID, subjectID: subjectID, keyID: keyID, publicKey: append(ed25519.PublicKey(nil), publicKey...), role: role, relay: relay}
 	if !h.register(connection) {
 		_ = relay.Close()
 		return
@@ -292,8 +306,22 @@ func (h *Hub) route(ctx context.Context, source *hubConnection) {
 			if header.NodeID != source.subjectID {
 				return
 			}
+			h.observeNodeEvent(ctx, source, frame)
 			h.broadcast(source.ownerID, frame)
 			continue
+		}
+		var control protocolv1.YuanshuMessage
+		if leaseRequired(header.Type) || serverControl(header.Type) {
+			control, err = h.validateControlFrame(source, frame.Bytes())
+			if err != nil {
+				return
+			}
+			if serverControl(header.Type) {
+				if err := h.handleServerControl(ctx, source, control); err != nil {
+					return
+				}
+				continue
+			}
 		}
 		target := h.node(source.ownerID, header.NodeID)
 		if target == nil {
@@ -304,11 +332,37 @@ func (h *Hub) route(ctx context.Context, source *hubConnection) {
 			// a control.result for a message that never reached a Node.
 			continue
 		}
-		if err := target.relay.Send(ctx, frame); err != nil {
+		send := func() error {
+			if leaseRequired(header.Type) {
+				if _, err := h.checkLease(ctx, source, control); err != nil {
+					code := protocolv1.ErrorConflict
+					if errors.Is(err, serverstore.ErrExpired) {
+						code = protocolv1.ErrorExpired
+					}
+					return h.sendServerResult(ctx, source, control, protocolv1.ControlResultRejected, code, nil)
+				}
+			}
+			return target.relay.Send(ctx, frame)
+		}
+		if leaseRequired(header.Type) {
+			if err := h.withLeaseScopeForMessage(control, send); err != nil {
+				return
+			}
+			continue
+		}
+		if err := send(); err != nil {
 			_ = target.relay.Close()
 			continue
 		}
 	}
+}
+
+func (h *Hub) withLeaseScopeForMessage(message protocolv1.YuanshuMessage, fn func() error) error {
+	scope, err := messageLeaseScope(message)
+	if err != nil {
+		return err
+	}
+	return h.withLeaseLock(scope, fn)
 }
 
 type routeHeader struct {
@@ -364,6 +418,7 @@ func (h *Hub) unregister(connection *hubConnection) {
 	if connection.role == transport.SessionRoleNode {
 		if h.nodes[key] == connection {
 			delete(h.nodes, key)
+			_ = h.saveNotification(context.Background(), serverstore.Notification{ID: h.randomNotificationID(), OwnerID: connection.ownerID, NodeID: connection.subjectID, Type: "node.offline", Summary: "节点已离线", DedupKey: "node.offline:" + connection.subjectID + ":" + h.clock().UTC().Format("20060102150405"), CreatedAt: h.clock().UTC()})
 		}
 	} else if h.controls[key] == connection {
 		delete(h.controls, key)

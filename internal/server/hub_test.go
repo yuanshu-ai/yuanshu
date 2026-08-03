@@ -6,12 +6,15 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
 	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
@@ -53,7 +56,7 @@ func newHubFixture(t *testing.T) hubFixture {
 	credentialHash := sha256.Sum256([]byte(credential))
 	store := fakeSessionStore{
 		node:    serverstore.NodeSession{OwnerID: "own_test", NodeID: "nod_test", PublicKey: nodePublic, CredentialHash: credentialHash[:], Status: "active"},
-		control: serverstore.ControlClientSession{OwnerID: "own_test", ClientID: "cli_test", PublicKey: controlPublic, Status: "active"},
+		control: serverstore.ControlClientSession{OwnerID: "own_test", ClientID: "cli_test", KeyID: "key_test", PublicKey: controlPublic, Status: "active"},
 	}
 	origin := "https://control.example.test"
 	hub, err := NewHub(store, HubOptions{AllowedControlOrigins: []string{origin}})
@@ -176,6 +179,109 @@ func TestHubKeepsControlSessionAliveWhenTargetNodeIsOffline(t *testing.T) {
 	if err != nil || !bytes.Equal(got.Bytes(), valid) {
 		t.Fatalf("control session did not survive offline target: frame=%q err=%v", got.Bytes(), err)
 	}
+}
+
+func TestHubLeaseGuardsTurnControlsAndAllowsCurrentHolder(t *testing.T) {
+	fixture := newHubFixture(t)
+	node := fixture.dialNode(t)
+	defer node.Close()
+	control := fixture.dialControl(t)
+	defer control.Close()
+	waitHubSnapshot(t, fixture.hub, 1, 1)
+
+	withoutLease := signedControl(t, fixture, protocolv1.ControlTurnStart, 1, map[string]any{"input": "blocked"}, "workspace", "thread", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(withoutLease)); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := receiveJSON(control)
+	if err != nil || blocked["type"] != string(protocolv1.EventControlResult) || blocked["correlationId"] != "control-1" {
+		t.Fatalf("blocked result=%v err=%v", blocked, err)
+	}
+	shortContext, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := node.Receive(shortContext); err == nil {
+		t.Fatal("turn without lease reached Node")
+	}
+
+	acquire := signedControl(t, fixture, protocolv1.ControlLeaseAcquire, 2, map[string]any{}, "workspace", "thread", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(acquire)); err != nil {
+		t.Fatal(err)
+	}
+	acquired, err := receiveJSONType(control, string(protocolv1.EventControlResult))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leasePayload, ok := acquired["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("acquire payload=%v", acquired)
+	}
+	lease, ok := leasePayload["lease"].(map[string]any)
+	if !ok {
+		t.Fatalf("acquire lease=%v", leasePayload)
+	}
+	leaseID, _ := lease["leaseId"].(string)
+	epoch, _ := lease["epoch"].(float64)
+	withLease := signedControl(t, fixture, protocolv1.ControlTurnStart, 3, map[string]any{"input": "allowed", "lease": map[string]any{"leaseId": leaseID, "epoch": epoch}}, "workspace", "thread", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(withLease)); err != nil {
+		t.Fatal(err)
+	}
+	forwarded, err := node.Receive(context.Background())
+	if err != nil || string(forwarded.Bytes()) != string(withLease) {
+		t.Fatalf("leased turn=%q err=%v", forwarded.Bytes(), err)
+	}
+}
+
+func signedControl(t *testing.T, fixture hubFixture, kind protocolv1.ControlType, sequence int64, payload map[string]any, workspaceID, threadID, turnID, itemID string) []byte {
+	t.Helper()
+	now := time.Now().UTC()
+	message := protocolv1.YuanshuMessage{ProtocolVersion: protocolv1.CurrentVersion, MessageID: "control-" + fmt.Sprint(sequence), Type: string(kind), SentAt: now.Format(time.RFC3339Nano), ExpiresAt: stringPtr(now.Add(time.Minute).Format(time.RFC3339Nano)), OwnerID: fixture.store.control.OwnerID, NodeID: fixture.store.node.NodeID, StreamID: "control-stream", Sequence: sequence, CorrelationID: "control-" + fmt.Sprint(sequence), Nonce: stringPtr(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(sequence)}, 16))), Signer: &protocolv1.Signer{ClientID: fixture.store.control.ClientID, KeyID: fixture.store.control.KeyID}, Payload: payload}
+	if workspaceID != "" {
+		message.WorkspaceID = stringPtr(workspaceID)
+	}
+	if threadID != "" {
+		message.ThreadID = stringPtr(threadID)
+	}
+	if turnID != "" {
+		message.TurnID = stringPtr(turnID)
+	}
+	if itemID != "" {
+		message.ItemID = stringPtr(itemID)
+	}
+	input, err := protocolv1.ControlSigningInput(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := ed25519.Sign(fixture.controlPrivate, input)
+	encoded := base64.RawURLEncoding.EncodeToString(signature)
+	message.Signature = &encoded
+	result, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func receiveJSON(connection transport.Transport) (map[string]any, error) {
+	frame, err := connection.Receive(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	err = json.Unmarshal(frame.Bytes(), &result)
+	return result, err
+}
+
+func receiveJSONType(connection transport.Transport, messageType string) (map[string]any, error) {
+	for attempt := 0; attempt < 4; attempt++ {
+		message, err := receiveJSON(connection)
+		if err != nil {
+			return nil, err
+		}
+		if message["type"] == messageType {
+			return message, nil
+		}
+	}
+	return nil, fmt.Errorf("message type %q not received", messageType)
 }
 
 func TestHubRoutesRemoteControlThroughStandaloneLocalNode(t *testing.T) {
