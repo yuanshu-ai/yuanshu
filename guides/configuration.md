@@ -27,7 +27,9 @@ Node configuration includes:
 
 - display identity and `relay` or `standalone` transport;
 - Relay WSS URL, optional proxy, timeout, and optional local CA bundle;
-- Codex stdio settings and local SecretRefs;
+- Codex stdio settings and local SecretRefs; API Key, custom Base URL authentication,
+  Provider headers, and Agent credentials remain managed by Codex or the local OS and
+  are not copied into Yuanshu configuration;
 - event retention;
 - registered workspace IDs, display names, canonical local paths, read/write policy, and network ceiling.
 
@@ -38,6 +40,10 @@ yuanshu node setup
 yuanshu node ui
 yuanshu node doctor --json
 ```
+
+The current schema exposes one Codex Adapter. A future version will add local Agent
+instances and workspace-to-Agent bindings through an explicit migration; users should
+not add arbitrary unofficial TOML fields in anticipation of that format.
 
 When automatic browser opening or the native directory picker is unavailable, keep the setup local by printing the one-minute loopback URL and preselecting the workspace from the CLI:
 

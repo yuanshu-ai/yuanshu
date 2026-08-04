@@ -10,7 +10,9 @@
 [![项目状态](https://img.shields.io/badge/status-pre--alpha-orange.svg)](#项目状态)
 [![CI](https://github.com/yuanshu-ai/yuanshu/actions/workflows/ci.yml/badge.svg)](https://github.com/yuanshu-ai/yuanshu/actions/workflows/ci.yml)
 
-远枢让你从手机、平板或浏览器跟进和控制运行在个人电脑上的 Codex。它展示 Thread、流式输出、命令、Diff、审批和恢复等 Agent 原生状态，而不是镜像整个桌面。
+远枢让你从手机、平板或浏览器跟进和控制运行在个人电脑上的 Codex。它把用户实际使用的 Codex 环境——包括 API Key 认证、自定义 Base URL、模型 Provider 网关、代理、MCP 和本地工具——留在 Node 电脑上，并展示 Agent 原生状态，而不是镜像整个桌面。
+
+Codex 是第一个完整集成。长期产品是面向本地 Coding Agent 的开源、自托管远程工作台，后续计划通过 Adapter 接入 Claude Code、OpenCode、Gemini、Grok Build、Zcode、WorkBuddy 等结构化 Agent Runtime。
 
 ![远枢桌面工作台](./.github/assets/readme/desktop-workbench.png)
 
@@ -31,6 +33,7 @@
 
 - 一个个人 Owner 可以绑定并切换多个 Yuanshu Node。
 - Windows 和 macOS Node 在本机运行 Codex app-server，Agent 凭据始终留在对应电脑。
+- 使用 API Key 或自定义 Provider 的 Codex 继续保留本机 Base URL、认证、代理、MCP 和工具环境，同时可以从 Web 工作台控制。
 - 移动优先 Web 工作台可以列出工作区和 Thread、读取历史、接收流式事件、启动或引导 Turn，并停止活动任务。
 - Thread 级租约防止两个浏览器同时修改同一任务。
 - 已实现签名审批、命令/工具活动、文件变化、有界 Diff、通知和断线恢复。
@@ -38,7 +41,7 @@
 - Server 在一个进程中内嵌工作台、配对页、Relay 和同源管理后台。
 - 四种自托管模式覆盖本机 loopback、局域网托管证书、公网 IP ACME，以及已有证书或同机反向代理。
 
-远枢当前首先集成 Codex。它不提供托管算力、远程桌面、通用 Web Terminal、Server 永久任务正文存储、团队 ACL 或其他 Agent Adapter。
+远枢当前首先集成 Codex。Server 不代理模型 API，也不要求 Agent 必须使用某个厂商移动端账户链路。当前不提供托管算力、远程桌面、通用 Web Terminal、Server 永久任务正文存储、团队 ACL 或其它正式 Agent Adapter。
 
 <!-- readme-section: quick-start -->
 ## 从源码快速开始
@@ -126,13 +129,14 @@ flowchart LR
     Client["手机 / 平板 / 浏览器"] -->|"HTTPS / WSS"| Server["Yuanshu Server<br/>Web + 配对 + Relay + Admin"]
     Node["Yuanshu Node<br/>本地安全边界"] -->|"出站 WSS"| Server
     Server -->|"签名控制消息"| Node
-    Node --> Adapter["CodexAdapter"]
-    Adapter --> Codex["Codex app-server"]
-    Codex --> Workspace["允许的工作区"]
-    Codex --> Credentials["本地 Agent 凭据"]
+    Node --> Registry["Agent Adapter 边界"]
+    Registry --> Adapter["当前 CodexAdapter"]
+    Adapter --> Runtime["Codex app-server"]
+    Runtime --> Workspace["允许的工作区"]
+    Runtime --> Credentials["本地 Agent / Provider 凭据"]
 ```
 
-Server 负责身份认证、个人路由、租约和不可变 Protocol v1 帧转发，不能绕过 Node 控制 Agent Runtime。Node 始终是控制端签名、防重放、工作区 ID、本地路径、权限、审批和 Codex 进程所有权的最终执行边界。
+Server 负责身份认证、个人路由、租约和不可变 Protocol v1 帧转发，不能绕过 Node 控制 Agent Runtime。Node 始终是控制端签名、防重放、工作区 ID、本地路径、权限、审批和 Agent 进程所有权的最终执行边界。
 
 远枢使用一个二进制提供三个入口：
 
@@ -147,7 +151,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 
 | 数据 | Node 电脑 | Server | 浏览器 |
 | --- | --- | --- | --- |
-| Codex 登录、API Key、Git/SSH 凭据 | 留在本地 Agent 或操作系统安全存储 | 不保存 | 不保存 |
+| Agent 登录、API Key、自定义 Base URL 凭据、Git/SSH 凭据 | 留在本地 Agent 或操作系统安全存储 | 不保存 | 不保存 |
 | Node 身份与会话 | Ed25519 私钥保存在操作系统安全存储；短期会话仅在内存 | 公钥与撤销元数据；短期会话仅在内存 | 不保存 |
 | Thread 正文、命令输出和 Diff | Runtime 与有界本地恢复状态 | 不永久保存 | 仅内存投影 |
 | 控制端私钥 | 不保存 | 只保存公钥 | IndexedDB 中不可导出的 CryptoKey |
@@ -168,7 +172,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - Linux Node、可安装 PWA、Web Push、团队角色、多租户托管和其他 Agent Adapter 属于后续能力。
 - Server 仍是个人单 Owner 控制面，不永久保存任务正文。
 
-项目会先完成个人远程 Codex 闭环，再扩展小团队权限、商业多租户或其他 Agent。
+项目会先完成个人远程 Codex 闭环，再扩展小团队权限或商业多租户。接入第二个 Agent 前，Node 会先加入静态 Adapter Registry、本地 Agent Instance、稳定 Yuanshu Task Binding 和运行时能力协商，避免新 Adapter 把私有协议泄漏到 Server 或 Web。
 
 <!-- readme-section: documentation -->
 ## 文档
@@ -180,6 +184,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - [个人 Web 工作台](./guides/web-workbench.md)
 - [Server 管理后台](./guides/server-admin.md)
 - [Codex 兼容矩阵](./guides/codex-compatibility.md)
+- [Agent 平台演进方向](./guides/agent-platform.md)
 - [Protocol 与配置 Schema](./schemas/README.md)
 - [测试布局与 M0 PoC 说明](./tests/README.md)
 

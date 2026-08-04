@@ -8,6 +8,7 @@ These guides document the public, user-facing behavior of the current source-bui
 - [Personal Web workbench](./web-workbench.md)
 - [Server administration console](./server-admin.md)
 - [Codex compatibility](./codex-compatibility.md)
+- [Agent platform direction](./agent-platform.md)
 
 PF-052 real-device acceptance is still in progress. These documents describe implemented behavior, but they do not turn the current source tree into a supported production release.
 

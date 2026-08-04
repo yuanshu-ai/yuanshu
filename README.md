@@ -10,7 +10,9 @@
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](#project-status)
 [![CI](https://github.com/yuanshu-ai/yuanshu/actions/workflows/ci.yml/badge.svg)](https://github.com/yuanshu-ai/yuanshu/actions/workflows/ci.yml)
 
-Yuanshu lets you follow and control Codex work running on your personal computers from a phone, tablet, or browser. It presents agent-native state—threads, streaming output, commands, diffs, approvals, and recovery—instead of mirroring an entire desktop.
+Yuanshu lets you follow and control Codex work running on your personal computers from a phone, tablet, or browser. It keeps the Codex environment you actually use—including API-key authentication, custom Base URLs, model-provider gateways, proxies, MCP servers, and local tools—on the Node machine. It presents agent-native state instead of mirroring an entire desktop.
+
+Codex is the first complete integration. The long-term product is an open, self-hosted remote workbench for local coding agents, with future adapters planned for Claude Code, OpenCode, Gemini, Grok Build, Zcode, WorkBuddy, and other structured Agent runtimes.
 
 ![Yuanshu desktop workbench](./.github/assets/readme/desktop-workbench.png)
 
@@ -31,6 +33,7 @@ The implementation is usable for development and self-hosting evaluation. Automa
 
 - One personal Owner can bind and switch between multiple Yuanshu Nodes.
 - Windows and macOS Nodes run Codex app-server locally and keep Agent credentials on that machine.
+- API-key and custom-Provider Codex setups keep their Base URL, authentication, proxy, MCP, and tool environment local while remaining controllable from the Web workbench.
 - The mobile-first Web workbench can list workspaces and Threads, read history, stream events, start or steer Turns, and stop active work.
 - Thread-scoped leases prevent two browsers from changing the same task at once.
 - Signed approvals, command/tool activity, file changes, bounded Diff views, notifications, and reconnect recovery are implemented.
@@ -38,7 +41,7 @@ The implementation is usable for development and self-hosting evaluation. Automa
 - The Server embeds the workbench, pairing page, Relay, and same-origin administration console in one process.
 - Four self-hosting modes cover loopback, managed LAN certificates, public-IP ACME, and existing certificates or a same-host reverse proxy.
 
-Yuanshu currently integrates Codex first. It does not provide hosted compute, remote desktop, a general-purpose browser terminal, permanent Server-side task-content storage, team ACLs, or additional Agent adapters.
+Yuanshu currently integrates Codex first. Its Server does not proxy model API calls or require the Agent to use a vendor-owned mobile-account path. It does not provide hosted compute, remote desktop, a general-purpose browser terminal, permanent Server-side task-content storage, team ACLs, or additional production Agent adapters yet.
 
 <!-- readme-section: quick-start -->
 ## Quick start from source
@@ -126,13 +129,14 @@ flowchart LR
     Client["Phone / Tablet / Browser"] -->|"HTTPS / WSS"| Server["Yuanshu Server<br/>Web + Pairing + Relay + Admin"]
     Node["Yuanshu Node<br/>Local security boundary"] -->|"Outbound WSS"| Server
     Server -->|"Signed controls"| Node
-    Node --> Adapter["CodexAdapter"]
-    Adapter --> Codex["Codex app-server"]
-    Codex --> Workspace["Allowed workspaces"]
-    Codex --> Credentials["Local Agent credentials"]
+    Node --> Registry["Agent Adapter boundary"]
+    Registry --> Adapter["CodexAdapter today"]
+    Adapter --> Runtime["Codex app-server"]
+    Runtime --> Workspace["Allowed workspaces"]
+    Runtime --> Credentials["Local Agent / Provider credentials"]
 ```
 
-The Server authenticates identities, manages personal routing and leases, and relays immutable Protocol v1 frames. It never bypasses the Node to control an Agent Runtime. The Node remains the final enforcement point for controller signatures, replay protection, workspace IDs, local paths, permissions, approvals, and Codex process ownership.
+The Server authenticates identities, manages personal routing and leases, and relays immutable Protocol v1 frames. It never bypasses the Node to control an Agent Runtime. The Node remains the final enforcement point for controller signatures, replay protection, workspace IDs, local paths, permissions, approvals, and Agent process ownership.
 
 Yuanshu ships one binary with three entry points:
 
@@ -147,7 +151,7 @@ yuanshu standalone   Server + Web + local Node in one deployment
 
 | Data | Node machine | Server | Browser |
 | --- | --- | --- | --- |
-| Codex login, API keys, Git/SSH credentials | Remain in local Agent or OS secure storage | Never stored | Never stored |
+| Agent login, API keys, custom Base URL credentials, Git/SSH credentials | Remain in local Agent or OS secure storage | Never stored | Never stored |
 | Node identity and sessions | Ed25519 private key in OS secure storage; short session in memory | Public key and revocation metadata; short session in memory | Never stored |
 | Thread content, command output, and Diffs | Runtime and bounded local recovery state | Not permanently stored | In-memory projection only |
 | Control-client private key | Not stored | Public key only | Non-exportable IndexedDB CryptoKey |
@@ -168,7 +172,7 @@ Report security vulnerabilities privately through [GitHub Private Vulnerability 
 - Linux Node, installable PWA, Web Push, team roles, multi-tenant hosting, and additional Agent adapters are later work.
 - The Server remains a personal single-Owner control plane and does not permanently store task bodies.
 
-The project will finish the personal remote Codex loop before expanding to small-team permissions, commercial multi-tenancy, or additional Agents.
+The project will finish the personal remote Codex loop before expanding to small-team permissions or commercial multi-tenancy. Before adding a second Agent, the Node will introduce a static Adapter Registry, local Agent Instances, stable Yuanshu Task bindings, and runtime capability negotiation so new adapters do not leak private protocols into the Server or Web.
 
 <!-- readme-section: documentation -->
 ## Documentation
@@ -180,6 +184,7 @@ The project will finish the personal remote Codex loop before expanding to small
 - [Personal Web workbench](./guides/web-workbench.md)
 - [Server administration console](./guides/server-admin.md)
 - [Codex compatibility matrix](./guides/codex-compatibility.md)
+- [Agent platform direction](./guides/agent-platform.md)
 - [Protocol and configuration schemas](./schemas/README.md)
 - [Test layout and M0 PoC notes](./tests/README.md)
 
