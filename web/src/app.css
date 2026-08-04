@@ -337,6 +337,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .config-facts { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 9px 0; border-top: 1px solid var(--line); color: var(--muted); font: 9px ui-monospace, monospace; }
 .workspace-fact { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); color: var(--quiet); font-size: 9px; }
 .workspace-fact b { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.pending-config-summary { display: grid; gap: 5px; padding: 10px 12px; border-left: 2px solid var(--warning); background: var(--panel-raised); color: var(--muted); font-size: 10px; }
+.pending-config-summary b { color: var(--warning); }
+.pending-config-summary span, .pending-config-summary small { overflow-wrap: anywhere; }
 .settings-links { display: flex; gap: 8px; margin-top: 18px; }
 .settings-links a { padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); font-size: 9px; text-decoration: none; }
 

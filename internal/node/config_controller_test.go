@@ -72,9 +72,12 @@ func TestNodeConfigControllerRedactsAndUsesRevisionedPendingChanges(t *testing.T
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
-	summary := configChangeSummary(pending[0])
+	summary := configChangeSummary(pending[0], loaded.Config)
 	if len(summary.Fields) != 1 || summary.Fields[0] != "relayUrl" {
 		t.Fatalf("pending summary fields = %v", summary.Fields)
+	}
+	if summary.Risk != "high" || !summary.RelayReconnect || summary.PermissionChange != "unchanged" || len(summary.Details) != 1 || summary.Details[0].Before != "wss://relay.example.test" || summary.Details[0].After != "wss://new-relay.example.test" {
+		t.Fatalf("pending safety summary = %#v", summary)
 	}
 	if _, err := controller.Approve(ctx, pending[0].ID); err != nil {
 		t.Fatal(err)
@@ -82,6 +85,36 @@ func TestNodeConfigControllerRedactsAndUsesRevisionedPendingChanges(t *testing.T
 	loaded, err = file.Load(ctx)
 	if err != nil || loaded.Config.Relay.URL != "wss://new-relay.example.test" {
 		t.Fatalf("approved relay=%q err=%v", loaded.Config.Relay.URL, err)
+	}
+}
+
+func TestNodeConfigControllerRejectsExpiredPendingChange(t *testing.T) {
+	ctx := context.Background()
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "node.toml")
+	file, _ := config.NewFileStore(configPath)
+	if err := file.Save(ctx, testRemoteConfig()); err != nil {
+		t.Fatal(err)
+	}
+	local, err := store.Open(ctx, filepath.Join(directory, "node.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	now := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	controller, _ := newNodeConfigController(configPath, local, func() time.Time { return now })
+	view, _ := controller.Read(ctx)
+	result, err := controller.Update(ctx, view["revision"].(string), map[string]any{"relayUrl": "wss://new.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(configChangeTTL + time.Second)
+	if _, err := controller.Approve(ctx, result.Payload["changeId"].(string)); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("expired approval error = %v", err)
+	}
+	change, err := local.ConfigChange(ctx, result.Payload["changeId"].(string))
+	if err != nil || change.State != store.ConfigChangeRejected || change.ErrorCode != "config_change_expired" {
+		t.Fatalf("expired change = %#v err=%v", change, err)
 	}
 }
 

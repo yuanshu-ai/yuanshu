@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -31,15 +32,30 @@ type configUpdateResult struct {
 }
 
 type ConfigChangeSummary struct {
-	ID           string   `json:"id"`
-	BaseRevision string   `json:"baseRevision"`
-	State        string   `json:"state"`
-	CreatedAt    string   `json:"createdAt"`
-	ErrorCode    string   `json:"errorCode,omitempty"`
-	Fields       []string `json:"fields,omitempty"`
+	ID               string                     `json:"id"`
+	BaseRevision     string                     `json:"baseRevision"`
+	State            string                     `json:"state"`
+	CreatedAt        string                     `json:"createdAt"`
+	ErrorCode        string                     `json:"errorCode,omitempty"`
+	Fields           []string                   `json:"fields,omitempty"`
+	Details          []ConfigChangeFieldSummary `json:"details,omitempty"`
+	Risk             string                     `json:"risk"`
+	RelayReconnect   bool                       `json:"relayReconnect"`
+	PermissionChange string                     `json:"permissionChange"`
+	ExpiresAt        string                     `json:"expiresAt"`
+	Expired          bool                       `json:"expired"`
 }
 
-func configChangeSummary(value store.ConfigChangeRecord) ConfigChangeSummary {
+type ConfigChangeFieldSummary struct {
+	Category string `json:"category"`
+	Before   string `json:"before"`
+	After    string `json:"after"`
+	Risk     string `json:"risk"`
+}
+
+const configChangeTTL = 24 * time.Hour
+
+func configChangeSummary(value store.ConfigChangeRecord, configurations ...config.Config) ConfigChangeSummary {
 	var changes map[string]any
 	_ = json.Unmarshal(value.Changes, &changes)
 	fields := make([]string, 0, len(changes))
@@ -47,7 +63,74 @@ func configChangeSummary(value store.ConfigChangeRecord) ConfigChangeSummary {
 		fields = append(fields, field)
 	}
 	sort.Strings(fields)
-	return ConfigChangeSummary{ID: value.ID, BaseRevision: value.BaseRevision, State: value.State, CreatedAt: value.CreatedAt.UTC().Format(time.RFC3339Nano), ErrorCode: value.ErrorCode, Fields: fields}
+	details, risk, reconnect, permission := summarizeConfigChanges(changes, configurations...)
+	expires := value.CreatedAt.UTC().Add(configChangeTTL)
+	return ConfigChangeSummary{ID: value.ID, BaseRevision: value.BaseRevision, State: value.State, CreatedAt: value.CreatedAt.UTC().Format(time.RFC3339Nano), ErrorCode: value.ErrorCode, Fields: fields, Details: details, Risk: risk, RelayReconnect: reconnect, PermissionChange: permission, ExpiresAt: expires.Format(time.RFC3339Nano), Expired: !expires.After(time.Now().UTC())}
+}
+
+func summarizeConfigChanges(changes map[string]any, configurations ...config.Config) ([]ConfigChangeFieldSummary, string, bool, string) {
+	current := config.Config{}
+	if len(configurations) > 0 {
+		current = configurations[0]
+	}
+	details := make([]ConfigChangeFieldSummary, 0)
+	risk, reconnect, permission := "medium", false, "unchanged"
+	if raw, ok := changes["relayUrl"].(string); ok {
+		details = append(details, ConfigChangeFieldSummary{Category: "relay", Before: redactedEndpoint(current.Relay.URL), After: redactedEndpoint(raw), Risk: "high"})
+		risk, reconnect = "high", true
+	}
+	if raw, ok := changes["proxyUrl"]; ok {
+		after, _ := optionalStringChange(raw)
+		details = append(details, ConfigChangeFieldSummary{Category: "relay_proxy", Before: redactedEndpoint(current.Relay.ProxyURL), After: redactedEndpoint(after), Risk: "high"})
+		risk, reconnect = "high", true
+	}
+	if raw, ok := changes["workspaces"]; ok {
+		items, _ := workspaceChanges(raw)
+		for _, item := range items {
+			before, after, direction := workspacePolicySummary(current, item)
+			details = append(details, ConfigChangeFieldSummary{Category: "workspace_policy", Before: before, After: after, Risk: "high"})
+			if direction != "unchanged" {
+				permission = direction
+			}
+		}
+		risk = "high"
+	}
+	return details, risk, reconnect, permission
+}
+
+func redactedEndpoint(raw string) string {
+	if raw == "" {
+		return "未配置"
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return "已配置（无效）"
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+func workspacePolicySummary(current config.Config, change workspaceChange) (string, string, string) {
+	beforePermission, beforeNetwork := "unknown", false
+	for _, item := range current.Workspaces {
+		if item.ID == change.ID {
+			beforePermission, beforeNetwork = string(item.PermissionProfile), item.AllowNetwork
+			break
+		}
+	}
+	afterPermission, afterNetwork := beforePermission, beforeNetwork
+	if change.PermissionProfile != nil {
+		afterPermission = string(*change.PermissionProfile)
+	}
+	if change.AllowNetwork != nil {
+		afterNetwork = *change.AllowNetwork
+	}
+	direction := "unchanged"
+	if (beforePermission == string(config.PermissionWorkspaceWrite) && afterPermission == string(config.PermissionReadOnly)) || (beforeNetwork && !afterNetwork) {
+		direction = "reduced"
+	} else if (beforePermission == string(config.PermissionReadOnly) && afterPermission == string(config.PermissionWorkspaceWrite)) || (!beforeNetwork && afterNetwork) {
+		direction = "expanded"
+	}
+	return fmt.Sprintf("%s / network:%t", beforePermission, beforeNetwork), fmt.Sprintf("%s / network:%t", afterPermission, afterNetwork), direction
 }
 
 type nodeConfigController struct {
@@ -75,7 +158,9 @@ func (c *nodeConfigController) Read(ctx context.Context) (map[string]any, error)
 	if err != nil {
 		return nil, err
 	}
-	return configView(loaded.Config, configRevision(loaded.Config), len(pending)), nil
+	view := configView(loaded.Config, configRevision(loaded.Config), len(pending))
+	view["pendingChangeSummaries"] = configChangeSummaries(pending, loaded.Config)
+	return view, nil
 }
 
 func (c *nodeConfigController) Update(ctx context.Context, baseRevision string, changes map[string]any) (configUpdateResult, error) {
@@ -100,14 +185,15 @@ func (c *nodeConfigController) Update(ctx context.Context, baseRevision string, 
 		if idErr != nil {
 			return configUpdateResult{}, idErr
 		}
-		if _, err := c.local.CreateConfigChange(ctx, store.ConfigChangeRecord{ID: id, BaseRevision: baseRevision, Changes: encoded, State: store.ConfigChangePending, CreatedAt: c.clock().UTC()}); err != nil {
+		created, err := c.local.CreateConfigChange(ctx, store.ConfigChangeRecord{ID: id, BaseRevision: baseRevision, Changes: encoded, State: store.ConfigChangePending, CreatedAt: c.clock().UTC()})
+		if err != nil {
 			return configUpdateResult{}, err
 		}
 		view, viewErr := configViewWithPending(ctx, c.local, loaded.Config, currentRevision)
 		if viewErr != nil {
 			return configUpdateResult{}, viewErr
 		}
-		return configUpdateResult{Payload: map[string]any{"config": view, "pending": true, "requiresLocalConfirmation": true, "changeId": id, "revision": currentRevision}}, nil
+		return configUpdateResult{Payload: map[string]any{"config": view, "pending": true, "requiresLocalConfirmation": true, "changeId": id, "change": configChangeSummary(created, loaded.Config), "revision": currentRevision}}, nil
 	}
 	if err := c.save(ctx, next); err != nil {
 		return configUpdateResult{}, err
@@ -127,6 +213,10 @@ func (c *nodeConfigController) Approve(ctx context.Context, id string) (configUp
 	change, err := c.local.ConfigChange(ctx, id)
 	if err != nil {
 		return configUpdateResult{}, err
+	}
+	if !change.CreatedAt.Add(configChangeTTL).After(c.clock().UTC()) {
+		_, _ = c.local.TransitionConfigChange(ctx, id, store.ConfigChangeRejected, "config_change_expired")
+		return configUpdateResult{}, store.ErrConflict
 	}
 	if change.State != store.ConfigChangePending {
 		return configUpdateResult{}, store.ErrConflict
@@ -187,7 +277,17 @@ func configViewWithPending(ctx context.Context, local *store.Store, value config
 	if err != nil {
 		return nil, err
 	}
-	return configView(value, revision, len(pending)), nil
+	view := configView(value, revision, len(pending))
+	view["pendingChangeSummaries"] = configChangeSummaries(pending, value)
+	return view, nil
+}
+
+func configChangeSummaries(changes []store.ConfigChangeRecord, value config.Config) []ConfigChangeSummary {
+	result := make([]ConfigChangeSummary, 0, len(changes))
+	for _, change := range changes {
+		result = append(result, configChangeSummary(change, value))
+	}
+	return result
 }
 
 func configView(value config.Config, revision string, pending int) map[string]any {

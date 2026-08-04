@@ -209,6 +209,9 @@ type doctorStatus struct {
 	Revision              string   `json:"revision,omitempty"`
 	Web                   string   `json:"web"`
 	Admin                 string   `json:"admin"`
+	Backup                string   `json:"backup"`
+	BackupLastAt          string   `json:"backupLastAt,omitempty"`
+	BackupSizeBytes       int64    `json:"backupSizeBytes,omitempty"`
 }
 
 func doctor(ctx context.Context, args []string, stdout io.Writer) error {
@@ -231,7 +234,7 @@ func doctor(ctx context.Context, args []string, stdout io.Writer) error {
 			return ErrUsage
 		}
 	}
-	status := doctorStatus{Version: 1, State: "needs_attention", Config: "unavailable", TLS: "not_configured", Web: "enabled", Admin: "enabled"}
+	status := doctorStatus{Version: 1, State: "needs_attention", Config: "unavailable", TLS: "not_configured", Web: "enabled", Admin: "enabled", Backup: "backup_unavailable"}
 	if configPath == "" {
 		status.Config = "not_configured"
 		return writeDoctorStatus(stdout, status, jsonOutput, false)
@@ -270,6 +273,13 @@ func doctor(ctx context.Context, args []string, stdout io.Writer) error {
 			status.TLSExpiryWarning = certificateExpiryWarning(time.Now().UTC(), leaf.NotAfter.UTC())
 		}
 	}
+	if backups, backupErr := listBackupArchives(filepath.Join(value.DataDir, "backups")); backupErr == nil && len(backups) > 0 {
+		latest := backups[0]
+		status.Backup, status.BackupLastAt, status.BackupSizeBytes = "ready", latest.ModTime().UTC().Format(time.RFC3339Nano), latest.Size()
+		if inspectBackupArchive(ctx, filepath.Join(value.DataDir, "backups", latest.Name()), value.DataDir) != nil {
+			status.Backup = "backup_invalid"
+		}
+	}
 	status.State = "ready"
 	return writeDoctorStatus(stdout, status, jsonOutput, true)
 }
@@ -280,7 +290,7 @@ func writeDoctorStatus(stdout io.Writer, status doctorStatus, jsonOutput, health
 			return err
 		}
 	} else {
-		_, _ = fmt.Fprintf(stdout, "Yuanshu Server: %s\nConfig: %s\nListen: %s\nPublic URL: %s\nTLS: %s\nWeb: %s\nAdmin: %s\n", status.State, status.Config, status.Listen, status.PublicURL, status.TLS, status.Web, status.Admin)
+		_, _ = fmt.Fprintf(stdout, "Yuanshu Server: %s\nConfig: %s\nListen: %s\nPublic URL: %s\nTLS: %s\nWeb: %s\nAdmin: %s\nBackup: %s\n", status.State, status.Config, status.Listen, status.PublicURL, status.TLS, status.Web, status.Admin, status.Backup)
 	}
 	if !healthy {
 		return errors.New("server requires attention")

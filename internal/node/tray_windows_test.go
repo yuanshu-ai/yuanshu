@@ -11,7 +11,7 @@ import (
 
 func TestWindowsTrayStateLabels(t *testing.T) {
 	tests := map[string]string{
-		"ready": "Ready", "unpaired": "Unpaired", "recovering": "Recovering", "starting": "Recovering", "failed": "Needs attention",
+		"ready": "已在线", "unpaired": "Unpaired", "recovering": "正在重连", "starting": "正在重连", "failed": "Needs attention",
 	}
 	for state, want := range tests {
 		if got := trayStateLabel(state); got != want {

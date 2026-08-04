@@ -604,7 +604,7 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 		}
 		response.OK = true
 		for _, change := range changes {
-			response.ConfigChanges = append(response.ConfigChanges, configChangeSummary(change))
+			response.ConfigChanges = append(response.ConfigChanges, configChangeSummary(change, h.activeConfig))
 		}
 	case "config_approve":
 		if h.configController == nil {

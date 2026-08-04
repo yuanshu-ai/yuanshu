@@ -36,6 +36,12 @@ export type ConfigChange = {
   createdAt: string;
   errorCode?: string;
   fields?: string[];
+  details?: Array<{ category: string; before: string; after: string; risk: string }>;
+  risk?: string;
+  relayReconnect?: boolean;
+  permissionChange?: "expanded" | "reduced" | "unchanged";
+  expiresAt?: string;
+  expired?: boolean;
 };
 
 export type Overview = {

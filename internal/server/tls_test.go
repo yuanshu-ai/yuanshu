@@ -106,8 +106,15 @@ func writeServerTestCertificate(t *testing.T, directory string, names []string, 
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Yuanshu synthetic TLS"},
-		NotBefore: notBefore, NotAfter: notAfter, DNSNames: names,
+		NotBefore: notBefore, NotAfter: notAfter,
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	for _, name := range names {
+		if ip := net.ParseIP(name); ip != nil {
+			template.IPAddresses = append(template.IPAddresses, ip)
+			continue
+		}
+		template.DNSNames = append(template.DNSNames, name)
 	}
 	der, err := x509.CreateCertificate(cryptorand.Reader, template, template, public, private)
 	if err != nil {

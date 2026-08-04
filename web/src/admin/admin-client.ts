@@ -12,10 +12,12 @@ export interface AdminOverview {
   database: { schemaVersion: number; quickCheck: string; sizeBytes: number };
   connections: { nodes: number; controlClients: number };
   counts: { activeNodes: number; activeControlClients: number; pendingPairings: number; pendingEnrollments: number; activeLeases: number; unreadNotifications: number; recentFailures: number };
-  tls: { configured: boolean; san?: string[]; notAfter?: string };
+  tls: { configured: boolean; san?: string[]; notAfter?: string; fingerprint?: string; expiryWarning?: string };
+  backup: { available: boolean; lastBackupAt?: string; sizeBytes?: number; integrity: "valid" | "invalid" | "unavailable"; operation: "local_cli_only" };
 }
 
 export interface AdminNode { id: string; name: string; os: string; version: string; status: string; online: boolean; createdAt: string; lastSeenAt?: string }
+export interface AdminNodeDetail { node: AdminNode & { runtime: { nodeId: string; online: boolean; connectedAt?: string; lastFrameAt?: string; lastEventAt?: string; runtimeStatus?: string; relayStatus?: string; recoveryStatus?: string; lastErrorCode?: string; lastCloseReason?: string; workspaceCount: number } } }
 export interface AdminControlClient { id: string; name: string; status: string; online: boolean; current: boolean; createdAt: string; lastSeenAt?: string; revokedAt?: string }
 export interface AdminAccessRequest { id: string; kind: "control_client" | "node"; nodeId: string; name?: string; os?: string; version?: string; status: string; createdAt: string; expiresAt: string }
 export interface AdminLease { scope: { nodeId: string; workspaceId: string; threadId: string }; leaseId: string; holderClientId: string; epoch: number; acquiredAt: string; expiresAt: string; updatedAt: string }
@@ -28,7 +30,7 @@ export interface AdminConfig {
   adminEnabled: boolean;
   dataDirConfigured: boolean;
   configRevision?: string;
-  tls: { configured: boolean; san?: string[]; notAfter?: string };
+  tls: { configured: boolean; san?: string[]; notAfter?: string; fingerprint?: string; expiryWarning?: string };
   admission: { controlPairingEnabled: boolean; nodeEnrollmentEnabled: boolean; revision: number; updatedAt: string };
 }
 

@@ -13,14 +13,12 @@ void YuanshuTrayUpdate(const char *state, int autostartEnabled);
 void YuanshuTrayOpenURL(const char *target);
 void YuanshuTrayCopy(const char *value);
 void YuanshuTrayShowError(const char *message);
-int YuanshuTrayConfirmConfig(const char *identifier, const char *fields);
 */
 import "C"
 
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -168,28 +166,9 @@ func (t *darwinTray) handleAction(action int) {
 		err = callbacks.SetAutostart(ctx, enabled)
 		cancel()
 	case darwinTrayReviewConfig:
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		var changes []ConfigChangeSummary
-		changes, err = callbacks.PendingConfig(ctx)
-		for _, change := range changes {
-			identifier := C.CString(change.ID)
-			fields := C.CString(strings.Join(change.Fields, ", "))
-			decision := int(C.YuanshuTrayConfirmConfig(identifier, fields))
-			C.free(unsafe.Pointer(identifier))
-			C.free(unsafe.Pointer(fields))
-			if decision == 0 {
-				break
-			}
-			if decision == 1 {
-				err = callbacks.DecideConfig(ctx, change.ID, true)
-			} else if decision == 2 {
-				err = callbacks.DecideConfig(ctx, change.ID, false)
-			}
-			if err != nil {
-				break
-			}
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = callbacks.OpenControlCenter(ctx)
+		cancel()
 	case darwinTrayQuit:
 		callbacks.Stop()
 		return

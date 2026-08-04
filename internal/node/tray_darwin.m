@@ -155,22 +155,3 @@ void YuanshuTrayShowError(const char *message) {
         [alert runModal];
     });
 }
-
-int YuanshuTrayConfirmConfig(const char *identifier, const char *fields) {
-    __block NSInteger result = 0;
-    NSString *changeID = identifier == NULL ? @"Unknown" : [NSString stringWithUTF8String:identifier];
-    NSString *fieldList = fields == NULL ? @"Protected settings" : [NSString stringWithUTF8String:fields];
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Review protected Node settings";
-        alert.informativeText = [NSString stringWithFormat:@"Change: %@\nFields: %@\n\nOnly approve this change if you initiated it.", changeID, fieldList];
-        alert.alertStyle = NSAlertStyleWarning;
-        [alert addButtonWithTitle:@"Approve"];
-        [alert addButtonWithTitle:@"Reject"];
-        [alert addButtonWithTitle:@"Cancel"];
-        NSModalResponse response = [alert runModal];
-        if (response == NSAlertFirstButtonReturn) result = 1;
-        else if (response == NSAlertSecondButtonReturn) result = 2;
-    });
-    return (int)result;
-}

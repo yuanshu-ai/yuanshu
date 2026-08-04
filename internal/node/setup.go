@@ -52,6 +52,7 @@ type nodeSetupController struct {
 	selections map[string]setupSelection
 	clock      func() time.Time
 	onComplete func(string)
+	httpClient *http.Client
 }
 
 func newNodeSetupController(value platform.Platform, paths paths, configPath string, force bool, onComplete func(string)) *nodeSetupController {
@@ -59,7 +60,8 @@ func newNodeSetupController(value platform.Platform, paths paths, configPath str
 	if _, err := os.Lstat(configPath); errors.Is(err, os.ErrNotExist) {
 		active = true
 	}
-	return &nodeSetupController{platform: value, paths: paths, configPath: configPath, force: force, active: active, selections: map[string]setupSelection{}, clock: time.Now, onComplete: onComplete}
+	client, _ := relayHTTPClient("", 15*time.Second)
+	return &nodeSetupController{platform: value, paths: paths, configPath: configPath, force: force, active: active, selections: map[string]setupSelection{}, clock: time.Now, onComplete: onComplete, httpClient: client}
 }
 
 func (s *nodeSetupController) view() *SetupView {
@@ -98,7 +100,7 @@ func (s *nodeSetupController) handle(ctx context.Context, request localRequest) 
 		}
 		response.OK, response.WorkspaceToken, response.WorkspaceName = true, selection.Token, selection.Name
 	case "setup_test":
-		if err := testRelay(ctx, request.RelayURL); err != nil {
+		if err := testRelay(ctx, s.httpClient, request.RelayURL); err != nil {
 			response.Error = "relay_test_failed"
 		} else {
 			response.OK, response.Config = true, map[string]any{"relay": "ready"}
@@ -239,7 +241,7 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 	}
 	defer clear(credential)
 	if request.BootstrapSecret != "" {
-		ownerID, nodeID, err := claimBootstrap(ctx, request.RelayURL, request.BootstrapSecret, name, nodeIdentity.PublicKey, credential)
+		ownerID, nodeID, err := claimBootstrap(ctx, s.httpClient, request.RelayURL, request.BootstrapSecret, name, nodeIdentity.PublicKey, credential)
 		if err != nil {
 			return "", err
 		}
@@ -289,7 +291,7 @@ func ensureSetupCredential(ctx context.Context, secrets platform.SecureStore, re
 	return credential, nil
 }
 
-func claimBootstrap(ctx context.Context, relayURL, secret, name string, publicKey, credential []byte) (string, string, error) {
+func claimBootstrap(ctx context.Context, client *http.Client, relayURL, secret, name string, publicKey, credential []byte) (string, string, error) {
 	base, err := relayHTTPSBase(relayURL)
 	if err != nil || secret == "" {
 		return "", "", errors.New("setup bootstrap request is invalid")
@@ -309,7 +311,9 @@ func claimBootstrap(ctx context.Context, relayURL, secret, name string, publicKe
 	}
 	request.Header.Set("Authorization", "Bearer "+secret)
 	request.Header.Set("Content-Type", "application/json")
-	client, _ := relayHTTPClient("", 15*time.Second)
+	if client == nil {
+		client, _ = relayHTTPClient("", 15*time.Second)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return "", "", errors.New("setup bootstrap service is unavailable")
@@ -327,13 +331,15 @@ func claimBootstrap(ctx context.Context, relayURL, secret, name string, publicKe
 	return result.OwnerID, result.NodeID, nil
 }
 
-func testRelay(ctx context.Context, relayURL string) error {
+func testRelay(ctx context.Context, client *http.Client, relayURL string) error {
 	base, err := relayHTTPSBase(relayURL)
 	if err != nil {
 		return err
 	}
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/healthz", nil)
-	client, _ := relayHTTPClient("", 15*time.Second)
+	if client == nil {
+		client, _ = relayHTTPClient("", 15*time.Second)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return err

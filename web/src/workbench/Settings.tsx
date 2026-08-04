@@ -5,6 +5,7 @@ import { RELAY_SUBPROTOCOL } from "../relay/session";
 import type { ControlStorage } from "../relay/storage";
 import { Icon } from "./Icon";
 import type { WorkbenchSession } from "./session";
+import { machineStatus } from "../status/catalog.generated";
 
 type SettingsSection = "basic" | "security" | "advanced";
 
@@ -24,6 +25,8 @@ function settingsSectionLabel(value: SettingsSection) {
 }
 
 function connectionStateLabel(value: string) {
+  if (value === "connected") return machineStatus("online")!.title;
+  if (value === "reconnecting") return machineStatus("reconnecting")!.title;
   return ({ connected: "实时连接", connecting: "正在连接", authenticating: "正在安全认证", reconnecting: "正在重连", reauth_required: "需要重新配对", paused: "连接已暂停", closed: "连接已关闭", idle: "尚未连接" } as Record<string, string>)[value] ?? "状态未知";
 }
 
@@ -115,7 +118,10 @@ type NodeConfigView = {
   adapter?: { codexEnabled?: boolean; runtimeMode?: string };
   workspaces?: Array<{ id: string; name?: string; permissionProfile?: string; allowNetwork?: boolean }>;
   pendingChanges?: number;
+  pendingChangeSummaries?: ConfigChangeView[];
 };
+
+type ConfigChangeView = { id: string; risk?: string; relayReconnect?: boolean; permissionChange?: string; expiresAt?: string; expired?: boolean; details?: Array<{ category: string; before: string; after: string; risk: string }> };
 
 function NodeSettings({ session, nodeId }: { session: WorkbenchSession; nodeId: string }) {
   const [view, setView] = useState<NodeConfigView>();
@@ -171,7 +177,7 @@ function NodeSettings({ session, nodeId }: { session: WorkbenchSession; nodeId: 
       };
       if (relayUrl.trim()) changes.relayUrl = relayUrl.trim();
       const result = await session.request("config.update", { baseRevision: view.revision, changes }, { nodeId });
-      const payload = result.payload as { config?: NodeConfigView; requiresLocalConfirmation?: boolean; applied?: boolean };
+      const payload = result.payload as { config?: NodeConfigView; change?: ConfigChangeView; requiresLocalConfirmation?: boolean; applied?: boolean };
       if (payload.config) applyView(payload.config);
       setStatus(payload.requiresLocalConfirmation ? "已提交，Relay 或代理变更需要 Node 本机确认" : payload.applied ? "已应用，Node 正在安全重载" : "更新已提交");
     } catch (error) {
@@ -189,6 +195,7 @@ function NodeSettings({ session, nodeId }: { session: WorkbenchSession; nodeId: 
       <div className="settings-grid"><label><span>Relay URL（需本机确认）</span><input value={relayUrl} onChange={(event) => setRelayUrl(event.target.value)} inputMode="url" /></label><label><span>Relay Proxy URL（需本机确认）</span><input value={proxyUrl} onChange={(event) => setProxyUrl(event.target.value)} inputMode="url" /></label></div>
       <div className="settings-grid three"><label><span>连接超时（秒）</span><input type="number" min={1} max={300} value={timeout} onChange={(event) => setTimeoutValue(Number(event.target.value))} /></label><label><span>事件保留（小时）</span><input type="number" min={1} max={8760} value={maxAge} onChange={(event) => setMaxAge(Number(event.target.value))} /></label><label><span>事件上限（MiB）</span><input type="number" min={1} max={16384} value={maxSize} onChange={(event) => setMaxSize(Number(event.target.value))} /></label></div>
       {view?.adapter && <div className="config-facts"><span>Codex：{view.adapter.codexEnabled ? "已启用" : "未启用"}</span><span>运行时：{view.adapter.runtimeMode || "默认"}</span><span>凭据：{view.relay?.credentialConfigured ? "已配置，不展示" : "未配置"}</span><span>待确认：{view.pendingChanges ?? 0}</span></div>}
+      {view?.pendingChangeSummaries?.map((change) => <article className="pending-config-summary" key={change.id}><b>{change.expired ? "配置变更已过期" : machineStatus("config_pending")!.title}</b>{change.details?.map((detail) => <span key={detail.category}>{detail.category}：{detail.before} → {detail.after}</span>)}<small>{change.relayReconnect ? "会重连 Relay" : "不重连 Relay"} · 权限{change.permissionChange === "reduced" ? "缩小" : change.permissionChange === "expanded" ? "扩大" : "不变"}</small></article>)}
       {view?.workspaces?.map((workspace) => <div className="workspace-fact" key={workspace.id}><b>{workspace.name || workspace.id}</b><span>{workspace.permissionProfile === "workspace-write" ? "可写" : "只读"}</span><span>{workspace.allowNetwork ? "网络开启" : "网络关闭"}</span></div>)}
       <small className={/失败|离线/.test(status) ? "form-error" : "form-status"}>{status}</small>
       <div className="form-actions"><button className="button primary" type="submit" disabled={saving || !view || session.client.state !== "connected"}>{saving ? "保存中" : "保存 Node 配置"}</button></div>

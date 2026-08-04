@@ -371,6 +371,7 @@ func (h *Hub) saveNotification(ctx context.Context, item serverstore.Notificatio
 }
 
 func (h *Hub) observeNodeEvent(ctx context.Context, source *hubConnection, frame transport.Frame) {
+	h.touchNodeFrame(source)
 	event, err := protocolv1.ParseEvent(frame.Bytes())
 	if err != nil {
 		return
@@ -400,12 +401,21 @@ func (h *Hub) observeNodeEvent(ctx context.Context, source *hubConnection, frame
 	})
 }
 
+func (h *Hub) touchNodeFrame(source *hubConnection) {
+	key := source.ownerID + "\x00" + source.subjectID
+	h.mu.Lock()
+	detail := h.nodeDetails[key]
+	detail.NodeID, detail.Online, detail.LastFrameAt, detail.RelayStatus = source.subjectID, true, h.clock().UTC(), "online"
+	h.nodeDetails[key] = detail
+	h.mu.Unlock()
+}
+
 func (h *Hub) observeNodeHealth(source *hubConnection, event protocolv1.YuanshuMessage) {
 	key := source.ownerID + "\x00" + source.subjectID
 	now := h.clock().UTC()
 	h.mu.Lock()
 	detail := h.nodeDetails[key]
-	detail.NodeID, detail.Online, detail.LastFrameAt, detail.LastEventAt, detail.RelayStatus = source.subjectID, true, now, now, "online"
+	detail.NodeID, detail.Online, detail.LastEventAt, detail.RelayStatus = source.subjectID, true, now, "online"
 	switch protocolv1.EventType(event.Type) {
 	case protocolv1.EventRuntimeStatus:
 		if state, ok := event.Payload["state"].(string); ok {

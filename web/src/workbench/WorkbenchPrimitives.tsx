@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { IconName } from "./Icon";
 import { Icon } from "./Icon";
 import type { ResourceState } from "./session";
+import { machineStatus } from "../status/catalog.generated";
 
 export function EmptyState({ icon, title, detail }: { icon: IconName; title: string; detail: string }) {
   return <div className="empty-state"><Icon name={icon} /><b>{title}</b><p>{detail}</p></div>;
@@ -30,6 +31,8 @@ export function StatusPill({ tone, children }: { tone?: "accent" | "warning" | "
 }
 
 export function connectionLabel(value: string) {
+  if (value === "connected") return machineStatus("online")!.title;
+  if (value === "reconnecting") return machineStatus("reconnecting")!.title;
   return ({ idle: "未连接", connecting: "连接中", authenticating: "安全认证", connected: "实时连接", reconnecting: "正在重连", paused: "已暂停", closed: "已关闭", reauth_required: "需要重新配对" } as Record<string, string>)[value] ?? "未知状态";
 }
 
@@ -58,6 +61,8 @@ export function shortID(value?: string) {
 
 function errorTitle(code?: string) {
   if (!code) return "读取失败";
+  const catalog = machineStatus(normalizeStatusCode(code));
+  if (catalog) return catalog.title;
   if (code.includes("offline")) return "设备离线";
   if (code.includes("reauth")) return "需要重新配对";
   if (code.includes("history")) return "部分历史不可用";
@@ -67,7 +72,20 @@ function errorTitle(code?: string) {
 
 function errorDetail(code?: string) {
   if (!code) return "请检查连接后重试。";
+  const catalog = machineStatus(normalizeStatusCode(code));
+  if (catalog) return `${catalog.description}${catalog.action}`;
   if (code.includes("offline")) return "设备恢复在线后可以重新读取。";
   if (code.includes("reauth")) return "当前浏览器身份已失效，请重新配对。";
   return `错误代码：${code}`;
+}
+
+function normalizeStatusCode(code: string) {
+  if (code.includes("offline")) return "offline";
+  if (code.includes("history")) return "history_gap";
+  if (code.includes("lease_lost")) return "lease_lost";
+  if (code.includes("lease_expired")) return "lease_expired";
+  if (code.includes("approval_expired")) return "approval_expired";
+  if (code.includes("ambiguous")) return "operation_unknown";
+  if (code.includes("runtime") && code.includes("unavailable")) return "runtime_unavailable";
+  return code;
 }

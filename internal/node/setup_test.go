@@ -2,13 +2,17 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/yuanshu-ai/yuanshu/internal/config"
+	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
 	platformfake "github.com/yuanshu-ai/yuanshu/internal/platform/fake"
 )
@@ -63,6 +67,50 @@ func TestNodeSetupUsesSessionBoundNativeWorkspaceToken(t *testing.T) {
 	}
 	if _, err := fakePlatform.SecureStore().Get(context.Background(), value.Config.Relay.CredentialRef); err != nil {
 		t.Fatalf("credential was not stored securely: %v", err)
+	}
+}
+
+func TestNodeSetupClaimsFirstNodeBootstrapOverTrustedTLS(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/healthz":
+			_ = json.NewEncoder(writer).Encode(map[string]string{"status": "ok"})
+		case "/v1/bootstrap/claim":
+			if request.Header.Get("Authorization") != "Bearer bootstrap-secret" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]string{"ownerId": "owner-1", "nodeId": "node-1", "status": "enrolled"})
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	directory := t.TempDir()
+	workspacePath := filepath.Join(directory, "workspace")
+	fakePlatform, _ := platformfake.New(platform.FamilyDarwin)
+	fakePlatform.FakeDirectoryPicker().Set(platform.DirectorySelection{Path: workspacePath, DisplayName: "Workspace"})
+	_ = fakePlatform.FakeWorkspaces().Register(workspacePath, platform.WorkspaceFacts{CanonicalPath: workspacePath, FilesystemRoot: directory, FileIdentity: "bootstrap-workspace", IsDirectory: true})
+	configPath := filepath.Join(directory, "config.toml")
+	controller := newNodeSetupController(fakePlatform, paths{root: directory, database: filepath.Join(directory, "node.db")}, configPath, false, nil)
+	controller.httpClient = server.Client()
+	relayURL := "wss" + server.URL[len("https"):] + "/node/connect"
+	if result := controller.handle(context.Background(), localRequest{Command: "setup_test", RelayURL: relayURL}); !result.OK {
+		t.Fatalf("relay test = %#v", result)
+	}
+	picked := controller.handle(context.Background(), localRequest{Command: "setup_pick", localSession: "session"})
+	result := controller.handle(context.Background(), localRequest{Command: "setup_complete", localSession: "session", Name: "First Mac", RelayURL: relayURL, BootstrapSecret: "bootstrap-secret", WorkspaceToken: picked.WorkspaceToken, WorkspaceName: "Workspace", PermissionProfile: "read-only"})
+	if !result.OK {
+		t.Fatalf("bootstrap setup = %#v", result)
+	}
+	local, err := store.Open(context.Background(), filepath.Join(directory, "node.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	identity, err := local.Identity(context.Background())
+	if err != nil || identity.OwnerID != "owner-1" || identity.NodeID != "node-1" {
+		t.Fatalf("bound identity = %#v err=%v", identity, err)
 	}
 }
 
