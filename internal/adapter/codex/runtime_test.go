@@ -37,7 +37,7 @@ func TestFormalAdapterThreadTurnApprovalAndEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	installation, err := formal.Detect(context.Background())
-	if err != nil || installation.Version != BaselineVersion {
+	if err != nil || installation.Version != BaselineVersion || installation.Compatibility != adapterpkg.CompatibilityKnown {
 		t.Fatalf("Detect = %#v, %v", installation, err)
 	}
 	runtimeValue, err := formal.StartRuntime(context.Background())
@@ -282,7 +282,7 @@ func TestAdapterAllowsUnknownVersionAndDefersCompatibilityToRuntime(t *testing.T
 		t.Fatal(err)
 	}
 	installation, err := formal.Detect(context.Background())
-	if err != nil || installation.Version != "9.9.9" {
+	if err != nil || installation.Version != "9.9.9" || installation.Compatibility != adapterpkg.CompatibilityUnverified {
 		t.Fatalf("unknown version detection = %#v, %v", installation, err)
 	}
 	runtimeValue, err := formal.StartRuntime(context.Background())

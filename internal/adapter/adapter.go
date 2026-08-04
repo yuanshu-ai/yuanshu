@@ -28,7 +28,15 @@ type Installation struct {
 	Version        string
 	Protocol       string
 	Authentication string
+	Compatibility  Compatibility
 }
+
+type Compatibility string
+
+const (
+	CompatibilityKnown      Compatibility = "known"
+	CompatibilityUnverified Compatibility = "unverified"
+)
 
 type CapabilitySet struct {
 	ThreadList    bool
@@ -54,18 +62,34 @@ type AgentAdapter interface {
 	StartRuntime(ctx context.Context) (Runtime, error)
 }
 
-type Runtime interface {
+type SessionReader interface {
 	ListThreads(ctx context.Context, request ListThreadsRequest) (ThreadPage, error)
 	ReadThread(ctx context.Context, request ReadThreadRequest) (ThreadSnapshot, error)
+}
+
+type SessionRunner interface {
 	StartThread(ctx context.Context, request StartThreadRequest) (Thread, error)
 	ResumeThread(ctx context.Context, request ResumeThreadRequest) (Thread, error)
 	StartTurn(ctx context.Context, request StartTurnRequest) (Turn, error)
+}
+
+type LiveController interface {
 	SteerTurn(ctx context.Context, request SteerTurnRequest) error
 	InterruptTurn(ctx context.Context, request InterruptTurnRequest) error
 	ResolveApproval(ctx context.Context, decision ApprovalDecision) error
+}
+
+type RuntimeConnection interface {
 	Events() <-chan AgentEvent
 	Health() HealthStatus
 	Close(ctx context.Context) error
+}
+
+type Runtime interface {
+	SessionReader
+	SessionRunner
+	LiveController
+	RuntimeConnection
 }
 
 type ListThreadsRequest struct {

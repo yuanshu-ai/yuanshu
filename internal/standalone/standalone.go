@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
-	"github.com/yuanshu-ai/yuanshu/internal/adapter/codex"
+	"github.com/yuanshu-ai/yuanshu/internal/adapter/builtin"
 	"github.com/yuanshu-ai/yuanshu/internal/config"
 	"github.com/yuanshu-ai/yuanshu/internal/node"
 	"github.com/yuanshu-ai/yuanshu/internal/node/eventlog"
@@ -344,11 +344,18 @@ func Run(ctx context.Context, options Options) error {
 	defer clear(sessionToken)
 	sessionExpiresAt := options.Clock().UTC().Add(15 * time.Minute)
 
-	agent, err := codex.New(codex.Options{Config: loaded.Config.Adapters.Codex, Processes: options.Platform.Processes(), Workspaces: workspaceManager, Threads: local})
+	registry, err := builtin.NewRegistry(builtin.Options{
+		CodexConfig: loaded.Config.Adapters.Codex, Processes: options.Platform.Processes(),
+		Workspaces: workspaceManager, Threads: local,
+	})
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("Codex adapter is unavailable"))
 	}
-	runtime, err := agent.StartRuntime(ctx)
+	handle, err := registry.CreateDefault()
+	if err != nil {
+		return errors.Join(ErrUnavailable, errors.New("Codex adapter is unavailable"))
+	}
+	runtime, err := handle.Adapter.StartRuntime(ctx)
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("Codex runtime is unavailable"))
 	}

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
-	"github.com/yuanshu-ai/yuanshu/internal/adapter/codex"
+	"github.com/yuanshu-ai/yuanshu/internal/adapter/builtin"
 	"github.com/yuanshu-ai/yuanshu/internal/config"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
@@ -85,16 +85,20 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 			return status, false
 		}
 	}
-	adapterInstance, err := codex.New(codex.Options{
-		Config: loaded.Config.Adapters.Codex, Processes: current.Processes(),
-		Workspaces: diagnosticWorkspace{}, Threads: diagnosticThreads{},
-		ApprovalTimeout: time.Second,
+	registry, err := builtin.NewRegistry(builtin.Options{
+		CodexConfig: loaded.Config.Adapters.Codex, Processes: current.Processes(),
+		Workspaces: diagnosticWorkspace{}, Threads: diagnosticThreads{}, ApprovalTimeout: time.Second,
 	})
 	if err != nil {
 		status.Codex = "unavailable"
 		return status, false
 	}
-	installation, err := adapterInstance.Detect(ctx)
+	handle, err := registry.CreateDefault()
+	if err != nil {
+		status.Codex = "unavailable"
+		return status, false
+	}
+	runtimeDescriptor, err := handle.Detect(ctx)
 	if err != nil {
 		if errors.Is(err, adapter.ErrUnsupported) {
 			status.Codex = "unsupported"
@@ -106,12 +110,11 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 		return status, false
 	}
 	status.Codex = "ready"
-	if codex.IsVersionKnown(installation.Version) {
-		status.Compatibility = "known"
-	} else {
+	status.Compatibility = string(runtimeDescriptor.Installation.Compatibility)
+	if status.Compatibility == "" {
 		status.Compatibility = "unverified"
 	}
-	runtime, err := adapterInstance.StartRuntime(ctx)
+	runtime, err := handle.Adapter.StartRuntime(ctx)
 	if err != nil {
 		status.Authentication = "unavailable"
 		return status, false

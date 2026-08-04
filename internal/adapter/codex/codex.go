@@ -91,13 +91,19 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Installation, error) {
 		return adapter.Installation{}, adapter.ErrUnavailable
 	}
 	protocol := ProtocolVersion
-	if profile, known := compatibilityForVersion(version); known && profile.Protocol != "" {
-		protocol = profile.Protocol
+	compatibility := adapter.CompatibilityUnverified
+	if profile, known := compatibilityForVersion(version); known {
+		compatibility = adapter.CompatibilityKnown
+		if profile.Protocol != "" {
+			protocol = profile.Protocol
+		}
 	}
 	// The compatibility matrix is intentionally informational. Codex evolves
 	// independently of Yuanshu, so an unknown version is allowed to proceed to
 	// app-server initialization and capability probing.
-	return adapter.Installation{Detected: true, Version: version, Protocol: protocol}, nil
+	return adapter.Installation{
+		Detected: true, Version: version, Protocol: protocol, Compatibility: compatibility,
+	}, nil
 }
 
 func normalizeDetectedVersion(output string) string {

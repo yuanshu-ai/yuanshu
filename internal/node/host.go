@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
-	"github.com/yuanshu-ai/yuanshu/internal/adapter/codex"
+	"github.com/yuanshu-ai/yuanshu/internal/adapter/builtin"
 	"github.com/yuanshu-ai/yuanshu/internal/config"
 	"github.com/yuanshu-ai/yuanshu/internal/node/eventlog"
 	"github.com/yuanshu-ai/yuanshu/internal/node/identity"
@@ -236,19 +236,24 @@ func (h *host) reload(ctx context.Context) error {
 			h.startTrustSyncLocked(manager)
 		}
 	}
-	adapterInstance, err := codex.New(codex.Options{
-		Config: loaded.Config.Adapters.Codex, Processes: h.options.platform.Processes(),
+	registry, err := builtin.NewRegistry(builtin.Options{
+		CodexConfig: loaded.Config.Adapters.Codex, Processes: h.options.platform.Processes(),
 		Workspaces: workspaceManager, Threads: local,
 	})
 	if err != nil {
 		return h.fail("codex_unavailable")
 	}
-	if _, err := adapterInstance.Detect(ctx); err != nil {
+	handle, err := registry.CreateDefault()
+	if err != nil {
+		return h.fail("codex_unavailable")
+	}
+	if _, err := handle.Detect(ctx); err != nil {
 		if errors.Is(err, adapter.ErrUnsupported) {
 			return h.fail("codex_unsupported")
 		}
 		return h.fail("codex_unavailable")
 	}
+	adapterInstance := handle.Adapter
 	h.status.update(func(value *Status) { value.Codex = "ready" })
 	threads, err := local.RuntimeThreads(ctx)
 	if err != nil {

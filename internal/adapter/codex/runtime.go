@@ -24,7 +24,13 @@ import (
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
 )
 
-var _ adapter.Runtime = (*Runtime)(nil)
+var (
+	_ adapter.Runtime           = (*Runtime)(nil)
+	_ adapter.SessionReader     = (*Runtime)(nil)
+	_ adapter.SessionRunner     = (*Runtime)(nil)
+	_ adapter.LiveController    = (*Runtime)(nil)
+	_ adapter.RuntimeConnection = (*Runtime)(nil)
+)
 
 type pendingApproval struct {
 	id          string
