@@ -15,7 +15,7 @@ import (
 
 const Usage = `Usage:
   yuanshu node [run] [--config <absolute-path>] [--background]
-  yuanshu node setup [--config <absolute-path>]
+  yuanshu node setup [--config <absolute-path>] [--print-url] [--workspace <absolute-path>] [--relay-ca <absolute-path>]
   yuanshu node status [--json]
   yuanshu node stop
   yuanshu node ui
@@ -54,6 +54,10 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		fmt.Fprint(stdout, Usage)
 		return nil
 	}
+	if len(args) == 2 && args[0] == "setup" && (args[1] == "--help" || args[1] == "-h") {
+		fmt.Fprint(stdout, Usage)
+		return nil
+	}
 	if err := validateNodeArguments(args); err != nil {
 		return err
 	}
@@ -78,11 +82,15 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if err != nil {
 			return err
 		}
-		configPath, _, _, err := parseNodeFlags(args, defaults.config, false, false)
+		configPath, printURL, workspacePath, relayCAPath, err := parseNodeSetupFlags(args, defaults.config)
 		if err != nil {
 			return err
 		}
-		return runHost(ctx, runOptions{paths: defaults, configPath: configPath, platform: current, setup: true})
+		var setupURLWriter io.Writer
+		if printURL {
+			setupURLWriter = stdout
+		}
+		return runHost(ctx, runOptions{paths: defaults, configPath: configPath, platform: current, setup: true, setupURLWriter: setupURLWriter, setupWorkspacePath: workspacePath, setupRelayCAPath: relayCAPath})
 	case "status":
 		_, _, jsonOutput, err := parseNodeFlags(args, "", true, false)
 		if err != nil {
@@ -156,7 +164,7 @@ func validateNodeArguments(args []string) error {
 		_, _, _, err := parseNodeFlags(args, "", false, true)
 		return err
 	case "setup":
-		_, _, _, err := parseNodeFlags(args, "", false, false)
+		_, _, _, _, err := parseNodeSetupFlags(args, "")
 		return err
 	case "status":
 		_, _, _, err := parseNodeFlags(args, "", true, false)
@@ -397,6 +405,46 @@ func parseNodeFlags(args []string, defaultConfig string, allowJSON, allowBackgro
 		}
 	}
 	return configPath, background, jsonOutput, nil
+}
+
+func parseNodeSetupFlags(args []string, defaultConfig string) (string, bool, string, string, error) {
+	configPath := defaultConfig
+	var printURL bool
+	var workspacePath string
+	var relayCAPath string
+	seen := make(map[string]bool)
+	for index := 0; index < len(args); index++ {
+		name := args[index]
+		if seen[name] {
+			return "", false, "", "", ErrUsage
+		}
+		seen[name] = true
+		switch name {
+		case "--config":
+			index++
+			if index >= len(args) || !filepath.IsAbs(args[index]) {
+				return "", false, "", "", ErrUsage
+			}
+			configPath = filepath.Clean(args[index])
+		case "--print-url":
+			printURL = true
+		case "--workspace":
+			index++
+			if index >= len(args) || !filepath.IsAbs(args[index]) {
+				return "", false, "", "", ErrUsage
+			}
+			workspacePath = filepath.Clean(args[index])
+		case "--relay-ca":
+			index++
+			if index >= len(args) || !filepath.IsAbs(args[index]) {
+				return "", false, "", "", ErrUsage
+			}
+			relayCAPath = filepath.Clean(args[index])
+		default:
+			return "", false, "", "", ErrUsage
+		}
+	}
+	return configPath, printURL, workspacePath, relayCAPath, nil
 }
 
 func commandAutostart(ctx context.Context, current platform.Platform, defaults paths, args []string, stdout io.Writer) error {

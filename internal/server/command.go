@@ -48,6 +48,10 @@ func Command(ctx context.Context, args []string, stdout, _ io.Writer) error {
 		fmt.Fprint(stdout, Usage)
 		return nil
 	}
+	if len(args) > 1 && (args[len(args)-1] == "--help" || args[len(args)-1] == "-h") && knownServerCommand(args[0]) {
+		fmt.Fprint(stdout, Usage)
+		return nil
+	}
 	if len(args) > 0 && args[0] == "healthcheck" {
 		return healthcheck(ctx, args[1:])
 	}
@@ -75,6 +79,15 @@ func Command(ctx context.Context, args []string, stdout, _ io.Writer) error {
 	}
 	options.Stdout = stdout
 	return Run(ctx, options)
+}
+
+func knownServerCommand(value string) bool {
+	switch value {
+	case "run", "healthcheck", "doctor", "init", "setup", "backup", "restore", "cert":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseServerArguments(args []string) (string, string, error) {

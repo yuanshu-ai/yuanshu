@@ -129,6 +129,14 @@ func TestLocalServerServesLoopbackHTTPAndWSRuntimeOnlyForExactHost(t *testing.T)
 	if runtimeConfig["relayUrl"] != "ws://"+listener.Addr().String()+"/web/connect" || runtimeConfig["pairingUrl"] != base+"/pair" {
 		t.Fatalf("runtime config=%v", runtimeConfig)
 	}
+	pairingPage, err := http.Get(base + "/pair")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = pairingPage.Body.Close()
+	if pairingPage.StatusCode != http.StatusOK || !strings.Contains(pairingPage.Header.Get("Content-Type"), "text/html") {
+		t.Fatalf("pairing page status=%d headers=%v", pairingPage.StatusCode, pairingPage.Header)
+	}
 	request, _ := http.NewRequest(http.MethodGet, base+"/healthz", nil)
 	request.Host = "127.0.0.1:1"
 	response, err := http.DefaultClient.Do(request)

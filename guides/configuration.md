@@ -39,6 +39,25 @@ yuanshu node ui
 yuanshu node doctor --json
 ```
 
+When automatic browser opening or the native directory picker is unavailable, keep the setup local by printing the one-minute loopback URL and preselecting the workspace from the CLI:
+
+```shell
+yuanshu node setup \
+  --print-url \
+  --workspace /absolute/path/to/workspace
+```
+
+For a `lan-managed` Server, the same local command can preselect the public CA certificate without exposing its path or PEM contents to the setup page:
+
+```shell
+yuanshu node setup \
+  --print-url \
+  --workspace /absolute/path/to/workspace \
+  --relay-ca /absolute/path/to/yuanshu-lan-ca.crt
+```
+
+The printed URL is loopback-only and expires after one minute. Workspace selections are represented in the browser by a session-bound, single-use opaque token; the Node rechecks the canonical path and local security boundary before saving it.
+
 Remote Web settings return a redacted view only. Safe display and retention changes may apply directly. Relay, proxy, workspace, permission, or execution-boundary changes create a pending record that must be reviewed on the Node machine. Remote callers cannot add a workspace, submit an absolute path, replace a CA, change credentials, or expand permissions without the local boundary.
 
 ## Files and recovery

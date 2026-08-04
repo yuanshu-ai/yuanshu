@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -195,6 +196,58 @@ func TestNodeFlagParsing(t *testing.T) {
 	}
 	if _, _, _, err := parseNodeFlags([]string{"--json"}, "default", false, false); !errors.Is(err, ErrUsage) {
 		t.Fatalf("unexpected flag error = %v", err)
+	}
+	workspacePath := filepath.Join(t.TempDir(), "workspace")
+	relayCAPath := filepath.Join(t.TempDir(), "relay-ca.crt")
+	setupConfig, printURL, setupWorkspace, setupRelayCA, err := parseNodeSetupFlags([]string{"--config", configPath, "--print-url", "--workspace", workspacePath, "--relay-ca", relayCAPath}, "default")
+	if err != nil || setupConfig != configPath || !printURL || setupWorkspace != workspacePath || setupRelayCA != relayCAPath {
+		t.Fatalf("setup flags = %q %v %q %q %v", setupConfig, printURL, setupWorkspace, setupRelayCA, err)
+	}
+	if _, _, _, _, err := parseNodeSetupFlags([]string{"--print-url", "--print-url"}, "default"); !errors.Is(err, ErrUsage) {
+		t.Fatalf("duplicate setup flag error = %v", err)
+	}
+}
+
+func TestNodeSetupHelp(t *testing.T) {
+	var output bytes.Buffer
+	if err := Command(context.Background(), []string{"setup", "--help"}, &output, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "node setup") || !strings.Contains(output.String(), "--workspace") {
+		t.Fatalf("help output = %q", output.String())
+	}
+}
+
+func TestHostCanPrintOneTimeSetupURL(t *testing.T) {
+	root := t.TempDir()
+	fakePlatform, _ := platformfake.New(platform.FamilyWindows)
+	tray := &testTray{started: make(chan trayCallbacks, 1)}
+	var output bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runHost(ctx, runOptions{
+			paths:      paths{root: root, config: filepath.Join(root, "missing.toml"), database: filepath.Join(root, "node.db"), log: filepath.Join(root, "node.log")},
+			configPath: filepath.Join(root, "missing.toml"), platform: fakePlatform, tray: tray, setup: true, setupURLWriter: &output,
+		})
+	}()
+	select {
+	case <-tray.started:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("tray did not start")
+	}
+	if value := output.String(); !strings.Contains(value, "http://127.0.0.1:") || !strings.Contains(value, "/#") || !strings.Contains(value, "expires in 1 minute") {
+		cancel()
+		t.Fatalf("setup output = %q", value)
+	}
+	if _, err := callLocal(context.Background(), fakePlatform.IPC(), "stop"); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

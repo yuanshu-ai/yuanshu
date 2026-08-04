@@ -29,6 +29,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [resumeConfirmed, setResumeConfirmed] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation>();
   const [visibleItems, setVisibleItems] = useState(100);
   const [atBottom, setAtBottom] = useState(true);
@@ -43,6 +44,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   useEffect(() => {
     setVisibleItems(100);
     setMessage("");
+    setResumeConfirmed(false);
     setInput("");
     setNewItems(0);
     setAtBottom(true);
@@ -80,7 +82,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
 
   useEffect(() => () => onDraftChange?.(false), [onDraftChange]);
 
-  const run = async (type: "thread.resume" | "turn.start" | "turn.steer" | "turn.interrupt", payload: Record<string, unknown>, target: { threadId?: string; turnId?: string }, clearInput = false) => {
+  const run = async (type: "thread.resume" | "turn.start" | "turn.steer" | "turn.interrupt", payload: Record<string, unknown>, target: { threadId?: string; turnId?: string }, clearInput = false): Promise<boolean> => {
     setBusy(true);
     setMessage("");
     try {
@@ -89,8 +91,10 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
       if (status !== "confirmed") throw new Error(typeof result.payload.errorCode === "string" ? result.payload.errorCode : status);
       if (clearInput) setInput("");
       setMessage(type === "turn.interrupt" ? "停止请求已确认" : "设备已确认请求");
+      return true;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "操作结果不确定");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -102,6 +106,10 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
     if (!value || !selectedNodeId || !selectedWorkspaceId || busy) return;
     if (!leaseHeld) {
       setMessage("当前是只读状态，请先获取任务控制权");
+      return;
+    }
+    if (needsResume) {
+      setMessage("该任务尚未载入设备，请先恢复任务再发送");
       return;
     }
     if (activeTurn) await run("turn.steer", { input: value }, { threadId: selectedThreadId, turnId: activeTurn.turnId }, true);
@@ -153,13 +161,18 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   const hiddenCount = Math.max(0, itemCount - visibleItems);
   const placeholder = activeTurn ? "补充要求或纠偏当前执行" : "继续这个任务";
   const taskStatus = activeTurn?.status ?? thread?.status;
+  const needsResume = !activeTurn && !resumeConfirmed && ["notLoaded", "unavailable"].includes(thread?.status ?? "");
+
+  const resumeThread = async () => {
+    if (await run("thread.resume", {}, { threadId: selectedThreadId })) setResumeConfirmed(true);
+  };
 
   if (!selectedThreadId) {
     return <section className="thread-detail empty-detail" aria-label="任务详情"><EmptyState icon="tasks" title="选择一个任务查看详情" detail="新任务需要先明确选择设备、工作区并确认本地权限。" /></section>;
   }
 
   return <section className="thread-detail" aria-label="任务详情">
-    <div className="thread-detail-heading"><button className="mobile-back" type="button" onClick={onBack} aria-label="返回任务列表"><Icon name="back" /></button><div className="thread-heading-copy"><p>{node?.name ?? "未命名设备"} · {workspace?.name ?? "工作区"}</p><h1>{thread?.title || thread?.preview || (selectedThreadId ? `任务 ${selectedThreadId.slice(0, 10)}` : "开始新任务")}</h1><div className="thread-context-status"><StatusPill tone={connectionState === "connected" ? "accent" : "warning"}>{connectionLabel(connectionState)}</StatusPill>{thread && <StatusPill tone={taskStatus === "failed" ? "danger" : taskStatus === "running" ? "accent" : "quiet"}>{statusLabel(taskStatus)}</StatusPill>}<span>{leaseHeld ? "当前浏览器可操作" : "当前为只读查看"}</span></div></div>{thread && <div className="thread-heading-actions"><LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => scope && void session.releaseLease(scope).catch(() => undefined)} />{!activeTurn && <button className="button secondary" type="button" disabled={busy || connectionState !== "connected" || !leaseHeld} onClick={() => void run("thread.resume", {}, { threadId: selectedThreadId })}>继续执行</button>}</div>}</div>
+    <div className="thread-detail-heading"><button className="mobile-back" type="button" onClick={onBack} aria-label="返回任务列表"><Icon name="back" /></button><div className="thread-heading-copy"><p>{node?.name ?? "未命名设备"} · {workspace?.name ?? "工作区"}</p><h1>{thread?.title || thread?.preview || (selectedThreadId ? `任务 ${selectedThreadId.slice(0, 10)}` : "开始新任务")}</h1><div className="thread-context-status"><StatusPill tone={connectionState === "connected" ? "accent" : "warning"}>{connectionLabel(connectionState)}</StatusPill>{thread && <StatusPill tone={taskStatus === "failed" ? "danger" : taskStatus === "running" ? "accent" : "quiet"}>{statusLabel(taskStatus)}</StatusPill>}<span>{leaseHeld ? "当前浏览器可操作" : "当前为只读查看"}</span></div></div>{thread && <div className="thread-heading-actions"><LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => scope && void session.releaseLease(scope).catch(() => undefined)} />{!activeTurn && <button className="button secondary" type="button" disabled={busy || connectionState !== "connected" || !leaseHeld} onClick={() => void resumeThread()}>{needsResume ? "恢复任务" : "继续执行"}</button>}</div>}</div>
     {thread && (thread.recovery !== "none" || thread.historyState === "partial" || thread.historyState === "unavailable") && <div className="inline-alert warning"><Icon name="warning" /><div><b>{thread.recovery === "history_gap" ? "部分历史不可用" : "历史内容不完整"}</b><p>当前视图可能只包含设备能够恢复的部分内容。</p></div></div>}
     {node && (!node.online || node.runtimeStatus === "unavailable") && <div className="inline-alert danger"><Icon name="warning" /><div><b>Codex 暂不可用</b><p>本地状态会继续保留，设备恢复连接后重新同步。</p></div></div>}
     {resource?.state === "error" && <ResourceMessage resource={resource} onRetry={() => void session.loadThread(selectedNodeId, selectedWorkspaceId, selectedThreadId, true)} />}
@@ -180,7 +193,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
       <form className="composer" onSubmit={(event) => void submit(event)}>
         <label className="sr-only" htmlFor="task-input">任务指令</label>
         <textarea ref={textarea} id="task-input" value={input} onChange={(event) => { setInput(event.target.value); onDraftChange?.(event.target.value.trim().length > 0); }} onKeyDown={onComposerKeyDown} placeholder={placeholder} disabled={busy || connectionState !== "connected" || !selectedWorkspaceId} rows={3} />
-        <div className="composer-actions"><span>{activeTurn ? "纠偏当前执行" : "追加本轮执行"}<small>Cmd/Ctrl + Enter</small></span><div>{activeTurn && <button className="button danger" type="button" disabled={busy || !leaseHeld} onClick={() => void run("turn.interrupt", {}, { threadId: selectedThreadId, turnId: activeTurn.turnId })}><Icon name="stop" />停止</button>}<button className="button primary" type="submit" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId || !leaseHeld}>{busy ? "发送中" : !leaseHeld ? "需要控制权" : "发送"}<Icon name="send" /></button></div></div>
+        <div className="composer-actions"><span>{activeTurn ? "纠偏当前执行" : needsResume ? "恢复后可继续" : "追加本轮执行"}<small>Cmd/Ctrl + Enter</small></span><div>{activeTurn && <button className="button danger" type="button" disabled={busy || !leaseHeld} onClick={() => void run("turn.interrupt", {}, { threadId: selectedThreadId, turnId: activeTurn.turnId })}><Icon name="stop" />停止</button>}<button className="button primary" type="submit" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId || !leaseHeld || needsResume}>{busy ? "发送中" : !leaseHeld ? "需要控制权" : needsResume ? "先恢复任务" : "发送"}<Icon name="send" /></button></div></div>
       </form>
     </div>
 

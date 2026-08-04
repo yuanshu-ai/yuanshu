@@ -456,6 +456,9 @@ export class DataProjection {
     turn.updatedAt = event.sentAt;
     const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId, event.sequence);
     if (!thread.turnIds.includes(turn.turnId)) thread.turnIds.push(turn.turnId);
+    // A Thread has one active Codex Turn at a time. Keep the summary and
+    // detail header aligned with the authoritative Turn lifecycle event.
+    thread.status = turn.status;
     thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
     thread.updatedAt = event.sentAt;
   }

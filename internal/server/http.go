@@ -58,10 +58,11 @@ func NewHandler(service *BootstrapService, ready readiness, hubs ...*Hub) (http.
 	if len(hubs) == 1 {
 		hub = hubs[0]
 	}
-	return newHandler(service, ready, hub, adminHandlerOptions{})
+	local, _ := ready.(*serverstore.Store)
+	return newHandler(service, ready, local, hub, adminHandlerOptions{})
 }
 
-func newHandler(service *BootstrapService, ready readiness, hub *Hub, adminOptions adminHandlerOptions) (http.Handler, error) {
+func newHandler(service *BootstrapService, ready readiness, local *serverstore.Store, hub *Hub, adminOptions adminHandlerOptions) (http.Handler, error) {
 	if service == nil || ready == nil || (adminOptions.Enabled && hub == nil) {
 		return nil, ErrInvalid
 	}
@@ -149,7 +150,7 @@ func newHandler(service *BootstrapService, ready readiness, hub *Hub, adminOptio
 	if hub != nil {
 		mux.HandleFunc("GET /node/connect", hub.NodeHandler)
 		mux.HandleFunc("GET /web/connect", hub.ControlHandler)
-		if local, ok := ready.(*serverstore.Store); ok {
+		if local != nil {
 			pairing, err := NewPairingService(local, hub, PairingOptions{Clock: service.clock})
 			if err != nil {
 				return nil, err

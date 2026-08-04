@@ -10,7 +10,8 @@ describe("personal data projection", () => {
     projection.apply(message("node-a", 1, "device.status", { status: "online", name: "Office", workspaces: [{ id: "workspace", name: "Office repo" }] }));
     projection.apply(message("node-a", 2, "thread.started", { status: "running" }, "workspace", "thread", undefined));
     projection.apply(message("node-a", 3, "turn.started", { status: "running" }, "workspace", "thread", "turn"));
-    projection.apply(message("node-a", 4, "agent.message.delta", { text: "office output" }, "workspace", "thread", "turn"));
+    projection.apply(message("node-a", 4, "turn.completed", { status: "completed" }, "workspace", "thread", "turn"));
+    projection.apply(message("node-a", 5, "agent.message.delta", { text: "office output" }, "workspace", "thread", "turn"));
     projection.apply(message("node-b", 1, "device.status", { status: "online", name: "Home", workspaces: [{ id: "workspace", name: "Home repo" }] }));
     projection.apply(message("node-b", 2, "thread.started", { status: "running" }, "workspace", "thread", undefined));
     projection.apply(message("node-b", 3, "agent.message.delta", { text: "home output" }, "workspace", "thread", "turn"));
@@ -19,8 +20,8 @@ describe("personal data projection", () => {
     expect(projection.state.nodes["node-b"].name).toBe("Home");
     expect(projection.state.workspaces[workspaceKey("node-a", "workspace")].name).toBe("Office repo");
     expect(projection.state.workspaces[workspaceKey("node-b", "workspace")].name).toBe("Home repo");
-    expect(projection.state.threads[threadKey("node-a", "workspace", "thread")].status).toBe("running");
-    expect(projection.state.turns[turnKey("node-a", "workspace", "thread", "turn")].status).toBe("running");
+    expect(projection.state.threads[threadKey("node-a", "workspace", "thread")].status).toBe("completed");
+    expect(projection.state.turns[turnKey("node-a", "workspace", "thread", "turn")].status).toBe("completed");
     expect(projection.state.events[eventBucketKey({ nodeId: "node-a", workspaceId: "workspace", threadId: "thread", turnId: "turn" })].find((item) => item.event.payload.text === "office output")).toBeDefined();
     expect(projection.state.events[eventBucketKey({ nodeId: "node-b", workspaceId: "workspace", threadId: "thread", turnId: "turn" })].find((item) => item.event.payload.text === "home output")).toBeDefined();
   });

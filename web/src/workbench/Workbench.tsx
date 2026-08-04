@@ -20,6 +20,7 @@ type HistorySurface = "thread" | "new-task";
 export function Workbench({ session, storage, settings, onSettingsSaved }: { session: WorkbenchSession; storage: ControlStorage; settings: RuntimeSettings; onSettingsSaved: () => void }) {
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
   const saved = useRef(readContext());
+  const restoredThreadPending = useRef(Boolean(saved.current.nodeId && saved.current.workspaceId && saved.current.threadId));
   const [screen, setScreen] = useState<Screen>("home");
   const [selectedNodeId, setSelectedNodeId] = useState(saved.current.nodeId ?? "");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(saved.current.workspaceId ?? "");
@@ -161,6 +162,14 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
     if (!selectedNodeId || !selectedWorkspaceId) return;
     writeContext({ nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, threadId: selectedThreadId });
   }, [selectedNodeId, selectedWorkspaceId, selectedThreadId]);
+
+  useEffect(() => {
+    if (!restoredThreadPending.current || snapshot.connectionState !== "connected" || !selectedNodeId || !selectedWorkspaceId || !selectedThreadId) return;
+    const key = `${selectedNodeId}\u001f${selectedWorkspaceId}\u001f${selectedThreadId}`;
+    if (!state.threads[key]) return;
+    restoredThreadPending.current = false;
+    void session.loadThread(selectedNodeId, selectedWorkspaceId, selectedThreadId, true).catch(() => undefined);
+  }, [selectedNodeId, selectedWorkspaceId, selectedThreadId, session, snapshot.connectionState, snapshot.revision, state.threads]);
 
   useEffect(() => {
     const created = snapshot.createdThread;

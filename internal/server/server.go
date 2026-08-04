@@ -157,7 +157,7 @@ func Run(ctx context.Context, options Options) error {
 		tlsNotAfter = certificateStatus.NotAfter.UTC()
 		tlsFingerprint = certificateStatus.Fingerprint
 	}
-	handler, err := newHandler(service, serverReadiness{database: local, certificate: certificateService, clock: options.Clock}, hub, adminHandlerOptions{
+	handler, err := newHandler(service, serverReadiness{database: local, certificate: certificateService, clock: options.Clock}, local, hub, adminHandlerOptions{
 		Enabled: adminEnabled(options.AdminEnabled), PublicURL: options.PublicURL,
 		Listen: options.Listen, WebEnabled: embeddedWebEnabled(options.WebEnabled),
 		TLSConfigured: tlsConfig != nil || effectiveDeploymentMode(options) == DeploymentExternal && effectiveTLSTermination(options) == "proxy", AllowedOrigins: origins,

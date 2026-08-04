@@ -31,31 +31,72 @@ import (
 const setupWorkspaceTokenTTL = 5 * time.Minute
 
 type SetupView struct {
-	Required        bool   `json:"required"`
-	PickerAvailable bool   `json:"pickerAvailable"`
-	Platform        string `json:"platform"`
-	DefaultName     string `json:"defaultName"`
-	DefaultCodex    string `json:"defaultCodex"`
+	Required             bool   `json:"required"`
+	PickerAvailable      bool   `json:"pickerAvailable"`
+	WorkspacePreselected bool   `json:"workspacePreselected,omitempty"`
+	RelayCAPreselected   bool   `json:"relayCaPreselected,omitempty"`
+	Platform             string `json:"platform"`
+	DefaultName          string `json:"defaultName"`
+	DefaultCodex         string `json:"defaultCodex"`
 }
 
 type setupSelection struct {
-	session   string
-	path      string
-	name      string
-	expiresAt time.Time
+	session    string
+	path       string
+	name       string
+	expiresAt  time.Time
+	processing bool
 }
 
 type nodeSetupController struct {
-	mu         sync.Mutex
-	platform   platform.Platform
-	paths      paths
-	configPath string
-	force      bool
-	active     bool
-	selections map[string]setupSelection
-	clock      func() time.Time
-	onComplete func(string)
-	httpClient *http.Client
+	mu             sync.Mutex
+	platform       platform.Platform
+	paths          paths
+	configPath     string
+	force          bool
+	active         bool
+	selections     map[string]setupSelection
+	clock          func() time.Time
+	onComplete     func(string)
+	httpClient     *http.Client
+	localWorkspace string
+	localRelayCA   string
+}
+
+// setLocalWorkspace provides a path selected by a person at the local CLI.
+// The browser still receives only a session-bound opaque token.
+func (s *nodeSetupController) setLocalWorkspace(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		s.mu.Lock()
+		s.localWorkspace = ""
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Lock()
+	s.localWorkspace = filepath.Clean(path)
+	s.mu.Unlock()
+}
+
+// setLocalRelayCA loads a public CA certificate selected at the local CLI.
+// Neither its path nor its PEM contents are exposed to the setup browser.
+func (s *nodeSetupController) setLocalRelayCA(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if !filepath.IsAbs(path) {
+		return platform.ErrInvalidArgument
+	}
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil || validateRelayCABundle(raw) != nil {
+		clear(raw)
+		return errors.New("relay CA bundle is invalid")
+	}
+	s.mu.Lock()
+	s.localRelayCA = string(raw)
+	s.mu.Unlock()
+	clear(raw)
+	return nil
 }
 
 func newNodeSetupController(value platform.Platform, paths paths, configPath string, force bool, onComplete func(string)) *nodeSetupController {
@@ -77,8 +118,9 @@ func (s *nodeSetupController) view() *SetupView {
 	if strings.TrimSpace(name) == "" {
 		name = "My Node"
 	}
-	picker := s.platform != nil && s.platform.DirectoryPicker() != nil && s.platform.DirectoryPicker().Available()
-	return &SetupView{Required: true, PickerAvailable: picker, Platform: string(s.platform.Family()), DefaultName: name, DefaultCodex: "codex"}
+	preselected := s.localWorkspace != ""
+	picker := preselected || (s.platform != nil && s.platform.DirectoryPicker() != nil && s.platform.DirectoryPicker().Available())
+	return &SetupView{Required: true, PickerAvailable: picker, WorkspacePreselected: preselected, RelayCAPreselected: s.localRelayCA != "", Platform: string(s.platform.Family()), DefaultName: name, DefaultCodex: "codex"}
 }
 
 func (s *nodeSetupController) handle(ctx context.Context, request localRequest) localResponse {
@@ -93,6 +135,11 @@ func (s *nodeSetupController) handle(ctx context.Context, request localRequest) 
 	if !active {
 		response.Error = "setup_not_required"
 		return response
+	}
+	if request.RelayCABundle == "" {
+		s.mu.Lock()
+		request.RelayCABundle = s.localRelayCA
+		s.mu.Unlock()
 	}
 	switch request.Command {
 	case "setup_pick":
@@ -133,12 +180,22 @@ func (s *nodeSetupController) handle(ctx context.Context, request localRequest) 
 type pickedWorkspace struct{ Token, Name string }
 
 func (s *nodeSetupController) pickWorkspace(ctx context.Context, session string) (pickedWorkspace, error) {
-	if session == "" || s.platform.DirectoryPicker() == nil || !s.platform.DirectoryPicker().Available() {
+	if session == "" || s.platform == nil {
 		return pickedWorkspace{}, platform.ErrUnavailable
 	}
-	selected, err := s.platform.DirectoryPicker().PickDirectory(ctx)
-	if err != nil {
-		return pickedWorkspace{}, err
+	s.mu.Lock()
+	localWorkspace := s.localWorkspace
+	s.mu.Unlock()
+	selected := platform.DirectorySelection{Path: localWorkspace, DisplayName: filepath.Base(localWorkspace)}
+	if localWorkspace == "" {
+		if s.platform.DirectoryPicker() == nil || !s.platform.DirectoryPicker().Available() {
+			return pickedWorkspace{}, platform.ErrUnavailable
+		}
+		var err error
+		selected, err = s.platform.DirectoryPicker().PickDirectory(ctx)
+		if err != nil {
+			return pickedWorkspace{}, err
+		}
 	}
 	facts, err := workspace.ValidateRoot(ctx, s.platform.Workspaces(), selected.Path)
 	if err != nil {
@@ -164,22 +221,40 @@ func (s *nodeSetupController) pickWorkspace(ctx context.Context, session string)
 	return pickedWorkspace{Token: token, Name: name}, nil
 }
 
-func (s *nodeSetupController) consumeSelection(session, token string) (setupSelection, error) {
+func (s *nodeSetupController) beginSelection(session, token string) (setupSelection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item, ok := s.selections[token]
-	delete(s.selections, token)
-	if !ok || session == "" || item.session != session || !item.expiresAt.After(s.clock().UTC()) {
+	if !ok || item.processing || session == "" || item.session != session || !item.expiresAt.After(s.clock().UTC()) {
 		return setupSelection{}, errors.New("workspace token is invalid")
 	}
+	item.processing = true
+	s.selections[token] = item
 	return item, nil
 }
 
+func (s *nodeSetupController) finishSelection(session, token string, succeeded bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.selections[token]
+	if !ok || item.session != session {
+		return
+	}
+	if succeeded {
+		delete(s.selections, token)
+		return
+	}
+	item.processing = false
+	s.selections[token] = item
+}
+
 func (s *nodeSetupController) complete(ctx context.Context, request localRequest) (string, error) {
-	selection, err := s.consumeSelection(request.localSession, request.WorkspaceToken)
+	selection, err := s.beginSelection(request.localSession, request.WorkspaceToken)
 	if err != nil {
 		return "", err
 	}
+	selectionSucceeded := false
+	defer func() { s.finishSelection(request.localSession, request.WorkspaceToken, selectionSucceeded) }()
 	permission := config.PermissionProfile(request.PermissionProfile)
 	if permission == "" {
 		permission = config.PermissionReadOnly
@@ -307,6 +382,7 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 	s.active = false
 	s.mu.Unlock()
 	setupSaved = true
+	selectionSucceeded = true
 	return request.JoinURL, nil
 }
 
@@ -510,6 +586,16 @@ func setupErrorCode(err error) string {
 		return "workspace_denied"
 	case errors.Is(err, workspace.ErrUnavailable):
 		return "workspace_unavailable"
+	case strings.Contains(err.Error(), "secure storage"):
+		return "setup_secure_store_unavailable"
+	case strings.Contains(err.Error(), "bootstrap request was rejected"):
+		return "setup_bootstrap_rejected"
+	case strings.Contains(err.Error(), "bootstrap service is unavailable"):
+		return "setup_relay_unavailable"
+	case strings.Contains(err.Error(), "database"):
+		return "setup_database_unavailable"
+	case strings.Contains(err.Error(), "configuration"):
+		return "setup_configuration_failed"
 	default:
 		return "setup_failed"
 	}

@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,12 +30,15 @@ import (
 const autostartID = "yuanshu-node"
 
 type runOptions struct {
-	paths      paths
-	configPath string
-	background bool
-	platform   platform.Platform
-	tray       tray
-	setup      bool
+	paths              paths
+	configPath         string
+	background         bool
+	platform           platform.Platform
+	tray               tray
+	setup              bool
+	setupURLWriter     io.Writer
+	setupWorkspacePath string
+	setupRelayCAPath   string
 }
 
 type host struct {
@@ -97,6 +102,10 @@ func runHost(ctx context.Context, options runOptions) error {
 			_ = h.handleLocalManagement(h.runCtx, localRequest{Protocol: localProtocol, Command: "enrollment_join", JoinURL: joinURL})
 		}
 	})
+	h.setupController.setLocalWorkspace(options.setupWorkspacePath)
+	if err := h.setupController.setLocalRelayCA(options.setupRelayCAPath); err != nil {
+		return errors.New("node setup relay CA is invalid")
+	}
 	center, err := newControlCenter(h.status.snapshot, h.handleLocalManagement)
 	if err != nil {
 		return err
@@ -110,9 +119,27 @@ func runHost(ctx context.Context, options runOptions) error {
 	}
 	defer server.Close()
 	h.log.write("node_starting", "starting", 0)
-	_ = h.reload(runCtx)
+	if h.setupController.view() == nil {
+		_ = h.reload(runCtx)
+	} else {
+		h.status.update(func(value *Status) {
+			value.State = "needs_attention"
+			value.Config = "setup_required"
+			value.RemoteControl = "not_available"
+		})
+	}
 	if h.setupController.view() != nil && !options.background {
-		_ = h.openControlCenter(runCtx)
+		if options.setupURLWriter != nil {
+			value, openErr := h.controlCenter.Open(runCtx)
+			if openErr != nil {
+				return errors.New("node setup page is unavailable")
+			}
+			if _, writeErr := fmt.Fprintf(options.setupURLWriter, "Yuanshu Node setup (expires in 1 minute): %s\n", value); writeErr != nil {
+				return errors.New("node setup output failed")
+			}
+		} else {
+			_ = h.openControlCenter(runCtx)
+		}
 	}
 	options.tray.Update(h.status.snapshot())
 	trayErr := options.tray.Run(runCtx, h.trayCallbacks(cancel))

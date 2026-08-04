@@ -25,6 +25,24 @@ describe("personal workbench", () => {
     expect(screen.getByRole("button", { name: /需要控制权/ })).toBeDisabled();
   });
 
+  it("reloads the selected Thread history after restoring browser context", async () => {
+    sessionStorage.setItem("yuanshu-workbench-context", JSON.stringify({ nodeId: "node-a", workspaceId: "workspace-a", threadId: "thread-a" }));
+    const fake = new FakeSession();
+    render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
+
+    await waitFor(() => expect(fake.loadThread).toHaveBeenCalledWith("node-a", "workspace-a", "thread-a", true));
+  });
+
+  it("requires an unloaded Codex Thread to be restored before another Turn", async () => {
+    sessionStorage.setItem("yuanshu-workbench-context", JSON.stringify({ nodeId: "node-a", workspaceId: "workspace-a", threadId: "thread-a" }));
+    const fake = new FakeSession();
+    act(() => fake.push(event(5, "thread.snapshot", { status: "notLoaded", historyState: "complete", turns: [{ id: "turn-a", status: "completed", items: [] }] }, "workspace-a", "thread-a")));
+    render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
+
+    expect(await screen.findByRole("button", { name: "恢复任务" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "继续执行" })).not.toBeInTheDocument();
+  });
+
   it("uses the dedicated task and notification navigation views", () => {
     const fake = new FakeSession();
     render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);

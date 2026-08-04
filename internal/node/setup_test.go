@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,6 +69,51 @@ func TestNodeSetupUsesSessionBoundNativeWorkspaceToken(t *testing.T) {
 	}
 	if _, err := fakePlatform.SecureStore().Get(context.Background(), value.Config.Relay.CredentialRef); err != nil {
 		t.Fatalf("credential was not stored securely: %v", err)
+	}
+}
+
+func TestNodeSetupUsesLocalCLIWorkspaceWithoutExposingPath(t *testing.T) {
+	directory := t.TempDir()
+	workspacePath := filepath.Join(directory, "workspace")
+	if err := os.Mkdir(workspacePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fakePlatform, _ := platformfake.New(platform.FamilyDarwin)
+	fakePlatform.FakeDirectoryPicker().SetError(platform.ErrUnavailable)
+	if err := fakePlatform.FakeWorkspaces().Register(workspacePath, platform.WorkspaceFacts{CanonicalPath: workspacePath, FilesystemRoot: directory, FileIdentity: "cli-workspace", IsDirectory: true}); err != nil {
+		t.Fatal(err)
+	}
+	controller := newNodeSetupController(fakePlatform, paths{root: directory}, filepath.Join(directory, "config.toml"), false, nil)
+	controller.setLocalWorkspace(workspacePath)
+	view := controller.view()
+	if view == nil || !view.PickerAvailable {
+		t.Fatalf("setup view = %#v", view)
+	}
+	picked := controller.handle(context.Background(), localRequest{Command: "setup_pick", localSession: "local-session"})
+	if !picked.OK || picked.WorkspaceToken == "" || picked.WorkspaceName != "workspace" {
+		t.Fatalf("pick response = %#v", picked)
+	}
+	encoded, err := json.Marshal(picked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), workspacePath) {
+		t.Fatal("local workspace path was exposed to the browser")
+	}
+}
+
+func TestNodeSetupEmptyCLIWorkspaceDoesNotBecomeCurrentDirectory(t *testing.T) {
+	directory := t.TempDir()
+	fakePlatform, _ := platformfake.New(platform.FamilyDarwin)
+	fakePlatform.FakeDirectoryPicker().SetError(platform.ErrUnavailable)
+	controller := newNodeSetupController(fakePlatform, paths{root: directory}, filepath.Join(directory, "config.toml"), false, nil)
+	controller.setLocalWorkspace("")
+	view := controller.view()
+	if view == nil || view.WorkspacePreselected {
+		t.Fatalf("empty CLI workspace changed setup capabilities: %#v", view)
+	}
+	if result := controller.handle(context.Background(), localRequest{Command: "setup_pick", localSession: "session"}); result.OK || result.Error != "native_picker_unavailable" {
+		t.Fatalf("empty CLI workspace selected the process directory: %#v", result)
 	}
 }
 
@@ -135,6 +181,23 @@ func TestNodeSetupStoresValidatedCustomCAInPrivateDirectory(t *testing.T) {
 	if result := controller.handle(context.Background(), localRequest{Command: "setup_test", RelayURL: relayURL, RelayCABundle: string(append(ca, []byte("PRIVATE KEY")...))}); result.OK {
 		t.Fatalf("invalid CA bundle accepted: %#v", result)
 	}
+	caPath := filepath.Join(directory, "relay-ca.crt")
+	if err := os.WriteFile(caPath, ca, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.setLocalRelayCA(caPath); err != nil {
+		t.Fatal(err)
+	}
+	if result := controller.handle(context.Background(), localRequest{Command: "setup_test", RelayURL: relayURL}); !result.OK {
+		t.Fatalf("CLI-selected CA relay test=%#v", result)
+	}
+	invalidPath := filepath.Join(directory, "invalid-ca.crt")
+	if err := os.WriteFile(invalidPath, []byte("not a CA"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.setLocalRelayCA(invalidPath); err == nil {
+		t.Fatal("invalid CLI-selected CA was accepted")
+	}
 }
 
 func TestNodeSetupWorkspaceTokenExpiresAndWorkspaceBoundaryIsRechecked(t *testing.T) {
@@ -175,10 +238,14 @@ func TestNodeSetupFailsClosedWithoutSecureStore(t *testing.T) {
 	picked := controller.handle(context.Background(), localRequest{Command: "setup_pick", localSession: "session"})
 	request := localRequest{Command: "setup_complete", localSession: "session", Name: "Mac", RelayURL: "wss://relay.example.test/node/connect", JoinURL: "https://relay.example.test/join#value", WorkspaceToken: picked.WorkspaceToken, WorkspaceName: "Workspace", PermissionProfile: "read-only"}
 	result := controller.handle(context.Background(), request)
-	if result.OK || result.Error != "setup_failed" {
+	if result.OK || result.Error != "setup_secure_store_unavailable" {
 		t.Fatalf("secure store result = %#v", result)
 	}
 	if _, err := os.Stat(filepath.Join(directory, "config.toml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("configuration was written after secure store failure")
+	}
+	fakePlatform.FakeSecureStore().SetError(nil)
+	if retry := controller.handle(context.Background(), request); retry.Error == "workspace token is invalid" {
+		t.Fatalf("workspace token was consumed by a failed setup: %#v", retry)
 	}
 }
