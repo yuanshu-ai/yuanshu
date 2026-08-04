@@ -52,12 +52,12 @@ func TestServerInitRequiresMatchingTLSIdentityForLAN(t *testing.T) {
 	root := t.TempDir()
 	certPath, keyPath, _ := writeServerTestCertificate(t, filepath.Join(root, "tls"), []string{"192.0.2.20"}, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 	configPath := filepath.Join(root, "server.toml")
-	args := []string{"--config", configPath, "--mode", "lan", "--data-dir", filepath.Join(root, "data"), "--listen", "0.0.0.0:7444", "--public-url", "https://192.0.2.20:7444", "--tls-cert", certPath, "--tls-key", keyPath, "--allowed-control-origin", "https://192.0.2.20:7444", "--non-interactive"}
+	args := []string{"--config", configPath, "--mode", "lan", "--data-dir", filepath.Join(root, "data"), "--listen", "0.0.0.0:9527", "--public-url", "https://192.0.2.20:9527", "--tls-cert", certPath, "--tls-key", keyPath, "--allowed-control-origin", "https://192.0.2.20:9527", "--non-interactive"}
 	if err := initializeServer(context.Background(), args, strings.NewReader(""), &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := LoadConfigFile(configPath)
-	if err != nil || loaded.PublicURL != "https://192.0.2.20:7444" || len(loaded.AllowedControlOrigins) != 1 {
+	if err != nil || loaded.PublicURL != "https://192.0.2.20:9527" || len(loaded.AllowedControlOrigins) != 1 {
 		t.Fatalf("LAN config=%#v err=%v", loaded, err)
 	}
 	wrongCert, wrongKey, _ := writeServerTestCertificate(t, filepath.Join(root, "wrong"), []string{"192.0.2.21"}, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
@@ -75,7 +75,7 @@ func TestServerInitManagedLANCreatesCAWithoutCertificatePaths(t *testing.T) {
 	var output bytes.Buffer
 	err := initializeServer(context.Background(), []string{
 		"--config", configPath, "--mode", "lan-managed", "--data-dir", dataDir,
-		"--listen", "0.0.0.0:7444", "--public-url", "https://192.168.50.20:7444", "--non-interactive",
+		"--listen", "0.0.0.0:9527", "--public-url", "https://192.168.50.20:9527", "--non-interactive",
 	}, strings.NewReader(""), &output)
 	if err != nil {
 		t.Fatal(err)
@@ -98,21 +98,21 @@ func TestServerInitManagedLANKeepsCAWhenIPAddressChanges(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "server.toml")
 	dataDir := filepath.Join(root, "data")
-	first := []string{"--config", configPath, "--mode", "lan-managed", "--data-dir", dataDir, "--listen", "0.0.0.0:7444", "--public-url", "https://192.168.20.10:7444", "--non-interactive"}
+	first := []string{"--config", configPath, "--mode", "lan-managed", "--data-dir", dataDir, "--listen", "0.0.0.0:9527", "--public-url", "https://192.168.20.10:9527", "--non-interactive"}
 	if err := initializeServer(context.Background(), first, strings.NewReader(""), io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	provider, err := newManagedCertificateProvider(context.Background(), Options{DataDir: dataDir, DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.10:7444"})
+	provider, err := newManagedCertificateProvider(context.Background(), Options{DataDir: dataDir, DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.10:9527"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := provider.Status()
 	_ = provider.Close()
-	second := []string{"--config", configPath, "--mode", "lan-managed", "--data-dir", dataDir, "--listen", "0.0.0.0:7444", "--public-url", "https://192.168.20.11:7444", "--non-interactive", "--replace"}
+	second := []string{"--config", configPath, "--mode", "lan-managed", "--data-dir", dataDir, "--listen", "0.0.0.0:9527", "--public-url", "https://192.168.20.11:9527", "--non-interactive", "--replace"}
 	if err := initializeServer(context.Background(), second, strings.NewReader(""), io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := newManagedCertificateProvider(context.Background(), Options{DataDir: dataDir, DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.11:7444"})
+	updated, err := newManagedCertificateProvider(context.Background(), Options{DataDir: dataDir, DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.11:9527"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestServerInitRejectsReplacementWhileServerLockIsHeld(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "server.toml")
 	dataDir := filepath.Join(root, "data")
-	arguments := []string{"--config", configPath, "--mode", "local", "--data-dir", dataDir, "--listen", "127.0.0.1:7444", "--non-interactive"}
+	arguments := []string{"--config", configPath, "--mode", "local", "--data-dir", dataDir, "--listen", "127.0.0.1:9527", "--non-interactive"}
 	if err := initializeServer(context.Background(), arguments, strings.NewReader(""), io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestServerBackupAndRestoreRoundTrip(t *testing.T) {
 	}
 	configPath := filepath.Join(root, "server.toml")
 	configStore, _ := NewConfigFileStore(configPath)
-	if err := configStore.Save(context.Background(), ConfigFile{ConfigVersion: CurrentConfigVersion, DataDir: dataDir, Listen: "127.0.0.1:7444"}); err != nil {
+	if err := configStore.Save(context.Background(), ConfigFile{ConfigVersion: CurrentConfigVersion, DataDir: dataDir, Listen: "127.0.0.1:9527"}); err != nil {
 		t.Fatal(err)
 	}
 	databasePath := filepath.Join(dataDir, "server.db")
@@ -207,7 +207,7 @@ func TestServerDoctorReportsLatestDefaultBackupIntegrity(t *testing.T) {
 	}
 	configPath := filepath.Join(root, "server.toml")
 	configStore, _ := NewConfigFileStore(configPath)
-	if err := configStore.Save(context.Background(), ConfigFile{ConfigVersion: CurrentConfigVersion, DataDir: dataDir, Listen: "127.0.0.1:7444"}); err != nil {
+	if err := configStore.Save(context.Background(), ConfigFile{ConfigVersion: CurrentConfigVersion, DataDir: dataDir, Listen: "127.0.0.1:9527"}); err != nil {
 		t.Fatal(err)
 	}
 	local, err := serverstore.Open(context.Background(), filepath.Join(dataDir, "server.db"), serverstore.Options{})
@@ -255,7 +255,7 @@ func TestRestoreRejectsRunningServerAndInvalidArchive(t *testing.T) {
 	}
 	configPath := filepath.Join(root, "server.toml")
 	store, _ := NewConfigFileStore(configPath)
-	if err := store.Save(context.Background(), ConfigFile{ConfigVersion: CurrentConfigVersion, DataDir: dataDir, Listen: "127.0.0.1:7444"}); err != nil {
+	if err := store.Save(context.Background(), ConfigFile{ConfigVersion: CurrentConfigVersion, DataDir: dataDir, Listen: "127.0.0.1:9527"}); err != nil {
 		t.Fatal(err)
 	}
 	archive := filepath.Join(root, "invalid.tar.gz")

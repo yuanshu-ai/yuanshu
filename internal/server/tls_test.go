@@ -24,7 +24,7 @@ func TestPublicServerOptionsAndTLSMaterial(t *testing.T) {
 	root := t.TempDir()
 	certPath, keyPath, _ := writeServerTestCertificate(t, root, []string{"localhost"}, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 	options := Options{
-		DataDir: root, Listen: "0.0.0.0:7444", PublicURL: "https://localhost:7444",
+		DataDir: root, Listen: "0.0.0.0:9527", PublicURL: "https://localhost:9527",
 		TLSCertFile: certPath, TLSKeyFile: keyPath,
 	}
 	configuration, err := loadTLSConfig(options)

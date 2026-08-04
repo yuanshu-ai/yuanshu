@@ -169,13 +169,17 @@ func TestHTTPRejectsWrongMethodWithStableError(t *testing.T) {
 
 func TestServerArgumentValidation(t *testing.T) {
 	absolute := filepath.Join(t.TempDir(), "data")
-	valid := [][]string{{"--data-dir", absolute}, {"run", "--data-dir", absolute, "--listen", "[::1]:7444"}}
+	_, listen, err := parseServerArguments([]string{"--data-dir", absolute})
+	if err != nil || listen != DefaultListenAddress {
+		t.Fatalf("default listen = %q, %v", listen, err)
+	}
+	valid := [][]string{{"--data-dir", absolute}, {"run", "--data-dir", absolute, "--listen", "[::1]:9527"}}
 	for _, args := range valid {
 		if _, _, err := parseServerArguments(args); err != nil {
 			t.Fatalf("valid args %q: %v", args, err)
 		}
 	}
-	invalid := [][]string{nil, {"unknown"}, {"--data-dir", "relative"}, {"--data-dir", absolute, "--listen", "0.0.0.0:7444"}, {"--data-dir", absolute, "--listen", "127.0.0.2:7444"}, {"--data-dir", absolute, "--listen", "localhost:7444"}, {"--data-dir", absolute, "--listen", "127.0.0.1:0"}}
+	invalid := [][]string{nil, {"unknown"}, {"--data-dir", "relative"}, {"--data-dir", absolute, "--listen", "0.0.0.0:9527"}, {"--data-dir", absolute, "--listen", "127.0.0.2:9527"}, {"--data-dir", absolute, "--listen", "localhost:9527"}, {"--data-dir", absolute, "--listen", "127.0.0.1:0"}}
 	for _, args := range invalid {
 		if _, _, err := parseServerArguments(args); !errors.Is(err, ErrUsage) {
 			t.Fatalf("invalid args %q: %v", args, err)
@@ -186,7 +190,7 @@ func TestServerArgumentValidation(t *testing.T) {
 func TestRunRejectsInjectedNonLoopbackListener(t *testing.T) {
 	listener := nonLoopbackTestListener{}
 	err := Run(context.Background(), Options{
-		DataDir: filepath.Join(t.TempDir(), "data"), Listen: "127.0.0.1:7444", Listener: listener,
+		DataDir: filepath.Join(t.TempDir(), "data"), Listen: "127.0.0.1:9527", Listener: listener,
 	})
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Run() error=%v", err)
@@ -200,7 +204,7 @@ type nonLoopbackTestListener struct{}
 
 func (nonLoopbackTestListener) Accept() (net.Conn, error) { return nil, errors.New("not used") }
 func (nonLoopbackTestListener) Close() error              { return nil }
-func (nonLoopbackTestListener) Addr() net.Addr            { return nonLoopbackTestAddr("0.0.0.0:7444") }
+func (nonLoopbackTestListener) Addr() net.Addr            { return nonLoopbackTestAddr("0.0.0.0:9527") }
 
 type nonLoopbackTestAddr string
 

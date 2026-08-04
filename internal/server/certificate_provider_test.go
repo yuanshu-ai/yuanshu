@@ -28,7 +28,7 @@ func (p staticCertificateProvider) Close() error                        { return
 
 func TestManagedCertificateProviderCreatesPrivateCAAndRenewsLeaf(t *testing.T) {
 	root := t.TempDir()
-	options := Options{DataDir: root, Listen: "0.0.0.0:7444", DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.30:7444"}
+	options := Options{DataDir: root, Listen: "0.0.0.0:9527", DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.30:9527"}
 	provider, err := newManagedCertificateProvider(context.Background(), options)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ func TestManagedCAEncryptedBackupAndRestore(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
 	configPath := filepath.Join(root, "server.toml")
-	value := ConfigFile{ConfigVersion: 2, DeploymentMode: DeploymentLANManaged, DataDir: dataDir, Listen: "0.0.0.0:7444", PublicURL: "https://192.168.20.40:7444"}
+	value := ConfigFile{ConfigVersion: 2, DeploymentMode: DeploymentLANManaged, DataDir: dataDir, Listen: "0.0.0.0:9527", PublicURL: "https://192.168.20.40:9527"}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		t.Fatal(err)
 	}

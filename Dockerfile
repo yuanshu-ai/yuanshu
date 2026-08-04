@@ -33,9 +33,9 @@ LABEL org.opencontainers.image.title="Yuanshu Server" \
 COPY --from=builder --chown=1000:1000 /out/yuanshu /usr/local/bin/yuanshu
 COPY --from=builder --chown=1000:1000 /out/data /data
 USER 1000:1000
-EXPOSE 7444
+EXPOSE 9527
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD ["/usr/local/bin/yuanshu", "server", "healthcheck", "--address", "127.0.0.1:7444"]
+  CMD ["/usr/local/bin/yuanshu", "server", "healthcheck", "--address", "127.0.0.1:9527"]
 ENTRYPOINT ["/usr/local/bin/yuanshu"]
 CMD ["server", "--help"]
 
@@ -55,8 +55,8 @@ ENV PATH="/opt/codex/node_modules/.bin:${PATH}" \
     CODEX_HOME=/codex-home \
     XDG_RUNTIME_DIR=/tmp/yuanshu-runtime
 USER 1000:1000
-EXPOSE 7444
+EXPOSE 9527
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD ["/usr/local/bin/yuanshu", "server", "healthcheck", "--address", "127.0.0.1:7444"]
+  CMD ["/usr/local/bin/yuanshu", "server", "healthcheck", "--address", "127.0.0.1:9527"]
 ENTRYPOINT ["/usr/local/bin/yuanshu"]
 CMD ["standalone", "--help"]

@@ -46,7 +46,7 @@ func initializeServer(ctx context.Context, args []string, input io.Reader, outpu
 		if options.mode != "local" {
 			return errors.New("remote initialization requires an explicit listen address")
 		}
-		options.listen = "127.0.0.1:7444"
+		options.listen = DefaultListenAddress
 	}
 	if options.mode != "local" && options.mode != "lan-managed" && options.mode != "public-ip-acme" && options.mode != "external" {
 		return ErrUsage

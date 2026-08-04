@@ -3,26 +3,26 @@
     {
       "config_version": 1,
       "data_dir": "/tmp/yuanshu-server",
-      "listen": "127.0.0.1:7444"
+      "listen": "127.0.0.1:9527"
     },
     {
       "config_version": 2,
       "deployment_mode": "local",
       "data_dir": "/tmp/yuanshu-server",
-      "listen": "127.0.0.1:7444"
+      "listen": "127.0.0.1:9527"
     },
     {
       "config_version": 2,
       "deployment_mode": "lan-managed",
       "data_dir": "/tmp/yuanshu-server",
-      "listen": "0.0.0.0:7444",
-      "public_url": "https://192.168.1.20:7444"
+      "listen": "0.0.0.0:9527",
+      "public_url": "https://192.168.1.20:9527"
     },
     {
       "config_version": 2,
       "deployment_mode": "public-ip-acme",
       "data_dir": "/tmp/yuanshu-server",
-      "listen": "0.0.0.0:7444",
+      "listen": "0.0.0.0:9527",
       "public_url": "https://203.0.113.20",
       "acme": { "environment": "staging", "accept_terms": true }
     },
@@ -30,7 +30,7 @@
       "config_version": 2,
       "deployment_mode": "external",
       "data_dir": "/tmp/yuanshu-server",
-      "listen": "127.0.0.1:7444",
+      "listen": "127.0.0.1:9527",
       "public_url": "https://yuanshu.example.test",
       "tls": { "termination": "proxy" },
       "admin": { "enabled": true, "session_idle_minutes": 30, "session_max_hours": 8, "audit_retention_days": 90 }
@@ -40,26 +40,26 @@
     {
       "config_version": 2,
       "data_dir": "/tmp/yuanshu-server",
-      "listen": "127.0.0.1:7444"
+      "listen": "127.0.0.1:9527"
     },
     {
       "config_version": 2,
       "deployment_mode": "local",
       "data_dir": "/tmp/yuanshu-server",
-      "listen": "127.0.0.1:7444",
+      "listen": "127.0.0.1:9527",
       "tls_cert_file": "/tmp/server.crt"
     },
     {
       "config_version": 1,
       "deployment_mode": "lan-managed",
       "data_dir": "/tmp/yuanshu-server",
-      "listen": "0.0.0.0:7444"
+      "listen": "0.0.0.0:9527"
     },
     {
       "config_version": 2,
       "deployment_mode": "external",
       "data_dir": "/tmp/yuanshu-server",
-      "listen": "127.0.0.1:7444",
+      "listen": "127.0.0.1:9527",
       "public_url": "https://example.test",
       "tls": { "termination": "server", "unexpected": true }
     }

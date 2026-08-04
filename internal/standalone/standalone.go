@@ -90,7 +90,7 @@ func parseArguments(args []string) (Options, error) {
 	} else if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		return Options{}, ErrUsage
 	}
-	options := Options{Listen: "127.0.0.1:7444"}
+	options := Options{Listen: server.DefaultListenAddress}
 	seen := make(map[string]bool)
 	var origins []string
 	var webOverride *bool
@@ -256,7 +256,7 @@ func Run(ctx context.Context, options Options) error {
 		options.Clock = time.Now
 	}
 	if options.Listen == "" {
-		options.Listen = "127.0.0.1:7444"
+		options.Listen = server.DefaultListenAddress
 	}
 	if options.Stdout == nil {
 		options.Stdout = io.Discard
@@ -266,7 +266,7 @@ func Run(ctx context.Context, options Options) error {
 		if configErr != nil {
 			return errors.Join(ErrUnavailable, errors.New("server configuration is unavailable"))
 		}
-		if options.Listen == "127.0.0.1:7444" && serverConfig.Listen != "" {
+		if options.Listen == server.DefaultListenAddress && serverConfig.Listen != "" {
 			options.Listen = serverConfig.Listen
 		}
 		if options.PublicURL == "" {

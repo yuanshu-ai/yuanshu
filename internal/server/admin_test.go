@@ -43,7 +43,7 @@ func TestAdminSignedSessionOverviewAndAdmissionProof(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hub.Close()
-	admin, err := newAdminService(local, hub, adminHandlerOptions{Enabled: true, Listen: "127.0.0.1:7444", WebEnabled: true, Clock: func() time.Time { return fixedServerNow }, Random: bytes.NewReader(bytes.Repeat([]byte{0x41}, 4096)), StartedAt: fixedServerNow.Add(-time.Hour)})
+	admin, err := newAdminService(local, hub, adminHandlerOptions{Enabled: true, Listen: "127.0.0.1:9527", WebEnabled: true, Clock: func() time.Time { return fixedServerNow }, Random: bytes.NewReader(bytes.Repeat([]byte{0x41}, 4096)), StartedAt: fixedServerNow.Add(-time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}

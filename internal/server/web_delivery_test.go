@@ -19,7 +19,7 @@ func TestEmbeddedWebDeliveryServesWorkbenchRuntimeConfigAndAssets(t *testing.T) 
 		}
 		http.NotFound(writer, request)
 	})
-	handler, err := newWebDeliveryHandler(api, webDeliveryOptions{Enabled: true, PublicURL: "https://192.168.1.20:7444"})
+	handler, err := newWebDeliveryHandler(api, webDeliveryOptions{Enabled: true, PublicURL: "https://192.168.1.20:9527"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestEmbeddedWebDeliveryServesWorkbenchRuntimeConfigAndAssets(t *testing.T) 
 	if err := json.Unmarshal(runtime.Body.Bytes(), &settings); err != nil {
 		t.Fatal(err)
 	}
-	if settings["relayUrl"] != "wss://192.168.1.20:7444/web/connect" || settings["pairingUrl"] != "https://192.168.1.20:7444/pair" || runtime.Header().Get("Cache-Control") != "no-store" {
+	if settings["relayUrl"] != "wss://192.168.1.20:9527/web/connect" || settings["pairingUrl"] != "https://192.168.1.20:9527/pair" || runtime.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("runtime settings=%v headers=%v", settings, runtime.Header())
 	}
 
@@ -112,14 +112,14 @@ func TestEmbeddedWebRuntimeConfigUsesTLSRequestHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "https://[fd00::20]:7444/yuanshu.config.json", nil)
+	request := httptest.NewRequest(http.MethodGet, "https://[fd00::20]:9527/yuanshu.config.json", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	var settings map[string]any
 	if err := json.Unmarshal(response.Body.Bytes(), &settings); err != nil {
 		t.Fatal(err)
 	}
-	if settings["relayUrl"] != "wss://[fd00::20]:7444/web/connect" || settings["pairingUrl"] != "https://[fd00::20]:7444/pair" {
+	if settings["relayUrl"] != "wss://[fd00::20]:9527/web/connect" || settings["pairingUrl"] != "https://[fd00::20]:9527/pair" {
 		t.Fatalf("settings=%v", settings)
 	}
 }
@@ -129,7 +129,7 @@ func TestEmbeddedWebRuntimeConfigAllowsOnlyLiteralLoopbackPlaintext(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct{ host, relay string }{{"127.0.0.1:7444", "ws://127.0.0.1:7444/web/connect"}, {"[::1]:7444", "ws://[::1]:7444/web/connect"}, {"192.168.1.20:7444", ""}} {
+	for _, test := range []struct{ host, relay string }{{"127.0.0.1:9527", "ws://127.0.0.1:9527/web/connect"}, {"[::1]:9527", "ws://[::1]:9527/web/connect"}, {"192.168.1.20:9527", ""}} {
 		request := httptest.NewRequest(http.MethodGet, "http://"+test.host+"/yuanshu.config.json", nil)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -142,7 +142,7 @@ func TestEmbeddedWebRuntimeConfigAllowsOnlyLiteralLoopbackPlaintext(t *testing.T
 
 func TestManagedTrustPageExportsOnlyPublicRoot(t *testing.T) {
 	root := t.TempDir()
-	provider, err := newManagedCertificateProvider(context.Background(), Options{DataDir: root, DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.31:7444"})
+	provider, err := newManagedCertificateProvider(context.Background(), Options{DataDir: root, DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.31:9527"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestManagedTrustPageExportsOnlyPublicRoot(t *testing.T) {
 }
 
 func TestWebAccessURLUsesPublicURLAndLoopbackForWildcard(t *testing.T) {
-	if got := webAccessURL("https://192.168.1.20:7444/", &net.TCPAddr{IP: net.IPv4zero, Port: 7444}); got != "https://192.168.1.20:7444/" {
+	if got := webAccessURL("https://192.168.1.20:9527/", &net.TCPAddr{IP: net.IPv4zero, Port: 9527}); got != "https://192.168.1.20:9527/" {
 		t.Fatalf("public URL=%q", got)
 	}
 	if got := webAccessURL("", &net.TCPAddr{IP: net.IPv4zero, Port: 7555}); got != "http://127.0.0.1:7555/" {

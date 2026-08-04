@@ -72,7 +72,7 @@ func TestServerSetupManagedLANReturnsTrustFingerprintAndQRCode(t *testing.T) {
 		configPath: filepath.Join(root, "config", "server.toml"), host: "127.0.0.1:49154",
 		session: "session-token", sessionExpires: time.Now().Add(time.Minute), done: make(chan error, 1),
 	}
-	payload, _ := json.Marshal(serverSetupPayload{Mode: "lan-managed", DataDir: filepath.Join(root, "data"), Listen: "0.0.0.0:7444", PublicURL: "https://192.168.20.30:7444"})
+	payload, _ := json.Marshal(serverSetupPayload{Mode: "lan-managed", DataDir: filepath.Join(root, "data"), Listen: "0.0.0.0:9527", PublicURL: "https://192.168.20.30:9527"})
 	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:49154/api/apply", bytes.NewReader(payload))
 	request.Host = service.host
 	request.Header.Set("Origin", "http://"+service.host)

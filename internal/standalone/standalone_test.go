@@ -18,11 +18,16 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/config"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
 	"github.com/yuanshu-ai/yuanshu/internal/platform/fake"
+	"github.com/yuanshu-ai/yuanshu/internal/server"
 )
 
 func TestParseArgumentsDefinesFormalStandaloneSurface(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "config.toml")
+	defaults, err := parseArguments([]string{"--data-dir", root, "--config", configPath})
+	if err != nil || defaults.Listen != server.DefaultListenAddress {
+		t.Fatalf("default listen = %q, %v", defaults.Listen, err)
+	}
 	options, err := parseArguments([]string{"run", "--data-dir", root, "--config", configPath, "--listen", "127.0.0.1:7555", "--no-web"})
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +41,7 @@ func TestParseArgumentsDefinesFormalStandaloneSurface(t *testing.T) {
 		{"--data-dir", "relative", "--config", configPath},
 		{"--data-dir", root, "--config", "relative"},
 		{"--data-dir", root, "--config", configPath, "--extra"},
-		{"--data-dir", root, "--config", configPath, "--listen", "0.0.0.0:7444"},
+		{"--data-dir", root, "--config", configPath, "--listen", "0.0.0.0:9527"},
 		{"--data-dir", root, "--config", configPath, "--web", "--no-web"},
 	} {
 		if _, err := parseArguments(args); !errors.Is(err, ErrUsage) {

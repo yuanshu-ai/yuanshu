@@ -11,7 +11,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     ports:
-      - "7444:7444"
+      - "9527:9527"
     volumes:
       - server-data:/data
       - ${YUANSHU_CERT_DIR:-../certs}:/run/yuanshu/tls:ro
@@ -21,9 +21,9 @@ services:
       - --data-dir
       - /data
       - --listen
-      - 0.0.0.0:7444
+      - 0.0.0.0:9527
       - --public-url
-      - ${YUANSHU_PUBLIC_URL:-https://localhost:7444}
+      - ${YUANSHU_PUBLIC_URL:-https://localhost:9527}
       - --tls-cert
       - /run/yuanshu/tls/server.crt
       - --tls-key

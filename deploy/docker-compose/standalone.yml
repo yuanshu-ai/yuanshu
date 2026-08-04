@@ -13,7 +13,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
     ports:
-      - "7444:7444"
+      - "9527:9527"
     volumes:
       - standalone-data:/data
       - codex-home:/codex-home
@@ -29,9 +29,9 @@ services:
       - --config
       - /run/yuanshu/config.toml
       - --listen
-      - 0.0.0.0:7444
+      - 0.0.0.0:9527
       - --public-url
-      - ${YUANSHU_PUBLIC_URL:-https://localhost:7444}
+      - ${YUANSHU_PUBLIC_URL:-https://localhost:9527}
       - --tls-cert
       - /run/yuanshu/tls/server.crt
       - --tls-key

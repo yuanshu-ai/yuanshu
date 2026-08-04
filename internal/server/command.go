@@ -21,7 +21,7 @@ const Usage = `Usage:
     [--allowed-control-origin https://web-host[:port]]
     [--web | --no-web]
   yuanshu server doctor [--config <absolute-path>] [--json]
-  yuanshu server healthcheck [--address 127.0.0.1:7444]
+  yuanshu server healthcheck [--address 127.0.0.1:9527]
   yuanshu server init --config <absolute-path> [--mode local|lan-managed|public-ip-acme|external] [--data-dir <absolute-path>]
     [--listen <ip:port>] [--public-url https://host[:port]] [--tls-cert <absolute-path>]
     [--tls-key <absolute-path>] [--tls-termination server|proxy]
@@ -89,7 +89,7 @@ func parseServerOptions(args []string) (Options, error) {
 		}
 		args = args[1:]
 	}
-	options := Options{Listen: "127.0.0.1:7444"}
+	options := Options{Listen: DefaultListenAddress}
 	seen := make(map[string]bool)
 	var configPath string
 	var dataDir, listen, publicURL, tlsCert, tlsKey string
@@ -177,7 +177,7 @@ func parseServerOptions(args []string) (Options, error) {
 		options.AdminAuditRetention = adminAuditRetention(file.Admin.AuditRetentionDays)
 		options.ConfigRevision = configRevision(file)
 		if options.Listen == "" {
-			options.Listen = "127.0.0.1:7444"
+			options.Listen = DefaultListenAddress
 		}
 	}
 	if hasDataDir {
@@ -278,7 +278,7 @@ func doctor(ctx context.Context, args []string, stdout io.Writer) error {
 	status.Config, status.DataDir, status.Listen, status.PublicURL = "ready", value.DataDir, value.Listen, value.PublicURL
 	status.DeploymentMode = string(value.DeploymentMode)
 	if status.Listen == "" {
-		status.Listen = "127.0.0.1:7444"
+		status.Listen = DefaultListenAddress
 	}
 	status.AllowedControlOrigins = append([]string(nil), value.AllowedControlOrigins...)
 	status.Revision = configRevision(value)
@@ -400,7 +400,7 @@ func publicURLHost(value string) string {
 }
 
 func healthcheck(ctx context.Context, args []string) error {
-	address := "127.0.0.1:7444"
+	address := DefaultListenAddress
 	if len(args) != 0 {
 		if len(args) != 2 || args[0] != "--address" || !validListen(args[1]) {
 			return ErrUsage

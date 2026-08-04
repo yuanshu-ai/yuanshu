@@ -1,4 +1,4 @@
 {
-  "relayUrl": "wss://192.168.1.20:7444/web/connect",
-  "pairingUrl": "https://192.168.1.20:7444/pair"
+  "relayUrl": "wss://192.168.1.20:9527/web/connect",
+  "pairingUrl": "https://192.168.1.20:9527/pair"
 }

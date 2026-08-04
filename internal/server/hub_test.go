@@ -491,13 +491,13 @@ func TestHubRejectsPlaintextOriginCredentialAndTargetSpoofing(t *testing.T) {
 	if response.Code != http.StatusUpgradeRequired || !strings.Contains(response.Body.String(), "tls_required") {
 		t.Fatalf("plaintext status=%d body=%q", response.Code, response.Body.String())
 	}
-	localHub, err := NewHub(fixture.store, HubOptions{AllowedControlOrigins: []string{"http://127.0.0.1:7444"}, AllowLoopbackPlain: true, LoopbackAuthority: "127.0.0.1:7444"})
+	localHub, err := NewHub(fixture.store, HubOptions{AllowedControlOrigins: []string{"http://127.0.0.1:9527"}, AllowLoopbackPlain: true, LoopbackAuthority: "127.0.0.1:9527"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer localHub.Close()
-	localRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7444/node/connect", nil)
-	localRequest.Host = "127.0.0.1:7444"
+	localRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9527/node/connect", nil)
+	localRequest.Host = "127.0.0.1:9527"
 	localRequest.RemoteAddr = "127.0.0.1:53000"
 	localResponse := httptest.NewRecorder()
 	localHub.NodeHandler(localResponse, localRequest)
@@ -581,14 +581,14 @@ func TestPlainLoopbackProxyRequiresLoopbackPeerAndConfiguredPublicHost(t *testin
 }
 
 func TestPlainLoopbackRequestRequiresExactListeningAuthority(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7444/web/connect", nil)
-	request.Host = "127.0.0.1:7444"
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9527/web/connect", nil)
+	request.Host = "127.0.0.1:9527"
 	request.RemoteAddr = "127.0.0.1:53000"
-	if !plainLoopbackRequest(request, "127.0.0.1:7444") {
+	if !plainLoopbackRequest(request, "127.0.0.1:9527") {
 		t.Fatal("valid loopback request rejected")
 	}
 	request.Host = "127.0.0.1:7555"
-	if plainLoopbackRequest(request, "127.0.0.1:7444") {
+	if plainLoopbackRequest(request, "127.0.0.1:9527") {
 		t.Fatal("unexpected loopback authority accepted")
 	}
 }

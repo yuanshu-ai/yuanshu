@@ -23,6 +23,9 @@ const (
 	CurrentConfigVersion = 2
 	LegacyConfigVersion  = 1
 	MaxConfigBytes       = 1 << 20
+	DefaultPort          = "9527"
+	DefaultListenAddress = "127.0.0.1:" + DefaultPort
+	DefaultIPv6Listen    = "[::1]:" + DefaultPort
 )
 
 type DeploymentMode string
@@ -159,7 +162,7 @@ func ValidateConfigFile(value ConfigFile) error {
 		return ErrInvalid
 	}
 	if value.Listen == "" {
-		value.Listen = "127.0.0.1:7444"
+		value.Listen = DefaultListenAddress
 	}
 	if !validListen(value.Listen) || !validDeploymentConfig(value) {
 		return ErrInvalid
