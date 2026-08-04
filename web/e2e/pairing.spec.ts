@@ -22,6 +22,7 @@ test("pairs a fresh browser, persists a non-exportable identity, and opens the w
   }));
 
   await page.goto("/pair/#pair-fresh.secret-fresh");
+  await chooseChineseIfNeeded(page);
   await page.getByLabel("设备名称").fill("Phone Safari");
   await page.getByRole("button", { name: "请求连接" }).click();
 
@@ -29,8 +30,8 @@ test("pairs a fresh browser, persists a non-exportable identity, and opens the w
   expect(scenario.claims).toHaveLength(1);
   expect(scenario.claims[0].publicKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
   const stored = await readStoredPairing(page, scenario.ownerId);
-  expect(stored.version).toBe(4);
-  expect(stored.stores).toEqual(["control-sequences", "event-cursors", "keys", "node-bindings", "runtime-settings"]);
+  expect(stored.version).toBe(5);
+  expect(stored.stores).toEqual(["control-sequences", "event-cursors", "keys", "node-bindings", "preferences", "runtime-settings"]);
   expect(stored.clientId).toBe(scenario.claims[0].clientId);
   expect(stored.privateKeyExtractable).toBe(false);
   expect(stored.nodeIds).toEqual(["node-office"]);
@@ -48,6 +49,7 @@ test("upgrades a v3 database, preserves cursors, and reuses one identity for a s
   const first = pairingScenario("node-office");
   await mockPairingAPI(page, first);
   await page.goto("/pair/#pair-office.secret-office");
+  await chooseChineseIfNeeded(page);
   await page.getByRole("button", { name: "请求连接" }).click();
   await expect(page.getByText("HTTPS/WSS 已安全连接")).toBeVisible();
 
@@ -75,6 +77,7 @@ test("resumes the same pending identity after refresh and an idempotent repeated
   await mockPairingAPI(page, scenario);
 
   await page.goto("/pair/#pair-resume.secret-resume");
+  await chooseChineseIfNeeded(page);
   await page.getByLabel("设备名称").fill("Travel browser");
   await page.getByRole("button", { name: "请求连接" }).click();
   await expect.poll(() => scenario.claims.length).toBe(1);
@@ -95,6 +98,7 @@ test("shows actionable expiry and revoked-identity states", async ({ page }) => 
   expired.status = "expired";
   await mockPairingAPI(page, expired);
   await page.goto("/pair/#pair-expired.secret-expired");
+  await chooseChineseIfNeeded(page);
   await page.getByRole("button", { name: "请求连接" }).click();
   await expect(page.getByText("配对链接已过期，请从办公室电脑重新生成")).toBeVisible();
   await expect(page.getByRole("button", { name: "请求连接" })).toBeEnabled();
@@ -208,7 +212,7 @@ async function seedCurrentIdentity(page: Page): Promise<void> {
     const publicKey = await crypto.subtle.exportKey("raw", keys.publicKey);
     const encoded = btoa(String.fromCharCode(...new Uint8Array(publicKey))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("yuanshu-control-client", 4);
+      const request = indexedDB.open("yuanshu-control-client", 5);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -226,7 +230,7 @@ async function seedCurrentIdentity(page: Page): Promise<void> {
 async function readStoredPairing(page: Page, ownerId: string) {
   return page.evaluate(async owner => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("yuanshu-control-client", 4);
+      const request = indexedDB.open("yuanshu-control-client", 5);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -255,4 +259,9 @@ async function readStoredPairing(page: Page, ownerId: string) {
     database.close();
     return result;
   }, ownerId);
+}
+
+async function chooseChineseIfNeeded(page: Page): Promise<void> {
+  const heading = page.getByRole("heading", { name: "选择语言 · Choose a language" });
+  if (await heading.isVisible().catch(() => false)) await page.getByRole("button", { name: "中文" }).click();
 }

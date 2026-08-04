@@ -19,7 +19,7 @@ test("opens a running task directly and safely controls its Turn", async ({ page
   await expect(page.getByText("Remote workbench ready")).toBeVisible();
 
   await page.getByRole("button", { name: "获取控制权" }).click();
-  await expect(page.locator(".lease-badge.held").getByText("可操作", { exact: true })).toBeVisible();
+  await expect(page.locator(".lease-badge.held:visible").filter({ hasText: "当前浏览器可操作" }).first()).toBeVisible();
 
   const composer = page.getByLabel("任务指令");
   await composer.fill("Continue the release checks");
@@ -32,6 +32,7 @@ test("uses application dialogs for high-risk approval and loads Diff on demand",
   await page.getByRole("button", { name: /Office release/ }).first().click();
   await page.getByRole("button", { name: "获取控制权" }).click();
 
+  await openInspector(page, "审批");
   await page.getByRole("button", { name: "批准" }).click();
   await expect(page.getByRole("dialog", { name: "检查高风险操作" })).toBeVisible();
   await page.getByRole("button", { name: "继续确认" }).click();
@@ -39,6 +40,7 @@ test("uses application dialogs for high-risk approval and loads Diff on demand",
   await page.getByRole("button", { name: "发送批准" }).click();
   await expect(page.getByText("批准已由设备确认")).toBeVisible();
 
+  await page.getByRole("tab", { name: /文件/ }).click();
   await page.getByText("src/app.ts").last().click();
   await expect(page.getByText("+const ready = true;")).toBeVisible();
 });
@@ -60,28 +62,48 @@ test("keeps two Nodes isolated and exposes task-first mobile navigation", async 
   }
 });
 
+test("switches the workbench language without losing task state", async ({ page }) => {
+  await page.getByRole("button", { name: "English" }).click();
+  await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
+  await expect(page.locator(".desktop-nav:visible, .mobile-nav:visible").getByRole("button", { name: "Tasks" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Office release/ }).first()).toBeVisible();
+
+  await page.getByRole("button", { name: "中文" }).click();
+  await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+  await expect(page.getByRole("button", { name: /Office release/ }).first()).toBeVisible();
+});
+
 test("uses phone, tablet and desktop layout contracts", async ({ page }) => {
   const width = page.viewportSize()?.width ?? 1280;
-  const contextRail = page.getByRole("complementary", { name: "设备和工作区" });
+  const taskSidebar = page.getByRole("complementary", { name: "任务列表与上下文" });
   const mobileNavigation = page.locator(".mobile-nav");
   if (width < 768) {
-    await expect(contextRail).toBeHidden();
+    await expect(taskSidebar).toBeVisible();
     await expect(mobileNavigation).toBeVisible();
-  } else if (width < 1200) {
-    await expect(contextRail).toBeHidden();
-    await expect(mobileNavigation).toBeHidden();
-    await expect(page.locator(".task-pane")).toBeVisible();
-    await expect(page.getByRole("region", { name: "任务详情" })).toBeVisible();
   } else {
-    await expect(contextRail).toBeVisible();
+    await expect(taskSidebar).toBeVisible();
     await expect(mobileNavigation).toBeHidden();
+  }
+
+  await page.getByRole("button", { name: /Office release/ }).first().click();
+  await expect(page.getByRole("region", { name: "任务详情" })).toBeVisible();
+  if (width < 768) {
+    await expect(taskSidebar).toBeHidden();
+    await expect(mobileNavigation).toBeHidden();
+    await expect(page.getByRole("button", { name: "打开任务 Inspector" })).toBeVisible();
+  } else {
+    await expect(taskSidebar).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "任务 Inspector" })).toBeVisible();
   }
   if (width < 1200) {
     const selector = width < 768
       ? ".mobile-nav button, .topbar-attention"
       : ".desktop-nav button, .topbar-attention, .connection-state";
     const touchTargets = await page.locator(selector).evaluateAll((elements) =>
-      elements.map((element) => {
+      elements.filter((element) => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.width > 0 && bounds.height > 0;
+      }).map((element) => {
         const bounds = element.getBoundingClientRect();
         return { width: bounds.width, height: bounds.height };
       }),
@@ -210,20 +232,21 @@ async function seedBrowserIdentity(page: Page): Promise<void> {
       request.onblocked = () => reject(new Error("database deletion blocked"));
     });
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("yuanshu-control-client", 4);
+      const request = indexedDB.open("yuanshu-control-client", 5);
       request.onupgradeneeded = () => {
-        for (const store of ["keys", "event-cursors", "control-sequences", "node-bindings", "runtime-settings"]) {
+        for (const store of ["keys", "event-cursors", "control-sequences", "node-bindings", "runtime-settings", "preferences"]) {
           if (!request.result.objectStoreNames.contains(store)) request.result.createObjectStore(store);
         }
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    const transaction = database.transaction(["keys", "node-bindings", "runtime-settings"], "readwrite");
+    const transaction = database.transaction(["keys", "node-bindings", "runtime-settings", "preferences"], "readwrite");
     transaction.objectStore("keys").put({ ownerId, clientId, keyId: "key-e2e", privateKey: { e2e: true } }, "active");
     transaction.objectStore("node-bindings").put({ ownerId, nodeId: "node-office", name: "Office Mac", online: true }, `${ownerId}\u001fnode-office`);
     transaction.objectStore("node-bindings").put({ ownerId, nodeId: "node-home", name: "Home PC", online: true }, `${ownerId}\u001fnode-home`);
     transaction.objectStore("runtime-settings").put({ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }, "active");
+    transaction.objectStore("preferences").put("zh-CN", "language");
     await new Promise<void>((resolve, reject) => {
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
@@ -231,6 +254,13 @@ async function seedBrowserIdentity(page: Page): Promise<void> {
     });
     database.close();
   }, { ownerId: OWNER_ID, clientId: CLIENT_ID });
+}
+
+async function openInspector(page: Page, tab: "审批" | "文件"): Promise<void> {
+  if ((page.viewportSize()?.width ?? 1280) < 768) {
+    await page.getByRole("button", { name: "打开任务 Inspector" }).click();
+  }
+  await page.getByRole("tab", { name: new RegExp(tab) }).click();
 }
 
 async function installFakeRelay(page: Page): Promise<void> {
