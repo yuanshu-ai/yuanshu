@@ -26,3 +26,22 @@ func certificateExpiryWarning(now, notAfter time.Time) string {
 		return ""
 	}
 }
+
+func certificateExpiryWarningForProvider(provider string, now, notAfter time.Time) string {
+	if provider != "acme-ip" {
+		return certificateExpiryWarning(now, notAfter)
+	}
+	remaining := notAfter.Sub(now)
+	switch {
+	case remaining <= 0:
+		return "certificate_expired"
+	case remaining <= 12*time.Hour:
+		return "certificate_expiring_12h"
+	case remaining <= 24*time.Hour:
+		return "certificate_expiring_24h"
+	case remaining <= 48*time.Hour:
+		return "certificate_expiring_48h"
+	default:
+		return ""
+	}
+}

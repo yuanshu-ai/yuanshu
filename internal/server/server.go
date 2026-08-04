@@ -4,12 +4,12 @@ package server
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,10 +28,16 @@ type LocalNodeSession struct {
 
 type Options struct {
 	DataDir               string
+	CertificateDataDir    string
 	Listen                string
+	DeploymentMode        DeploymentMode
 	PublicURL             string
 	TLSCertFile           string
 	TLSKeyFile            string
+	TLSTermination        string
+	ACME                  ACMEConfig
+	ACMEDirectoryURL      string
+	ACMEHTTPClient        *http.Client
 	AllowedControlOrigins []string
 	WebEnabled            *bool
 	AdminEnabled          *bool
@@ -45,6 +51,13 @@ type Options struct {
 	Listener              net.Listener
 	ShutdownTimeout       time.Duration
 	LocalNode             *LocalNodeSession
+}
+
+func certificateDataDir(options Options) string {
+	if options.CertificateDataDir != "" {
+		return options.CertificateDataDir
+	}
+	return options.DataDir
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -65,14 +78,31 @@ func Run(ctx context.Context, options Options) error {
 		return err
 	}
 	defer lock.Close()
+	if certificateDir := certificateDataDir(options); certificateDir != options.DataDir {
+		if err := prepareDataDir(certificateDir); err != nil {
+			return err
+		}
+		certificateLock, lockErr := acquireDataLock(filepath.Join(certificateDir, "server.lock"))
+		if lockErr != nil {
+			return errors.New("certificate provider is already in use")
+		}
+		defer certificateLock.Close()
+	}
 	local, err := serverstore.Open(ctx, filepath.Join(options.DataDir, "server.db"), serverstore.Options{Clock: options.Clock})
 	if err != nil {
 		return err
 	}
 	defer local.Close()
-	tlsConfig, err := loadTLSConfig(options)
+	certificateService, err := newCertificateProvider(ctx, options)
 	if err != nil {
 		return err
+	}
+	if certificateService != nil {
+		defer certificateService.Close()
+	}
+	var tlsConfig *tls.Config
+	if certificateService != nil {
+		tlsConfig = certificateService.TLSConfig()
 	}
 	listener := options.Listener
 	if listener == nil {
@@ -105,8 +135,15 @@ func Run(ctx context.Context, options Options) error {
 	origins := append([]string(nil), options.AllowedControlOrigins...)
 	if len(origins) == 0 && options.PublicURL != "" {
 		origins = []string{controlOrigin(options.PublicURL)}
+	} else if len(origins) == 0 && effectiveDeploymentMode(options) == DeploymentLocal {
+		origins = []string{"http://" + listener.Addr().String()}
 	}
-	hub, err := NewHub(local, HubOptions{Random: options.Random, Clock: options.Clock, AllowedControlOrigins: origins})
+	proxyPlain := effectiveDeploymentMode(options) == DeploymentExternal && effectiveTLSTermination(options) == "proxy"
+	hub, err := NewHub(local, HubOptions{
+		Random: options.Random, Clock: options.Clock, AllowedControlOrigins: origins,
+		AllowLoopbackPlain: effectiveDeploymentMode(options) == DeploymentLocal, LoopbackAuthority: listener.Addr().String(),
+		AllowLoopbackProxyPlain: proxyPlain, ProxyPublicHost: publicURLAuthority(options.PublicURL),
+	})
 	if err != nil {
 		return err
 	}
@@ -114,23 +151,22 @@ func Run(ctx context.Context, options Options) error {
 	var tlsSAN []string
 	var tlsNotAfter time.Time
 	var tlsFingerprint string
-	if tlsConfig != nil && len(tlsConfig.Certificates) > 0 && tlsConfig.Certificates[0].Leaf != nil {
-		leaf := tlsConfig.Certificates[0].Leaf
-		tlsSAN = append(tlsSAN, leaf.DNSNames...)
-		for _, ip := range leaf.IPAddresses {
-			tlsSAN = append(tlsSAN, ip.String())
-		}
-		tlsNotAfter = leaf.NotAfter.UTC()
-		tlsFingerprint = certificateFingerprint(leaf.Raw)
+	if certificateService != nil {
+		certificateStatus := certificateService.Status()
+		tlsSAN = append(tlsSAN, certificateStatus.SAN...)
+		tlsNotAfter = certificateStatus.NotAfter.UTC()
+		tlsFingerprint = certificateStatus.Fingerprint
 	}
-	handler, err := newHandler(service, local, hub, adminHandlerOptions{
+	handler, err := newHandler(service, serverReadiness{database: local, certificate: certificateService, clock: options.Clock}, hub, adminHandlerOptions{
 		Enabled: adminEnabled(options.AdminEnabled), PublicURL: options.PublicURL,
 		Listen: options.Listen, WebEnabled: embeddedWebEnabled(options.WebEnabled),
-		TLSConfigured: options.PublicURL != "", AllowedOrigins: origins,
+		TLSConfigured: tlsConfig != nil || effectiveDeploymentMode(options) == DeploymentExternal && effectiveTLSTermination(options) == "proxy", AllowedOrigins: origins,
 		SessionIdle: options.AdminSessionIdle, SessionMax: options.AdminSessionMax,
 		AuditRetention: options.AdminAuditRetention, Random: options.Random, Clock: options.Clock,
 		StartedAt: time.Now().UTC(), DatabasePath: filepath.Join(options.DataDir, "server.db"), ConfigRevision: options.ConfigRevision,
-		TLSSAN: tlsSAN, TLSNotAfter: tlsNotAfter, TLSFingerprint: tlsFingerprint,
+		DeploymentMode: string(effectiveDeploymentMode(options)), CertificateProvider: certificateProviderName(certificateService),
+		Certificate: certificateService,
+		TLSSAN:      tlsSAN, TLSNotAfter: tlsNotAfter, TLSFingerprint: tlsFingerprint,
 	})
 	if err != nil {
 		return err
@@ -139,9 +175,13 @@ func Run(ctx context.Context, options Options) error {
 		Enabled:      embeddedWebEnabled(options.WebEnabled),
 		PublicURL:    options.PublicURL,
 		AdminEnabled: adminEnabled(options.AdminEnabled),
+		Certificate:  certificateService,
 	})
 	if err != nil {
 		return err
+	}
+	if effectiveDeploymentMode(options) == DeploymentLocal {
+		handler = requireRequestHost(handler, listener.Addr().String())
 	}
 	if embeddedWebEnabled(options.WebEnabled) {
 		writer := options.Stdout
@@ -194,6 +234,43 @@ func Run(ctx context.Context, options Options) error {
 	return errors.New("server HTTP service failed")
 }
 
+func requireRequestHost(next http.Handler, authority string) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Host != authority {
+			writeError(writer, http.StatusMisdirectedRequest, "invalid_host")
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
+}
+
+type serverReadiness struct {
+	database    readiness
+	certificate certificateProvider
+	clock       func() time.Time
+}
+
+func (r serverReadiness) QuickCheck(ctx context.Context) error {
+	if r.database == nil {
+		return ErrInvalid
+	}
+	if err := r.database.QuickCheck(ctx); err != nil {
+		return err
+	}
+	if r.certificate == nil {
+		return nil
+	}
+	now := time.Now()
+	if r.clock != nil {
+		now = r.clock()
+	}
+	status := r.certificate.Status()
+	if status.NotAfter.IsZero() || !now.Before(status.NotAfter) {
+		return errors.New("server TLS certificate is unavailable")
+	}
+	return nil
+}
+
 func embeddedWebEnabled(value *bool) bool {
 	return value == nil || *value
 }
@@ -210,7 +287,7 @@ func webAccessURL(publicURL string, address net.Addr) string {
 }
 
 func validateRunOptions(options Options) error {
-	if options.DataDir == "" || !filepath.IsAbs(options.DataDir) || options.Listen == "" || options.ShutdownTimeout < 0 || !validPublicOptions(options) {
+	if options.DataDir == "" || !filepath.IsAbs(options.DataDir) || options.CertificateDataDir != "" && !filepath.IsAbs(options.CertificateDataDir) || options.Listen == "" || options.ShutdownTimeout < 0 || !validPublicOptions(options) {
 		return ErrInvalid
 	}
 	_, port, err := net.SplitHostPort(options.Listen)
@@ -224,10 +301,25 @@ func validateRunOptions(options Options) error {
 	if options.LocalNode != nil && (options.LocalNode.Transport == nil || options.LocalNode.OwnerID == "" || options.LocalNode.NodeID == "") {
 		return ErrInvalid
 	}
-	if !validControlOrigins(options.AllowedControlOrigins) {
+	if !validControlOriginsForMode(options.AllowedControlOrigins, effectiveDeploymentMode(options) == DeploymentLocal) {
 		return ErrInvalid
 	}
 	return nil
+}
+
+func certificateProviderName(provider certificateProvider) string {
+	if provider == nil {
+		return "none"
+	}
+	return provider.Status().Provider
+}
+
+func publicURLAuthority(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return ""
+	}
+	return parsed.Host
 }
 
 func validControlOrigins(origins []string) bool {
@@ -257,30 +349,10 @@ func loadTLSConfig(options Options) (*tls.Config, error) {
 	if options.PublicURL == "" {
 		return nil, nil
 	}
-	for _, path := range []string{options.TLSCertFile, options.TLSKeyFile} {
-		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			return nil, errors.New("server TLS material is unavailable")
-		}
-	}
-	if err := validatePrivateKeyPermissions(options.TLSKeyFile); err != nil {
-		return nil, err
-	}
-	pair, err := tls.LoadX509KeyPair(options.TLSCertFile, options.TLSKeyFile)
-	if err != nil || len(pair.Certificate) == 0 {
-		return nil, errors.New("server TLS material is invalid")
-	}
-	leaf, err := x509.ParseCertificate(pair.Certificate[0])
-	if err != nil {
-		return nil, errors.New("server TLS certificate is invalid")
-	}
-	now := time.Now()
-	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
-		return nil, errors.New("server TLS certificate is not currently valid")
-	}
 	host := publicURLHost(options.PublicURL)
-	if host == "" || leaf.VerifyHostname(host) != nil {
-		return nil, errors.New("server TLS certificate does not match public URL")
+	pair, leaf, err := loadValidatedKeyPair(options.TLSCertFile, options.TLSKeyFile, host, time.Now())
+	if err != nil {
+		return nil, err
 	}
 	pair.Leaf = leaf
 	return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13}, nil

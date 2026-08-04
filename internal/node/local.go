@@ -37,6 +37,7 @@ type localRequest struct {
 	Changes           map[string]any `json:"changes,omitempty"`
 	Name              string         `json:"name,omitempty"`
 	RelayURL          string         `json:"relayUrl,omitempty"`
+	RelayCABundle     string         `json:"relayCaBundle,omitempty"`
 	BootstrapSecret   string         `json:"bootstrapSecret,omitempty"`
 	WorkspaceToken    string         `json:"workspaceToken,omitempty"`
 	WorkspaceName     string         `json:"workspaceName,omitempty"`

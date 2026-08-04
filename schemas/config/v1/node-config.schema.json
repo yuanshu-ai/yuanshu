@@ -94,7 +94,8 @@
         "url": {
           "anyOf": [
             { "const": "" },
-            { "type": "string", "format": "uri", "pattern": "^wss://" }
+            { "type": "string", "format": "uri", "pattern": "^wss://" },
+            { "type": "string", "format": "uri", "pattern": "^ws://(?:127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?(?:/|$)" }
           ]
         },
         "proxy_url": {
@@ -103,6 +104,7 @@
             { "type": "string", "format": "uri", "pattern": "^(https?|socks5)://" }
           ]
         },
+        "ca_bundle_file": { "type": "string", "maxLength": 4096 },
         "connect_timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 120 },
         "credential_ref": { "$ref": "#/$defs/secretRef" },
         "proxy_credential_ref": { "$ref": "#/$defs/secretRef" }

@@ -15,8 +15,9 @@ import (
 
 type serverInitOptions struct {
 	configPath, mode, dataDir, listen, publicURL, certFile, keyFile string
+	tlsTermination, acmeEnvironment, acmeEmail                      string
 	origins                                                         []string
-	nonInteractive, replace                                         bool
+	nonInteractive, replace, acceptTerms                            bool
 }
 
 func initializeServer(ctx context.Context, args []string, input io.Reader, output io.Writer) error {
@@ -30,41 +31,70 @@ func initializeServer(ctx context.Context, args []string, input io.Reader, outpu
 		}
 	}
 	if options.mode == "" {
-		options.mode = "loopback"
+		options.mode = "local"
+	}
+	if options.mode == "loopback" {
+		options.mode = "local"
+	}
+	if options.mode == "lan" {
+		options.mode, options.tlsTermination = "external", "server"
 	}
 	if options.dataDir == "" {
 		options.dataDir = filepath.Join(filepath.Dir(options.configPath), "server-data")
 	}
 	if options.listen == "" {
-		if options.mode == "lan" {
-			return errors.New("LAN initialization requires an explicit listen address")
+		if options.mode != "local" {
+			return errors.New("remote initialization requires an explicit listen address")
 		}
 		options.listen = "127.0.0.1:7444"
 	}
-	if options.mode != "loopback" && options.mode != "lan" {
+	if options.mode != "local" && options.mode != "lan-managed" && options.mode != "public-ip-acme" && options.mode != "external" {
 		return ErrUsage
 	}
-	if options.mode == "lan" && (options.publicURL == "" || options.certFile == "" || options.keyFile == "") {
-		return errors.New("LAN initialization requires public URL, TLS certificate, and TLS key")
+	if options.mode == "external" && options.tlsTermination == "" {
+		if options.certFile != "" || options.keyFile != "" {
+			options.tlsTermination = "server"
+		} else {
+			return errors.New("external initialization requires --tls-termination")
+		}
 	}
-	if options.mode == "loopback" && !isLoopbackListen(options.listen) {
-		return errors.New("loopback initialization requires a loopback listen address")
+	if options.mode == "local" && !isExactLoopbackListen(options.listen) {
+		return errors.New("local initialization requires a literal loopback listen address")
 	}
 	if len(options.origins) == 0 && options.publicURL != "" {
 		options.origins = []string{controlOrigin(options.publicURL)}
 	}
-	value := ConfigFile{ConfigVersion: CurrentConfigVersion, DataDir: filepath.Clean(options.dataDir), Listen: options.listen, PublicURL: options.publicURL, TLSCertFile: options.certFile, TLSKeyFile: options.keyFile, AllowedControlOrigins: append([]string(nil), options.origins...)}
+	value := ConfigFile{ConfigVersion: CurrentConfigVersion, DataDir: filepath.Clean(options.dataDir), Listen: options.listen, PublicURL: options.publicURL, AllowedControlOrigins: append([]string(nil), options.origins...)}
+	switch options.mode {
+	case "local":
+		value.DeploymentMode = DeploymentLocal
+	case "lan-managed":
+		value.DeploymentMode = DeploymentLANManaged
+	case "public-ip-acme":
+		value.DeploymentMode = DeploymentPublicIPACME
+		value.ACME = ACMEConfig{Environment: options.acmeEnvironment, Email: options.acmeEmail, AcceptTerms: options.acceptTerms}
+	case "external":
+		value.DeploymentMode = DeploymentExternal
+		value.TLS = TLSFileConfig{Termination: options.tlsTermination, CertFile: options.certFile, KeyFile: options.keyFile}
+	}
 	if err := ValidateConfigFile(value); err != nil {
 		return errors.New("server initialization configuration is invalid")
 	}
-	if options.mode == "lan" {
-		if _, err := loadTLSConfig(Options{Listen: value.Listen, PublicURL: value.PublicURL, TLSCertFile: value.TLSCertFile, TLSKeyFile: value.TLSKeyFile}); err != nil {
+	if value.DeploymentMode == DeploymentExternal && value.TLS.Termination == "server" {
+		if _, err := loadTLSConfig(Options{Listen: value.Listen, DeploymentMode: value.DeploymentMode, PublicURL: value.PublicURL, TLSCertFile: value.TLS.CertFile, TLSKeyFile: value.TLS.KeyFile, TLSTermination: value.TLS.Termination}); err != nil {
 			return errors.New("server initialization TLS identity is invalid")
 		}
 	}
-	if _, err := os.Lstat(options.configPath); err == nil && !options.replace {
-		return errors.New("server configuration already exists; use --replace to overwrite it")
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	var previous ConfigFile
+	if _, err := os.Lstat(options.configPath); err == nil {
+		if !options.replace {
+			return errors.New("server configuration already exists; use --replace to overwrite it")
+		}
+		previous, err = LoadConfigFile(options.configPath)
+		if err != nil {
+			return errors.New("existing server configuration is unavailable")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return errors.New("server configuration path is unavailable")
 	}
 	if err := os.MkdirAll(filepath.Dir(options.configPath), 0o700); err != nil {
@@ -79,16 +109,75 @@ func initializeServer(ctx context.Context, args []string, input io.Reader, outpu
 	if err := os.Chmod(value.DataDir, 0o700); err != nil {
 		return errors.New("server data directory permissions could not be applied")
 	}
+	locks, err := acquireInitializationLocks(previous.DataDir, value.DataDir)
+	if err != nil {
+		return errors.New("server must be stopped before initialization")
+	}
+	defer closeInitializationLocks(locks)
+	managedSwap, err := stageManagedCertificate(ctx, value)
+	if err != nil {
+		return err
+	}
+	if managedSwap != nil {
+		defer managedSwap.cleanup()
+		if err := managedSwap.install(); err != nil {
+			return errors.New("managed certificate initialization failed")
+		}
+	}
 	store, err := NewConfigFileStore(options.configPath)
 	if err != nil || store.Save(ctx, value) != nil {
+		if managedSwap != nil {
+			_ = managedSwap.rollback()
+		}
 		return errors.New("server configuration could not be written")
 	}
-	if err := doctor(ctx, []string{"--config", options.configPath}, output); err != nil {
+	if managedSwap != nil {
+		managedSwap.commit()
+	}
+	if value.DeploymentMode == DeploymentPublicIPACME {
+		_, _ = fmt.Fprintln(output, "Certificate: pending initial ACME issuance; start the Server with public TCP 443 forwarded to the configured listener.")
+	} else if err := doctor(ctx, []string{"--config", options.configPath}, output); err != nil {
 		return err
 	}
 	base := serverPublicBase(value)
 	_, _ = fmt.Fprintf(output, "Workbench: %s/\nAdmin: %s/admin\nPairing: %s/pair\n", base, base, base)
 	return nil
+}
+
+func acquireInitializationLocks(previousDataDir, nextDataDir string) ([]*dataLock, error) {
+	paths := make([]string, 0, 2)
+	for _, dataDir := range []string{previousDataDir, nextDataDir} {
+		if dataDir == "" {
+			continue
+		}
+		path := filepath.Join(filepath.Clean(dataDir), "server.lock")
+		seen := false
+		for _, existing := range paths {
+			if existing == path {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			paths = append(paths, path)
+		}
+	}
+	var locks []*dataLock
+	for _, path := range paths {
+		lock, err := acquireDataLock(path)
+		if err != nil {
+			closeInitializationLocks(locks)
+			return nil, err
+		}
+		locks = append(locks, lock)
+	}
+	return locks, nil
+}
+
+func closeInitializationLocks(locks []*dataLock) {
+	for index := len(locks) - 1; index >= 0; index-- {
+		_ = locks[index].Close()
+	}
 }
 
 func parseServerInitOptions(args []string) (serverInitOptions, error) {
@@ -124,7 +213,7 @@ func parseServerInitOptions(args []string) (serverInitOptions, error) {
 			case "--tls-key":
 				result.keyFile = value
 			}
-		case "--mode", "--listen", "--public-url", "--allowed-control-origin":
+		case "--mode", "--listen", "--public-url", "--allowed-control-origin", "--tls-termination", "--acme-environment", "--acme-email":
 			value, err := next()
 			if err != nil {
 				return result, ErrUsage
@@ -138,7 +227,15 @@ func parseServerInitOptions(args []string) (serverInitOptions, error) {
 				result.publicURL = strings.TrimSuffix(value, "/")
 			case "--allowed-control-origin":
 				result.origins = append(result.origins, strings.TrimSuffix(value, "/"))
+			case "--tls-termination":
+				result.tlsTermination = value
+			case "--acme-environment":
+				result.acmeEnvironment = value
+			case "--acme-email":
+				result.acmeEmail = value
 			}
+		case "--acme-accept-terms":
+			result.acceptTerms = true
 		case "--non-interactive":
 			result.nonInteractive = true
 		case "--replace":
@@ -167,16 +264,23 @@ func promptServerInit(input io.Reader, output io.Writer, options *serverInitOpti
 		return strings.TrimSpace(value), err
 	}
 	var err error
-	if options.mode, err = read("Mode (loopback/lan)", options.mode); err != nil {
+	if options.mode, err = read("Mode (local/lan-managed/public-ip-acme/external)", options.mode); err != nil {
 		return err
 	}
 	if options.listen, err = read("Listen address", options.listen); err != nil {
 		return err
 	}
-	if options.mode == "lan" {
+	if options.mode != "local" && options.mode != "loopback" {
 		if options.publicURL, err = read("Public HTTPS URL", options.publicURL); err != nil {
 			return err
 		}
+	}
+	if options.mode == "external" || options.mode == "lan" {
+		if options.tlsTermination, err = read("TLS termination (server/proxy)", options.tlsTermination); err != nil {
+			return err
+		}
+	}
+	if (options.mode == "external" || options.mode == "lan") && options.tlsTermination != "proxy" {
 		if options.certFile, err = read("TLS certificate absolute path", options.certFile); err != nil {
 			return err
 		}
@@ -185,6 +289,14 @@ func promptServerInit(input io.Reader, output io.Writer, options *serverInitOpti
 		}
 	}
 	return nil
+}
+
+func optionsFromConfig(value ConfigFile) Options {
+	return Options{
+		DataDir: value.DataDir, Listen: value.Listen, DeploymentMode: value.DeploymentMode, PublicURL: value.PublicURL,
+		TLSCertFile: value.TLS.CertFile, TLSKeyFile: value.TLS.KeyFile, TLSTermination: value.TLS.Termination, ACME: value.ACME,
+		AllowedControlOrigins: append([]string(nil), value.AllowedControlOrigins...),
+	}
 }
 
 func serverPublicBase(value ConfigFile) string {

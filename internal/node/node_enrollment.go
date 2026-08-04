@@ -185,10 +185,14 @@ type enrollmentJoinerOptions struct {
 
 func newNodeEnrollmentJoiner(o enrollmentJoinerOptions) (*nodeEnrollmentJoiner, error) {
 	parsed, err := url.Parse(o.RelayURL)
-	if err != nil || parsed.Scheme != "wss" || parsed.Host == "" || o.Identity.OwnerID != "" || o.Identity.NodeID != "" || len(o.Identity.PublicKey) != ed25519.PublicKeySize || o.Signer == nil || o.Local == nil || o.Secrets == nil || o.CredentialRef == "" {
+	if err != nil || !validNodeRelayEndpoint(parsed) || o.Identity.OwnerID != "" || o.Identity.NodeID != "" || len(o.Identity.PublicKey) != ed25519.PublicKeySize || o.Signer == nil || o.Local == nil || o.Secrets == nil || o.CredentialRef == "" {
 		return nil, errors.New("node enrollment configuration is unavailable")
 	}
-	parsed.Scheme = "https"
+	if parsed.Scheme == "wss" {
+		parsed.Scheme = "https"
+	} else {
+		parsed.Scheme = "http"
+	}
 	parsed.Path = ""
 	parsed.RawQuery = ""
 	parsed.Fragment = ""

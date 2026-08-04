@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -111,6 +112,28 @@ func TestNodeSetupClaimsFirstNodeBootstrapOverTrustedTLS(t *testing.T) {
 	identity, err := local.Identity(context.Background())
 	if err != nil || identity.OwnerID != "owner-1" || identity.NodeID != "node-1" {
 		t.Fatalf("bound identity = %#v err=%v", identity, err)
+	}
+}
+
+func TestNodeSetupStoresValidatedCustomCAInPrivateDirectory(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/healthz" {
+			_ = json.NewEncoder(writer).Encode(map[string]string{"status": "ok"})
+			return
+		}
+		writer.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	directory := t.TempDir()
+	controller := newNodeSetupController(nil, paths{root: directory}, filepath.Join(directory, "config.toml"), false, nil)
+	relayURL := "wss" + server.URL[len("https"):] + "/node/connect"
+	result := controller.handle(context.Background(), localRequest{Command: "setup_test", RelayURL: relayURL, RelayCABundle: string(ca)})
+	if !result.OK {
+		t.Fatalf("custom CA relay test=%#v", result)
+	}
+	if result := controller.handle(context.Background(), localRequest{Command: "setup_test", RelayURL: relayURL, RelayCABundle: string(append(ca, []byte("PRIVATE KEY")...))}); result.OK {
+		t.Fatalf("invalid CA bundle accepted: %#v", result)
 	}
 }
 

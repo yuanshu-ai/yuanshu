@@ -37,6 +37,41 @@ func TestServerConfigValidatesIPTLSAndOrigins(t *testing.T) {
 	}
 }
 
+func TestServerConfigV2DeploymentModesAndLegacyMigration(t *testing.T) {
+	root := t.TempDir()
+	valid := []ConfigFile{
+		{ConfigVersion: 2, DeploymentMode: DeploymentLocal, DataDir: root, Listen: "127.0.0.1:7444", AllowedControlOrigins: []string{"http://127.0.0.1:7444"}},
+		{ConfigVersion: 2, DeploymentMode: DeploymentLocal, DataDir: root, Listen: "[::1]:7444"},
+		{ConfigVersion: 2, DeploymentMode: DeploymentLANManaged, DataDir: root, Listen: "0.0.0.0:7444", PublicURL: "https://192.168.10.20:7444"},
+		{ConfigVersion: 2, DeploymentMode: DeploymentLANManaged, DataDir: root, Listen: "[::]:7444", PublicURL: "https://[fd00::20]:7444"},
+		{ConfigVersion: 2, DeploymentMode: DeploymentPublicIPACME, DataDir: root, Listen: "0.0.0.0:7444", PublicURL: "https://8.8.8.8", ACME: ACMEConfig{Environment: "staging", AcceptTerms: true}},
+		{ConfigVersion: 2, DeploymentMode: DeploymentExternal, DataDir: root, Listen: "0.0.0.0:7444", PublicURL: "https://example.test", TLS: TLSFileConfig{Termination: "server", CertFile: filepath.Join(root, "cert.pem"), KeyFile: filepath.Join(root, "key.pem")}},
+		{ConfigVersion: 2, DeploymentMode: DeploymentExternal, DataDir: root, Listen: "127.0.0.1:7444", PublicURL: "https://example.test", TLS: TLSFileConfig{Termination: "proxy"}},
+	}
+	for _, value := range valid {
+		if err := ValidateConfigFile(value); err != nil {
+			t.Fatalf("valid v2 mode rejected: %#v: %v", value, err)
+		}
+	}
+	invalid := []ConfigFile{
+		{ConfigVersion: 2, DeploymentMode: DeploymentLocal, DataDir: root, Listen: "0.0.0.0:7444"},
+		{ConfigVersion: 2, DeploymentMode: DeploymentLANManaged, DataDir: root, Listen: "0.0.0.0:7444", PublicURL: "http://192.168.10.20:7444"},
+		{ConfigVersion: 2, DeploymentMode: DeploymentLANManaged, DataDir: root, Listen: "0.0.0.0:7444", PublicURL: "https://8.8.8.8:7444"},
+		{ConfigVersion: 2, DeploymentMode: DeploymentPublicIPACME, DataDir: root, Listen: "0.0.0.0:7444", PublicURL: "https://192.168.10.20", ACME: ACMEConfig{Environment: "production", AcceptTerms: true}},
+		{ConfigVersion: 2, DeploymentMode: DeploymentPublicIPACME, DataDir: root, Listen: "0.0.0.0:7444", PublicURL: "https://8.8.8.8:7444", ACME: ACMEConfig{Environment: "production", AcceptTerms: true}},
+		{ConfigVersion: 2, DeploymentMode: DeploymentExternal, DataDir: root, Listen: "0.0.0.0:7444", PublicURL: "https://example.test", TLS: TLSFileConfig{Termination: "proxy"}},
+	}
+	for _, value := range invalid {
+		if err := ValidateConfigFile(value); err == nil {
+			t.Fatalf("invalid v2 mode accepted: %#v", value)
+		}
+	}
+	legacy, err := normalizeConfigFile(ConfigFile{ConfigVersion: 1, DataDir: root, Listen: "0.0.0.0:7444", PublicURL: "https://example.test", TLSCertFile: filepath.Join(root, "cert.pem"), TLSKeyFile: filepath.Join(root, "key.pem")})
+	if err != nil || legacy.ConfigVersion != 2 || legacy.DeploymentMode != DeploymentExternal || legacy.TLS.Termination != "server" || legacy.TLSCertFile != "" {
+		t.Fatalf("legacy migration=%#v err=%v", legacy, err)
+	}
+}
+
 func TestServerConfigFileStoreRoundTripAndBackup(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "server.toml")
@@ -88,6 +123,24 @@ func TestParseServerOptionsConfigPrecedence(t *testing.T) {
 	options, err := parseServerOptions([]string{"--listen", "127.0.0.1:7555", "--config", configPath, "--web"})
 	if err != nil || options.DataDir != data || options.Listen != "127.0.0.1:7555" || options.WebEnabled == nil || !*options.WebEnabled {
 		t.Fatalf("options=%#v err=%v", options, err)
+	}
+}
+
+func TestParseServerOptionsLegacyTLSOverridesLocalConfigAsExternal(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "data")
+	if err := os.MkdirAll(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "server.toml")
+	store, _ := NewConfigFileStore(configPath)
+	if err := store.Save(context.Background(), ConfigFile{ConfigVersion: 2, DeploymentMode: DeploymentLocal, DataDir: data, Listen: "127.0.0.1:7444"}); err != nil {
+		t.Fatal(err)
+	}
+	certPath, keyPath, _ := writeServerTestCertificate(t, filepath.Join(root, "tls"), []string{"example.test"}, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	options, err := parseServerOptions([]string{"--config", configPath, "--listen", "0.0.0.0:7444", "--public-url", "https://example.test", "--tls-cert", certPath, "--tls-key", keyPath})
+	if err != nil || options.DeploymentMode != DeploymentExternal || options.TLSTermination != "server" {
+		t.Fatalf("options=%+v err=%v", options, err)
 	}
 }
 

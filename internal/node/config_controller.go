@@ -4,11 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -306,6 +310,8 @@ func configView(value config.Config, revision string, pending int) map[string]an
 			"url": value.Relay.URL, "proxyUrl": value.Relay.ProxyURL,
 			"connectTimeoutSeconds": value.Relay.ConnectTimeoutSeconds,
 			"credentialConfigured":  value.Relay.CredentialRef != "",
+			"customCAConfigured":    value.Relay.CABundleFile != "",
+			"customCAFingerprint":   relayCAFingerprint(value.Relay.CABundleFile),
 		},
 		"adapter": map[string]any{
 			"codexEnabled":     value.Adapters.Codex.Enabled,
@@ -317,6 +323,30 @@ func configView(value config.Config, revision string, pending int) map[string]an
 		"workspaces":     workspaces,
 		"pendingChanges": pending,
 	}
+}
+
+func relayCAFingerprint(path string) string {
+	if path == "" {
+		return ""
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 64<<10 {
+		return ""
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return ""
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || !certificate.IsCA {
+		return ""
+	}
+	digest := sha256.Sum256(block.Bytes)
+	return hex.EncodeToString(digest[:])
 }
 
 func applyRemoteChanges(current config.Config, changes map[string]any, localConfirmation bool) (config.Config, bool, error) {

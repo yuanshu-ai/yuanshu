@@ -6,7 +6,8 @@
   "additionalProperties": false,
   "required": ["config_version", "data_dir"],
   "properties": {
-    "config_version": { "type": "integer", "const": 1 },
+    "config_version": { "type": "integer", "enum": [1, 2] },
+    "deployment_mode": { "enum": ["local", "lan-managed", "public-ip-acme", "external"] },
     "data_dir": { "type": "string", "minLength": 1, "maxLength": 4096 },
     "listen": { "type": "string", "minLength": 1, "maxLength": 256 },
     "public_url": { "type": "string", "maxLength": 2048 },
@@ -17,12 +18,60 @@
       "maxItems": 32,
       "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
     },
-    "web": {
+    "tls": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" }
+        "termination": { "enum": ["server", "proxy"] },
+        "cert_file": { "type": "string", "maxLength": 4096 },
+        "key_file": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "acme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "environment": { "enum": ["production", "staging"] },
+        "email": { "type": "string", "maxLength": 254 },
+        "accept_terms": { "type": "boolean" }
+      }
+    },
+    "web": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "admin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "session_idle_minutes": { "type": "integer", "minimum": 5, "maximum": 120 },
+        "session_max_hours": { "type": "integer", "minimum": 1, "maximum": 24 },
+        "audit_retention_days": { "type": "integer", "minimum": 7, "maximum": 365 }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "config_version": { "const": 1 } } },
+      "then": {
+        "not": { "anyOf": [
+          { "required": ["deployment_mode"] },
+          { "required": ["tls"] },
+          { "required": ["acme"] }
+        ] }
+      }
+    },
+    {
+      "if": { "properties": { "config_version": { "const": 2 } } },
+      "then": {
+        "required": ["deployment_mode"],
+        "not": { "anyOf": [
+          { "required": ["tls_cert_file"] },
+          { "required": ["tls_key_file"] }
+        ] }
+      }
+    }
+  ]
 }

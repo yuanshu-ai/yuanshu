@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -35,15 +36,19 @@ type sessionStore interface {
 }
 
 type HubOptions struct {
-	Random                io.Reader
-	Clock                 func() time.Time
-	AllowedControlOrigins []string
-	QueueCapacity         int
-	AuthenticationTimeout time.Duration
-	ChallengeTTL          time.Duration
-	HeartbeatInterval     time.Duration
-	IdleTimeout           time.Duration
-	MaxConnections        int
+	Random                  io.Reader
+	Clock                   func() time.Time
+	AllowedControlOrigins   []string
+	AllowLoopbackPlain      bool
+	LoopbackAuthority       string
+	AllowLoopbackProxyPlain bool
+	ProxyPublicHost         string
+	QueueCapacity           int
+	AuthenticationTimeout   time.Duration
+	ChallengeTTL            time.Duration
+	HeartbeatInterval       time.Duration
+	IdleTimeout             time.Duration
+	MaxConnections          int
 }
 
 type HubSnapshot struct {
@@ -73,24 +78,28 @@ type HubNodeDetail struct {
 }
 
 type Hub struct {
-	store         sessionStore
-	replay        protocolv1.ReplayStore
-	leases        hubLeaseStore
-	notifications hubNotificationStore
-	random        io.Reader
-	clock         func() time.Time
-	origins       map[string]struct{}
-	authTimeout   time.Duration
-	challengeTTL  time.Duration
-	relayOptions  transport.RelayOptions
-	limit         chan struct{}
-	mu            sync.RWMutex
-	leaseMu       sync.Mutex
-	leaseLocks    map[string]*sync.Mutex
-	nodes         map[string]*hubConnection
-	controls      map[string]*hubConnection
-	nodeDetails   map[string]HubNodeDetail
-	closed        bool
+	store                   sessionStore
+	replay                  protocolv1.ReplayStore
+	leases                  hubLeaseStore
+	notifications           hubNotificationStore
+	random                  io.Reader
+	clock                   func() time.Time
+	origins                 map[string]struct{}
+	allowLoopbackPlain      bool
+	loopbackAuthority       string
+	allowLoopbackProxyPlain bool
+	proxyPublicHost         string
+	authTimeout             time.Duration
+	challengeTTL            time.Duration
+	relayOptions            transport.RelayOptions
+	limit                   chan struct{}
+	mu                      sync.RWMutex
+	leaseMu                 sync.Mutex
+	leaseLocks              map[string]*sync.Mutex
+	nodes                   map[string]*hubConnection
+	controls                map[string]*hubConnection
+	nodeDetails             map[string]HubNodeDetail
+	closed                  bool
 }
 
 type hubConnection struct {
@@ -165,7 +174,10 @@ func NewHub(store sessionStore, options HubOptions) (*Hub, error) {
 		replay = protocolv1.NewMemoryReplayStore()
 	}
 	return &Hub{
-		store: store, replay: replay, leases: leases, notifications: notifications, random: random, clock: clock, origins: origins, authTimeout: authTimeout, challengeTTL: challengeTTL,
+		store: store, replay: replay, leases: leases, notifications: notifications, random: random, clock: clock, origins: origins,
+		allowLoopbackPlain: options.AllowLoopbackPlain, loopbackAuthority: options.LoopbackAuthority,
+		allowLoopbackProxyPlain: options.AllowLoopbackProxyPlain, proxyPublicHost: options.ProxyPublicHost,
+		authTimeout: authTimeout, challengeTTL: challengeTTL,
 		relayOptions: transport.RelayOptions{QueueCapacity: options.QueueCapacity, HeartbeatInterval: options.HeartbeatInterval, IdleTimeout: options.IdleTimeout},
 		limit:        make(chan struct{}, connectionLimit), nodes: make(map[string]*hubConnection), controls: make(map[string]*hubConnection),
 		nodeDetails: make(map[string]HubNodeDetail), leaseLocks: make(map[string]*sync.Mutex),
@@ -173,7 +185,7 @@ func NewHub(store sessionStore, options HubOptions) (*Hub, error) {
 }
 
 func (h *Hub) NodeHandler(writer http.ResponseWriter, request *http.Request) {
-	if request.TLS == nil {
+	if request.TLS == nil && !(h.allowLoopbackPlain && plainLoopbackRequest(request, h.loopbackAuthority)) && !(h.allowLoopbackProxyPlain && plainLoopbackProxyRequest(request, h.proxyPublicHost)) {
 		writeError(writer, http.StatusUpgradeRequired, "tls_required")
 		return
 	}
@@ -206,7 +218,7 @@ func (h *Hub) NodeHandler(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (h *Hub) ControlHandler(writer http.ResponseWriter, request *http.Request) {
-	if request.TLS == nil {
+	if request.TLS == nil && !(h.allowLoopbackPlain && plainLoopbackRequest(request, h.loopbackAuthority)) && !(h.allowLoopbackProxyPlain && plainLoopbackProxyRequest(request, h.proxyPublicHost)) {
 		writeError(writer, http.StatusUpgradeRequired, "tls_required")
 		return
 	}
@@ -239,6 +251,29 @@ func (h *Hub) ControlHandler(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	h.serve(writer, request, transport.SessionRoleControl, record.OwnerID, record.ClientID, record.KeyID, record.PublicKey)
+}
+
+func plainLoopbackRequest(request *http.Request, authority string) bool {
+	if request == nil || request.TLS != nil || authority == "" || request.Host != authority {
+		return false
+	}
+	host := request.Host
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	if host != "127.0.0.1" && host != "::1" {
+		return false
+	}
+	remoteHost, _, err := net.SplitHostPort(request.RemoteAddr)
+	return err == nil && (remoteHost == "127.0.0.1" || remoteHost == "::1")
+}
+
+func plainLoopbackProxyRequest(request *http.Request, publicHost string) bool {
+	if request == nil || request.TLS != nil || publicHost == "" || request.Host != publicHost {
+		return false
+	}
+	remoteHost, _, err := net.SplitHostPort(request.RemoteAddr)
+	return err == nil && (remoteHost == "127.0.0.1" || remoteHost == "::1")
 }
 
 func (h *Hub) serve(writer http.ResponseWriter, request *http.Request, role transport.SessionRole, ownerID, subjectID, keyID string, publicKey []byte) {

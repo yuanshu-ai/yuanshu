@@ -64,11 +64,15 @@ var errRelayRevoked = errors.New("node relay credential is revoked")
 
 func newPairingManager(options pairingManagerOptions) (*pairingManager, error) {
 	parsed, err := url.Parse(options.RelayURL)
-	if err != nil || parsed.Scheme != "wss" || parsed.Host == "" || options.Signer == nil || options.Local == nil || options.Secrets == nil || options.Identity.OwnerID == "" || options.Identity.NodeID == "" || len(options.Identity.PublicKey) != ed25519.PublicKeySize || len(options.Credential) < 32 || options.CredentialRef == "" {
+	if err != nil || !validNodeRelayEndpoint(parsed) || options.Signer == nil || options.Local == nil || options.Secrets == nil || options.Identity.OwnerID == "" || options.Identity.NodeID == "" || len(options.Identity.PublicKey) != ed25519.PublicKeySize || len(options.Credential) < 32 || options.CredentialRef == "" {
 		return nil, errors.New("node pairing configuration is unavailable")
 	}
 	base := *parsed
-	base.Scheme = "https"
+	if parsed.Scheme == "wss" {
+		base.Scheme = "https"
+	} else {
+		base.Scheme = "http"
+	}
 	base.Path = ""
 	base.RawPath = ""
 	base.RawQuery = ""
@@ -90,6 +94,17 @@ func newPairingManager(options pairingManagerOptions) (*pairingManager, error) {
 		clock = time.Now
 	}
 	return &pairingManager{baseURL: strings.TrimRight(base.String(), "/"), relayURL: options.RelayURL, httpClient: client, identity: options.Identity, signer: options.Signer, local: options.Local, secrets: options.Secrets, credentialRef: options.CredentialRef, credential: append([]byte(nil), options.Credential...), random: random, clock: clock}, nil
+}
+
+func validNodeRelayEndpoint(parsed *url.URL) bool {
+	if parsed == nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	if parsed.Scheme == "wss" {
+		return true
+	}
+	host := parsed.Hostname()
+	return parsed.Scheme == "ws" && (host == "127.0.0.1" || host == "::1")
 }
 
 func (m *pairingManager) Connect(ctx context.Context) (transport.Transport, error) {

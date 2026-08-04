@@ -235,7 +235,7 @@ yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
 
 On an uninitialized data directory, the Server prints a 32-byte bootstrap secret once to local stdout. The enrolling Node generates its own Ed25519 key and connection credential, retains the credential locally, and sends only the public key and SHA-256 credential hash to `POST /v1/bootstrap/claim`. The Server persists `server.db`, creates the first Owner and Node atomically, and supports exact claim retries for five minutes. HTTP initialization uses `/healthz`, `/readyz`, `/v1/bootstrap/status`, and `/v1/bootstrap/claim`; authenticated realtime connections use `/node/connect` and `/web/connect`.
 
-The formal realtime handlers require TLS, authenticate Node credentials plus Ed25519 challenges, and route immutable Protocol v1 frames without re-encoding them. Server Schema v3 adds hashed, five-minute additional-Node enrollment and Owner trust revisions; connection credentials remain local to each Node. A configured non-loopback Server uses the IP-first HTTPS/WSS path described below; the `/pair` page and WebSocket endpoints must not be exposed without trusted TLS. Do not expose Codex app-server ports.
+The formal realtime handlers require TLS for every remote connection (with a literal-loopback HTTP/WS exception), authenticate Node credentials plus Ed25519 challenges, and route immutable Protocol v1 frames without re-encoding them. Server Schema v3 adds hashed, five-minute additional-Node enrollment and Owner trust revisions; connection credentials remain local to each Node. A configured non-loopback Server uses the IP-first HTTPS/WSS path described below; the `/pair` page and WebSocket endpoints must not be exposed remotely without trusted TLS. Do not expose Codex app-server ports.
 
 ### Formal Standalone composition
 
@@ -247,23 +247,23 @@ yuanshu standalone --data-dir C:\path\to\yuanshu-standalone --config C:\path\to\
 
 Standalone remains loopback by default. A separate `--server-config` can provide the same IP-first HTTPS/WSS listener and TLS material as the Server command; Linux process/security-store packaging and product containers are later milestones.
 
-### IP-first self-hosting
+### Four self-hosting modes
 
-The self-hosting configuration is IP-first: a LAN IPv4 or IPv6 address may be
-used instead of a domain, but every browser connection remains HTTPS/WSS. A
-non-loopback Server must use a certificate whose SAN contains the configured IP
-address; `ws://`, plaintext HTTP, public Codex app-server ports, and TLS
-disable switches are not supported.
+Yuanshu supports four explicit deployment modes: `local` (literal loopback
+HTTP/WS), `lan-managed` (private IP with a per-Server managed CA),
+`public-ip-acme` (public IP with automated short-lived ACME certificates), and
+`external` (user-provided certificates or a same-host loopback reverse proxy).
+Only literal `127.0.0.1` and `::1` may use plaintext; every remote connection
+remains HTTPS/WSS. Codex app-server ports are never exposed.
 
 Create a separate Server configuration file and start it with:
 
 ```toml
-config_version = 1
+config_version = 2
+deployment_mode = "lan-managed"
 data_dir = "/absolute/path/yuanshu-server"
 listen = "0.0.0.0:7444"
 public_url = "https://192.168.1.20:7444"
-tls_cert_file = "/absolute/path/server.crt"
-tls_key_file = "/absolute/path/server.key"
 allowed_control_origins = ["https://192.168.1.20:7444"]
 
 [web]
@@ -277,9 +277,24 @@ audit_retention_days = 90
 ```
 
 ```shell
+yuanshu server setup --config /absolute/path/server.toml
 yuanshu server --config /absolute/path/server.toml
 yuanshu server doctor --config /absolute/path/server.toml --json
+yuanshu server cert status --config /absolute/path/server.toml
 ```
+
+In `lan-managed`, the Server creates an ECDSA root CA and a 90-day IP-SAN leaf
+certificate, renews the leaf automatically, and serves only the public root at
+`/trust` and `/v1/trust/ca.crt`. Node setup can copy that root into its private
+CA bundle without disabling hostname verification. The CA private key never
+enters HTTP, Admin, ordinary database backups, or diagnostics; use the separate
+password-encrypted `server cert backup-ca` command for disaster recovery.
+
+`public-ip-acme` requires a globally routable fixed IP and public TCP 443 routed
+to the configured listener. It uses the ACME `shortlived` profile and
+TLS-ALPN-01 with automated renewal. Test staging before production. `external`
+accepts either matching certificate files with hot reload or a reverse proxy on
+the same machine while Yuanshu listens only on loopback.
 
 The production Server serves the embedded personal workbench at `/`, the
 same-origin Server administration console at `/admin`, and pairing at `/pair`.

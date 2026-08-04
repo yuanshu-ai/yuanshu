@@ -2,7 +2,11 @@ package node
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -71,6 +75,38 @@ func TestReloadConfigurationPreservesRuntimeAndEventPumpBoundary(t *testing.T) {
 	record, err := local.Workspace(ctx, initial.Workspaces[0].ID)
 	if err != nil || record.DisplayName != "Renamed workspace" {
 		t.Fatalf("workspace record = %+v, %v", record, err)
+	}
+}
+
+func TestRelayHTTPClientUsesAdditionalCAWithoutDisablingHostnameValidation(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusNoContent) }))
+	defer server.Close()
+	certificate := server.Certificate()
+	if certificate == nil {
+		t.Fatal("test certificate unavailable")
+	}
+	caPath := filepath.Join(t.TempDir(), "relay-ca.pem")
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := relayHTTPClient("", time.Second, caPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatalf("custom CA connection failed: %v", err)
+	}
+	_ = response.Body.Close()
+	transport := client.Transport.(*http.Transport)
+	if transport.TLSClientConfig == nil || transport.TLSClientConfig.InsecureSkipVerify || transport.TLSClientConfig.MinVersion != 0x0304 {
+		t.Fatalf("unsafe TLS configuration: %#v", transport.TLSClientConfig)
+	}
+	if _, err := relayHTTPClient("", time.Second, filepath.Join(t.TempDir(), "missing.pem")); err == nil {
+		t.Fatal("missing custom CA accepted")
+	}
+	if _, err := x509.SystemCertPool(); err != nil {
+		t.Logf("system roots unavailable in test environment: %v", err)
 	}
 }
 

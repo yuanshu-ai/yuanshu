@@ -491,6 +491,19 @@ func TestHubRejectsPlaintextOriginCredentialAndTargetSpoofing(t *testing.T) {
 	if response.Code != http.StatusUpgradeRequired || !strings.Contains(response.Body.String(), "tls_required") {
 		t.Fatalf("plaintext status=%d body=%q", response.Code, response.Body.String())
 	}
+	localHub, err := NewHub(fixture.store, HubOptions{AllowedControlOrigins: []string{"http://127.0.0.1:7444"}, AllowLoopbackPlain: true, LoopbackAuthority: "127.0.0.1:7444"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer localHub.Close()
+	localRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7444/node/connect", nil)
+	localRequest.Host = "127.0.0.1:7444"
+	localRequest.RemoteAddr = "127.0.0.1:53000"
+	localResponse := httptest.NewRecorder()
+	localHub.NodeHandler(localResponse, localRequest)
+	if localResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("local plaintext did not reach authentication boundary: %d", localResponse.Code)
+	}
 
 	badHeader := make(http.Header)
 	badHeader.Set("X-Yuanshu-Node-ID", fixture.store.node.NodeID)
@@ -546,6 +559,37 @@ func TestHubRejectsPlaintextOriginCredentialAndTargetSpoofing(t *testing.T) {
 	defer shortCancel()
 	if _, err := node.Receive(short); err != context.DeadlineExceeded {
 		t.Fatalf("spoofed frame reached node or wrong error=%v", err)
+	}
+}
+
+func TestPlainLoopbackProxyRequiresLoopbackPeerAndConfiguredPublicHost(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://yuanshu.example.test/web/connect", nil)
+	request.Host = "yuanshu.example.test"
+	request.RemoteAddr = "127.0.0.1:53000"
+	if !plainLoopbackProxyRequest(request, "yuanshu.example.test") {
+		t.Fatal("valid same-host loopback proxy request rejected")
+	}
+	request.RemoteAddr = "192.168.1.30:53000"
+	if plainLoopbackProxyRequest(request, "yuanshu.example.test") {
+		t.Fatal("non-loopback proxy request accepted")
+	}
+	request.RemoteAddr = "127.0.0.1:53000"
+	request.Host = "attacker.example.test"
+	if plainLoopbackProxyRequest(request, "yuanshu.example.test") {
+		t.Fatal("unexpected proxy Host accepted")
+	}
+}
+
+func TestPlainLoopbackRequestRequiresExactListeningAuthority(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7444/web/connect", nil)
+	request.Host = "127.0.0.1:7444"
+	request.RemoteAddr = "127.0.0.1:53000"
+	if !plainLoopbackRequest(request, "127.0.0.1:7444") {
+		t.Fatal("valid loopback request rejected")
+	}
+	request.Host = "127.0.0.1:7555"
+	if plainLoopbackRequest(request, "127.0.0.1:7444") {
+		t.Fatal("unexpected loopback authority accepted")
 	}
 }
 

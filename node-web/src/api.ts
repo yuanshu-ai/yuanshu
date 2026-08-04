@@ -22,7 +22,7 @@ export type NodeConfig = {
   revision?: string;
   host?: { name?: string };
   transport?: { mode?: string };
-  relay?: { url?: string; proxyUrl?: string; connectTimeoutSeconds?: number; credentialConfigured?: boolean };
+  relay?: { url?: string; proxyUrl?: string; connectTimeoutSeconds?: number; credentialConfigured?: boolean; customCAConfigured?: boolean; customCAFingerprint?: string };
   adapter?: { codexEnabled?: boolean; binaryConfigured?: boolean; homeConfigured?: boolean; runtimeMode?: string };
   events?: { maxAgeHours?: number; maxSizeMiB?: number };
   workspaces?: Array<{ id: string; name?: string; permissionProfile?: string; allowNetwork?: boolean }>;

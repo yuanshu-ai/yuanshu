@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -120,6 +121,45 @@ func TestEmbeddedWebRuntimeConfigUsesTLSRequestHost(t *testing.T) {
 	}
 	if settings["relayUrl"] != "wss://[fd00::20]:7444/web/connect" || settings["pairingUrl"] != "https://[fd00::20]:7444/pair" {
 		t.Fatalf("settings=%v", settings)
+	}
+}
+
+func TestEmbeddedWebRuntimeConfigAllowsOnlyLiteralLoopbackPlaintext(t *testing.T) {
+	handler, err := newWebDeliveryHandler(http.NotFoundHandler(), webDeliveryOptions{Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ host, relay string }{{"127.0.0.1:7444", "ws://127.0.0.1:7444/web/connect"}, {"[::1]:7444", "ws://[::1]:7444/web/connect"}, {"192.168.1.20:7444", ""}} {
+		request := httptest.NewRequest(http.MethodGet, "http://"+test.host+"/yuanshu.config.json", nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		var settings map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &settings); err != nil || settings["relayUrl"] != test.relay {
+			t.Fatalf("host=%s settings=%v err=%v", test.host, settings, err)
+		}
+	}
+}
+
+func TestManagedTrustPageExportsOnlyPublicRoot(t *testing.T) {
+	root := t.TempDir()
+	provider, err := newManagedCertificateProvider(context.Background(), Options{DataDir: root, DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.31:7444"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	handler, err := newWebDeliveryHandler(http.NotFoundHandler(), webDeliveryOptions{Enabled: true, Certificate: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := httptest.NewRecorder()
+	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/trust", nil))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "短指纹") || strings.Contains(page.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("trust page status=%d body=%q", page.Code, page.Body.String())
+	}
+	certificate := httptest.NewRecorder()
+	handler.ServeHTTP(certificate, httptest.NewRequest(http.MethodGet, "/v1/trust/ca.crt", nil))
+	if certificate.Code != http.StatusOK || !strings.Contains(certificate.Body.String(), "CERTIFICATE") || strings.Contains(certificate.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("CA response status=%d body=%q", certificate.Code, certificate.Body.String())
 	}
 }
 

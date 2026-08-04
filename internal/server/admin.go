@@ -33,23 +33,26 @@ const (
 )
 
 type adminHandlerOptions struct {
-	Enabled        bool
-	PublicURL      string
-	Listen         string
-	WebEnabled     bool
-	TLSConfigured  bool
-	AllowedOrigins []string
-	SessionIdle    time.Duration
-	SessionMax     time.Duration
-	AuditRetention time.Duration
-	Random         io.Reader
-	Clock          func() time.Time
-	StartedAt      time.Time
-	DatabasePath   string
-	ConfigRevision string
-	TLSSAN         []string
-	TLSNotAfter    time.Time
-	TLSFingerprint string
+	Enabled             bool
+	PublicURL           string
+	Listen              string
+	WebEnabled          bool
+	TLSConfigured       bool
+	AllowedOrigins      []string
+	SessionIdle         time.Duration
+	SessionMax          time.Duration
+	AuditRetention      time.Duration
+	Random              io.Reader
+	Clock               func() time.Time
+	StartedAt           time.Time
+	DatabasePath        string
+	ConfigRevision      string
+	DeploymentMode      string
+	CertificateProvider string
+	Certificate         certificateProvider
+	TLSSAN              []string
+	TLSNotAfter         time.Time
+	TLSFingerprint      string
 }
 
 type adminChallenge struct {
@@ -371,7 +374,7 @@ func (s *adminService) createSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[hash] = session
 	s.mu.Unlock()
 	_ = s.store.TouchControlClient(r.Context(), record.OwnerID, record.ClientID, now)
-	http.SetCookie(w, &http.Cookie{Name: adminCookieName, Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: int(s.options.SessionMax.Seconds())})
+	http.SetCookie(w, &http.Cookie{Name: adminCookieName, Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil || s.options.PublicURL != "", SameSite: http.SameSiteStrictMode, MaxAge: int(s.options.SessionMax.Seconds())})
 	writeJSON(w, http.StatusCreated, map[string]any{"clientId": record.ClientID, "csrfToken": csrf, "expiresAt": session.expiresAt.Format(time.RFC3339Nano)})
 }
 
@@ -833,10 +836,41 @@ func (s *adminService) writeAudit(ctx context.Context, session *adminSession, ac
 }
 
 func (s *adminService) redactedConfig(settings serverstore.SecuritySettings) map[string]any {
-	return map[string]any{"listen": s.options.Listen, "publicUrl": s.options.PublicURL, "allowedControlOrigins": append([]string(nil), s.options.AllowedOrigins...), "webEnabled": s.options.WebEnabled, "adminEnabled": s.options.Enabled, "dataDirConfigured": s.options.DatabasePath != "", "tls": s.tlsView(), "configRevision": s.options.ConfigRevision, "admission": map[string]any{"controlPairingEnabled": settings.ControlPairingEnabled, "nodeEnrollmentEnabled": settings.NodeEnrollmentEnabled, "revision": settings.Revision, "updatedAt": settings.UpdatedAt.Format(time.RFC3339Nano)}}
+	return map[string]any{"deploymentMode": s.options.DeploymentMode, "listen": s.options.Listen, "publicUrl": s.options.PublicURL, "allowedControlOrigins": append([]string(nil), s.options.AllowedOrigins...), "webEnabled": s.options.WebEnabled, "adminEnabled": s.options.Enabled, "dataDirConfigured": s.options.DatabasePath != "", "tls": s.tlsView(), "configRevision": s.options.ConfigRevision, "admission": map[string]any{"controlPairingEnabled": settings.ControlPairingEnabled, "nodeEnrollmentEnabled": settings.NodeEnrollmentEnabled, "revision": settings.Revision, "updatedAt": settings.UpdatedAt.Format(time.RFC3339Nano)}}
 }
 func (s *adminService) tlsView() map[string]any {
-	result := map[string]any{"configured": s.options.TLSConfigured}
+	result := map[string]any{"configured": s.options.TLSConfigured, "provider": s.options.CertificateProvider}
+	if s.options.Certificate != nil {
+		status := s.options.Certificate.Status()
+		result["state"] = status.State
+		result["provider"] = status.Provider
+		result["san"] = append([]string(nil), status.SAN...)
+		result["fingerprint"] = status.Fingerprint
+		if !status.NotAfter.IsZero() {
+			result["notAfter"] = status.NotAfter.Format(time.RFC3339)
+			if warning := certificateExpiryWarningForProvider(status.Provider, s.clock().UTC(), status.NotAfter); warning != "" {
+				result["expiryWarning"] = warning
+			}
+		}
+		if !status.LastRenewed.IsZero() {
+			result["lastRenewed"] = status.LastRenewed.Format(time.RFC3339)
+		}
+		if !status.NextRenewal.IsZero() {
+			result["nextRenewal"] = status.NextRenewal.Format(time.RFC3339)
+		}
+		if status.LastErrorCode != "" {
+			result["lastErrorCode"] = status.LastErrorCode
+		}
+		if status.CAFingerprint != "" {
+			result["caFingerprint"] = status.CAFingerprint
+			result["trustUrl"] = "/trust"
+			result["caDownloadUrl"] = "/v1/trust/ca.crt"
+		}
+		if !status.CABackupAt.IsZero() {
+			result["caBackupAt"] = status.CABackupAt.Format(time.RFC3339)
+		}
+		return result
+	}
 	if len(s.options.TLSSAN) > 0 {
 		result["san"] = append([]string(nil), s.options.TLSSAN...)
 	}
@@ -923,7 +957,7 @@ func (s *adminService) validOrigin(r *http.Request) bool {
 	return origin == expected
 }
 func (s *adminService) clearCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: adminCookieName, Value: "", Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: adminCookieName, Value: "", Path: "/", HttpOnly: true, Secure: r.TLS != nil || s.options.PublicURL != "", SameSite: http.SameSiteStrictMode, MaxAge: -1})
 }
 func (s *adminService) closeClientSessions(ownerID, clientID string) {
 	s.mu.Lock()

@@ -8,6 +8,8 @@ describe("runtime connection settings", () => {
     expect(validateRelayURL("wss://192.168.1.20:7444/web/connect")).toBeUndefined();
     expect(validateRelayURL("wss://[fd00::20]:7444/web/connect")).toBeUndefined();
     expect(validatePairingURL("https://192.168.1.20:7444/pair")).toBeUndefined();
+    expect(validateRelayURL("ws://127.0.0.1:7444/web/connect")).toBeUndefined();
+    expect(validatePairingURL("http://[::1]:7444/pair")).toBeUndefined();
     expect(validatePairingURL("/pair")).toBeUndefined();
     expect(validateRelayURL("ws://192.168.1.20:7444/web/connect")).toContain("wss://");
   });

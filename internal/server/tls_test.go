@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"net"
@@ -92,6 +93,55 @@ func TestPublicServerServesTLS13(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Run() = %v", err)
+	}
+}
+
+func TestLocalServerServesLoopbackHTTPAndWSRuntimeOnlyForExactHost(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	go func() {
+		done <- Run(ctx, Options{DataDir: dataDir, Listen: listener.Addr().String(), Listener: listener, DeploymentMode: DeploymentLocal})
+	}()
+	base := "http://" + listener.Addr().String()
+	var runtimeConfig map[string]any
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		response, requestErr := http.Get(base + "/yuanshu.config.json")
+		if requestErr == nil {
+			if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&runtimeConfig) != nil {
+				_ = response.Body.Close()
+				t.Fatalf("runtime status=%d", response.StatusCode)
+			}
+			_ = response.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("local Server did not start: %v", requestErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if runtimeConfig["relayUrl"] != "ws://"+listener.Addr().String()+"/web/connect" || runtimeConfig["pairingUrl"] != base+"/pair" {
+		t.Fatalf("runtime config=%v", runtimeConfig)
+	}
+	request, _ := http.NewRequest(http.MethodGet, base+"/healthz", nil)
+	request.Host = "127.0.0.1:1"
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("wrong Host status=%d", response.StatusCode)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run()=%v", err)
 	}
 }
 

@@ -22,10 +22,18 @@ const Usage = `Usage:
     [--web | --no-web]
   yuanshu server doctor [--config <absolute-path>] [--json]
   yuanshu server healthcheck [--address 127.0.0.1:7444]
-  yuanshu server init --config <absolute-path> [--mode loopback|lan] [--data-dir <absolute-path>]
+  yuanshu server init --config <absolute-path> [--mode local|lan-managed|public-ip-acme|external] [--data-dir <absolute-path>]
     [--listen <ip:port>] [--public-url https://host[:port]] [--tls-cert <absolute-path>]
-    [--tls-key <absolute-path>] [--allowed-control-origin https://web-host[:port]]
+    [--tls-key <absolute-path>] [--tls-termination server|proxy]
+    [--acme-environment production|staging] [--acme-email <email>] [--acme-accept-terms]
+    [--allowed-control-origin https://web-host[:port]]
     [--non-interactive] [--replace]
+  yuanshu server setup --config <absolute-path>
+  yuanshu server cert status --config <absolute-path> [--json]
+  yuanshu server cert renew --config <absolute-path>
+  yuanshu server cert export-ca --config <absolute-path> --output <absolute-path>
+  yuanshu server cert backup-ca --config <absolute-path> --output <absolute-path> [--passphrase-file <absolute-path>]
+  yuanshu server cert restore-ca --config <absolute-path> --from <absolute-path> [--passphrase-file <absolute-path>]
   yuanshu server backup --config <absolute-path> [--output <absolute-path>]
   yuanshu server restore --config <absolute-path> --from <absolute-path>
 `
@@ -49,11 +57,17 @@ func Command(ctx context.Context, args []string, stdout, _ io.Writer) error {
 	if len(args) > 0 && args[0] == "init" {
 		return initializeServer(ctx, args[1:], os.Stdin, stdout)
 	}
+	if len(args) > 0 && args[0] == "setup" {
+		return setupServer(ctx, args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "backup" {
 		return backupServer(ctx, args[1:], stdout)
 	}
 	if len(args) > 0 && args[0] == "restore" {
 		return restoreServer(ctx, args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "cert" {
+		return certificateCommand(ctx, args[1:], os.Stdin, stdout)
 	}
 	options, err := parseServerOptions(args)
 	if err != nil {
@@ -127,7 +141,7 @@ func parseServerOptions(args []string) (Options, error) {
 			tlsKey, hasTLSKey = filepath.Clean(args[index]), true
 		case "--allowed-control-origin":
 			index++
-			if index >= len(args) || !validateControlOrigin(args[index]) {
+			if index >= len(args) || !validateControlOriginForMode(args[index], true) {
 				return Options{}, ErrUsage
 			}
 			origins = append(origins, strings.TrimSuffix(args[index], "/"))
@@ -153,7 +167,8 @@ func parseServerOptions(args []string) (Options, error) {
 			return Options{}, ErrUsage
 		}
 		options.DataDir, options.Listen, options.PublicURL = file.DataDir, file.Listen, file.PublicURL
-		options.TLSCertFile, options.TLSKeyFile = file.TLSCertFile, file.TLSKeyFile
+		options.DeploymentMode, options.TLSTermination, options.ACME = file.DeploymentMode, file.TLS.Termination, file.ACME
+		options.TLSCertFile, options.TLSKeyFile = file.TLS.CertFile, file.TLS.KeyFile
 		options.AllowedControlOrigins = append([]string(nil), file.AllowedControlOrigins...)
 		options.WebEnabled = cloneBool(file.Web.Enabled)
 		options.AdminEnabled = cloneBool(file.Admin.Enabled)
@@ -180,6 +195,17 @@ func parseServerOptions(args []string) (Options, error) {
 	if hasTLSKey {
 		options.TLSKeyFile = tlsKey
 	}
+	if (hasTLSCert || hasTLSKey) && options.PublicURL != "" && options.TLSCertFile != "" && options.TLSKeyFile != "" {
+		options.DeploymentMode, options.TLSTermination = DeploymentExternal, "server"
+		options.ACME = ACMEConfig{}
+	}
+	if options.DeploymentMode == "" {
+		if options.PublicURL == "" {
+			options.DeploymentMode = DeploymentLocal
+		} else {
+			options.DeploymentMode, options.TLSTermination = DeploymentExternal, "server"
+		}
+	}
 	if len(origins) > 0 {
 		options.AllowedControlOrigins = origins
 	}
@@ -199,11 +225,17 @@ type doctorStatus struct {
 	DataDir               string   `json:"dataDir,omitempty"`
 	Listen                string   `json:"listen,omitempty"`
 	PublicURL             string   `json:"publicUrl,omitempty"`
+	DeploymentMode        string   `json:"deploymentMode,omitempty"`
+	CertificateProvider   string   `json:"certificateProvider,omitempty"`
 	TLS                   string   `json:"tls"`
 	TLSSAN                []string `json:"tlsSan,omitempty"`
 	TLSNotAfter           string   `json:"tlsNotAfter,omitempty"`
 	TLSFingerprint        string   `json:"tlsFingerprint,omitempty"`
+	TLSCAFingerprint      string   `json:"tlsCaFingerprint,omitempty"`
 	TLSExpiryWarning      string   `json:"tlsExpiryWarning,omitempty"`
+	TLSLastRenewed        string   `json:"tlsLastRenewed,omitempty"`
+	TLSNextRenewal        string   `json:"tlsNextRenewal,omitempty"`
+	TLSCABackupAt         string   `json:"tlsCaBackupAt,omitempty"`
 	TLSError              string   `json:"tlsError,omitempty"`
 	AllowedControlOrigins []string `json:"allowedControlOrigins,omitempty"`
 	Revision              string   `json:"revision,omitempty"`
@@ -244,6 +276,7 @@ func doctor(ctx context.Context, args []string, stdout io.Writer) error {
 		return writeDoctorStatus(stdout, status, jsonOutput, false)
 	}
 	status.Config, status.DataDir, status.Listen, status.PublicURL = "ready", value.DataDir, value.Listen, value.PublicURL
+	status.DeploymentMode = string(value.DeploymentMode)
 	if status.Listen == "" {
 		status.Listen = "127.0.0.1:7444"
 	}
@@ -255,22 +288,41 @@ func doctor(ctx context.Context, args []string, stdout io.Writer) error {
 	if !adminEnabled(value.Admin.Enabled) {
 		status.Admin = "disabled"
 	}
-	if value.PublicURL != "" {
-		tlsConfig, tlsErr := loadTLSConfig(Options{PublicURL: value.PublicURL, TLSCertFile: value.TLSCertFile, TLSKeyFile: value.TLSKeyFile})
-		if tlsErr != nil {
+	if value.DeploymentMode == DeploymentExternal && value.TLS.Termination == "proxy" {
+		status.TLS, status.CertificateProvider = "terminated_by_proxy", "external-proxy"
+	} else if value.PublicURL != "" {
+		provider, providerErr := newCertificateProvider(ctx, optionsFromConfig(value))
+		if providerErr != nil {
 			status.TLS, status.TLSError, status.State = "invalid", "certificate_unavailable_or_mismatched", "needs_attention"
 			return writeDoctorStatus(stdout, status, jsonOutput, false)
 		}
-		status.TLS = "ready"
-		if len(tlsConfig.Certificates) > 0 && tlsConfig.Certificates[0].Leaf != nil {
-			leaf := tlsConfig.Certificates[0].Leaf
-			status.TLSSAN = append([]string(nil), leaf.DNSNames...)
-			for _, ip := range leaf.IPAddresses {
-				status.TLSSAN = append(status.TLSSAN, ip.String())
+		defer provider.Close()
+		certificate := provider.Status()
+		status.TLS = certificate.State
+		status.CertificateProvider = certificate.Provider
+		status.TLSSAN = append([]string(nil), certificate.SAN...)
+		if !certificate.NotAfter.IsZero() {
+			status.TLSNotAfter = certificate.NotAfter.UTC().Format(time.RFC3339)
+			status.TLSExpiryWarning = certificateExpiryWarningForProvider(certificate.Provider, time.Now().UTC(), certificate.NotAfter.UTC())
+		}
+		status.TLSFingerprint = certificate.Fingerprint
+		status.TLSCAFingerprint = certificate.CAFingerprint
+		if !certificate.LastRenewed.IsZero() {
+			status.TLSLastRenewed = certificate.LastRenewed.UTC().Format(time.RFC3339)
+		}
+		if !certificate.NextRenewal.IsZero() {
+			status.TLSNextRenewal = certificate.NextRenewal.UTC().Format(time.RFC3339)
+		}
+		if !certificate.CABackupAt.IsZero() {
+			status.TLSCABackupAt = certificate.CABackupAt.UTC().Format(time.RFC3339)
+		}
+		status.TLSError = certificate.LastErrorCode
+		if certificate.State != "ready" || certificate.NotAfter.IsZero() || !time.Now().Before(certificate.NotAfter) {
+			if status.TLSError == "" {
+				status.TLSError = "certificate_not_ready"
 			}
-			status.TLSNotAfter = leaf.NotAfter.UTC().Format(time.RFC3339)
-			status.TLSFingerprint = certificateFingerprint(leaf.Raw)
-			status.TLSExpiryWarning = certificateExpiryWarning(time.Now().UTC(), leaf.NotAfter.UTC())
+			status.State = "needs_attention"
+			return writeDoctorStatus(stdout, status, jsonOutput, false)
 		}
 	}
 	if backups, backupErr := listBackupArchives(filepath.Join(value.DataDir, "backups")); backupErr == nil && len(backups) > 0 {
@@ -290,7 +342,7 @@ func writeDoctorStatus(stdout io.Writer, status doctorStatus, jsonOutput, health
 			return err
 		}
 	} else {
-		_, _ = fmt.Fprintf(stdout, "Yuanshu Server: %s\nConfig: %s\nListen: %s\nPublic URL: %s\nTLS: %s\nWeb: %s\nAdmin: %s\nBackup: %s\n", status.State, status.Config, status.Listen, status.PublicURL, status.TLS, status.Web, status.Admin, status.Backup)
+		_, _ = fmt.Fprintf(stdout, "Yuanshu Server: %s\nConfig: %s\nMode: %s\nListen: %s\nPublic URL: %s\nTLS: %s (%s)\nWeb: %s\nAdmin: %s\nBackup: %s\n", status.State, status.Config, status.DeploymentMode, status.Listen, status.PublicURL, status.TLS, status.CertificateProvider, status.Web, status.Admin, status.Backup)
 	}
 	if !healthy {
 		return errors.New("server requires attention")
@@ -319,27 +371,24 @@ func validListen(value string) bool {
 }
 
 func validPublicOptions(options Options) bool {
-	tlsCount := 0
-	for _, value := range []string{options.PublicURL, options.TLSCertFile, options.TLSKeyFile} {
-		if value != "" {
-			tlsCount++
+	mode := options.DeploymentMode
+	if mode == "" {
+		if options.PublicURL == "" {
+			mode = DeploymentLocal
+		} else {
+			mode = DeploymentExternal
 		}
 	}
-	if tlsCount != 0 && tlsCount != 3 {
-		return false
+	termination := options.TLSTermination
+	if termination == "" && mode == DeploymentExternal {
+		termination = "server"
 	}
-	host, _, err := net.SplitHostPort(options.Listen)
-	if err != nil {
-		return false
+	value := ConfigFile{
+		ConfigVersion: CurrentConfigVersion, DeploymentMode: mode, DataDir: options.DataDir,
+		Listen: options.Listen, PublicURL: options.PublicURL, AllowedControlOrigins: options.AllowedControlOrigins,
+		TLS: TLSFileConfig{Termination: termination, CertFile: options.TLSCertFile, KeyFile: options.TLSKeyFile}, ACME: options.ACME,
 	}
-	if host != "127.0.0.1" && host != "::1" && tlsCount != 3 {
-		return false
-	}
-	if options.PublicURL == "" {
-		return true
-	}
-	parsed, err := url.Parse(options.PublicURL)
-	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && (parsed.Path == "" || parsed.Path == "/")
+	return validDeploymentConfig(value)
 }
 
 func publicURLHost(value string) string {

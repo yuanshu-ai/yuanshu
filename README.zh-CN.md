@@ -200,7 +200,7 @@ yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
 
 未初始化的数据目录首次启动时，Server 只向本地 stdout 显示一次 32 字节 bootstrap secret。待领取 Node 自己生成 Ed25519 密钥和连接凭据、在本地保留凭据正文，并仅向 `POST /v1/bootstrap/claim` 提交公钥和凭据 SHA-256。Server 在 `server.db` 中原子创建首个 Owner 与 Node，并在五分钟内支持完全相同的 claim 重试。HTTP初始化使用 `/healthz`、`/readyz`、`/v1/bootstrap/status` 和 `/v1/bootstrap/claim`；认证实时连接使用 `/node/connect` 与 `/web/connect`。
 
-正式实时Handler强制TLS，使用Node连接凭据和Ed25519 challenge认证，并且不重新编码地路由Protocol v1原始帧。Server Schema v3新增只保存散列的五分钟附加Node enrollment和Owner信任revision；每台Node的连接凭据仍只保留在本机。配置后的非loopback Server使用下方的IP优先 HTTPS/WSS路径；`/pair` 与 WebSocket 端点不得在没有受信TLS时暴露。不得公开 Codex app-server 端口。
+正式实时 Handler 对所有远程连接强制 TLS（仅字面量 loopback 例外），使用 Node 连接凭据和 Ed25519 challenge 认证，并且不重新编码地路由 Protocol v1 原始帧。Server Schema v3 新增只保存散列的五分钟附加 Node enrollment 和 Owner 信任 revision；每台 Node 的连接凭据仍只保留在本机。配置后的非 loopback Server 使用下方的 IP 优先 HTTPS/WSS 路径；`/pair` 与 WebSocket 端点不得在没有受信 TLS 时远程暴露。不得公开 Codex app-server 端口。
 
 ### 正式 Standalone 组装
 
@@ -212,19 +212,18 @@ yuanshu standalone --data-dir C:\path\to\yuanshu-standalone --config C:\path\to\
 
 Standalone 默认仍只监听 loopback。通过 `--server-config` 可以使用与 Server 相同的 IP 优先 HTTPS/WSS 监听和 TLS 配置；Linux 进程/安全存储包装与产品容器属于后续里程碑。
 
-### IP 优先的自托管
+### 四种自托管模式
 
-当前自托管路径优先支持局域网 IP，也可以使用域名，但浏览器连接始终必须使用 HTTPS/WSS。非 loopback Server 必须使用 SAN 包含配置 IP 的证书；不支持 `ws://`、明文 HTTP、公开 Codex app-server 端口或关闭 TLS 的开关。
+Server 支持四种明确模式：`local`（字面量 loopback HTTP/WS）、`lan-managed`（私有 IP + 每台 Server 独立托管 CA）、`public-ip-acme`（公网固定 IP + 自动短期 ACME 证书）和 `external`（用户证书或同机 loopback 反向代理）。只有 `127.0.0.1` 与 `::1` 可以使用明文；所有远程访问仍使用 HTTPS/WSS，Codex app-server 永不公开。
 
 Server 使用独立配置文件：
 
 ```toml
-config_version = 1
+config_version = 2
+deployment_mode = "lan-managed"
 data_dir = "/absolute/path/yuanshu-server"
 listen = "0.0.0.0:7444"
 public_url = "https://192.168.1.20:7444"
-tls_cert_file = "/absolute/path/server.crt"
-tls_key_file = "/absolute/path/server.key"
 allowed_control_origins = ["https://192.168.1.20:7444"]
 
 [web]
@@ -232,9 +231,15 @@ enabled = true
 ```
 
 ```shell
+yuanshu server setup --config /absolute/path/server.toml
 yuanshu server --config /absolute/path/server.toml
 yuanshu server doctor --config /absolute/path/server.toml --json
+yuanshu server cert status --config /absolute/path/server.toml
 ```
+
+`lan-managed` 会生成 ECDSA 根 CA 和 90 天 IP SAN 叶证书，并自动续签叶证书；公开根证书只通过 `/trust` 与 `/v1/trust/ca.crt` 提供。Node 设置可将根证书复制到应用私有 CA bundle，主机名/IP 校验不会关闭。CA 私钥不会进入 HTTP、Admin、普通数据库备份或诊断；灾备使用独立口令加密的 `server cert backup-ca`。
+
+`public-ip-acme` 要求全局可路由固定 IP，并把公网 TCP 443 转发到配置的监听端口；实现固定使用 ACME `shortlived` profile 与 TLS-ALPN-01 自动续期，应先完成 staging 验证。`external` 可使用匹配 SAN 的证书文件热加载，或让同机 Caddy/Nginx 终止 TLS，而 Yuanshu 后端只监听 loopback。
 
 正式 Server 默认在 `/` 提供内置个人工作台，并根据 `public_url` 动态生成
 `/yuanshu.config.json`。因此启动 `yuanshu server` 后，Server、配对页、Relay 和

@@ -12,7 +12,7 @@ export interface AdminOverview {
   database: { schemaVersion: number; quickCheck: string; sizeBytes: number };
   connections: { nodes: number; controlClients: number };
   counts: { activeNodes: number; activeControlClients: number; pendingPairings: number; pendingEnrollments: number; activeLeases: number; unreadNotifications: number; recentFailures: number };
-  tls: { configured: boolean; san?: string[]; notAfter?: string; fingerprint?: string; expiryWarning?: string };
+  tls: { configured: boolean; provider?: string; state?: string; san?: string[]; notAfter?: string; fingerprint?: string; expiryWarning?: string; caFingerprint?: string; caBackupAt?: string; lastRenewed?: string; nextRenewal?: string; lastErrorCode?: string };
   backup: { available: boolean; lastBackupAt?: string; sizeBytes?: number; integrity: "valid" | "invalid" | "unavailable"; operation: "local_cli_only" };
 }
 
@@ -23,6 +23,7 @@ export interface AdminAccessRequest { id: string; kind: "control_client" | "node
 export interface AdminLease { scope: { nodeId: string; workspaceId: string; threadId: string }; leaseId: string; holderClientId: string; epoch: number; acquiredAt: string; expiresAt: string; updatedAt: string }
 export interface AdminAudit { id: string; actorClientId: string; action: string; resourceType: string; resourceRef: string; result: string; errorCode?: string; correlationId: string; createdAt: string }
 export interface AdminConfig {
+  deploymentMode?: "local" | "lan-managed" | "public-ip-acme" | "external";
   listen: string;
   publicUrl: string;
   allowedControlOrigins: string[];
@@ -30,7 +31,7 @@ export interface AdminConfig {
   adminEnabled: boolean;
   dataDirConfigured: boolean;
   configRevision?: string;
-  tls: { configured: boolean; san?: string[]; notAfter?: string; fingerprint?: string; expiryWarning?: string };
+  tls: { configured: boolean; provider?: string; state?: string; san?: string[]; notAfter?: string; fingerprint?: string; expiryWarning?: string; caFingerprint?: string; caBackupAt?: string; lastRenewed?: string; nextRenewal?: string; lastErrorCode?: string; trustUrl?: string; caDownloadUrl?: string };
   admission: { controlPairingEnabled: boolean; nodeEnrollmentEnabled: boolean; revision: number; updatedAt: string };
 }
 

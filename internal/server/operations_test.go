@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,79 @@ func TestServerInitRequiresMatchingTLSIdentityForLAN(t *testing.T) {
 	wrong[1], wrong[11], wrong[13] = filepath.Join(root, "wrong.toml"), wrongCert, wrongKey
 	if err := initializeServer(context.Background(), wrong, strings.NewReader(""), &bytes.Buffer{}); err == nil {
 		t.Fatal("LAN initialization accepted a certificate without the public IP SAN")
+	}
+}
+
+func TestServerInitManagedLANCreatesCAWithoutCertificatePaths(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "server.toml")
+	dataDir := filepath.Join(root, "data")
+	var output bytes.Buffer
+	err := initializeServer(context.Background(), []string{
+		"--config", configPath, "--mode", "lan-managed", "--data-dir", dataDir,
+		"--listen", "0.0.0.0:7444", "--public-url", "https://192.168.50.20:7444", "--non-interactive",
+	}, strings.NewReader(""), &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := LoadConfigFile(configPath)
+	if err != nil || value.DeploymentMode != DeploymentLANManaged || value.TLS.CertFile != "" || value.TLS.KeyFile != "" {
+		t.Fatalf("managed config=%+v err=%v", value, err)
+	}
+	for _, name := range []string{"ca.pem", "ca-key.pem", "server.pem", "server-key.pem"} {
+		if _, err := os.Stat(filepath.Join(dataDir, "pki", "managed", name)); err != nil {
+			t.Fatalf("managed PKI %s unavailable: %v", name, err)
+		}
+	}
+	if !strings.Contains(output.String(), "Mode: lan-managed") || !strings.Contains(output.String(), "managed-ca") {
+		t.Fatalf("init output=%q", output.String())
+	}
+}
+
+func TestServerInitManagedLANKeepsCAWhenIPAddressChanges(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "server.toml")
+	dataDir := filepath.Join(root, "data")
+	first := []string{"--config", configPath, "--mode", "lan-managed", "--data-dir", dataDir, "--listen", "0.0.0.0:7444", "--public-url", "https://192.168.20.10:7444", "--non-interactive"}
+	if err := initializeServer(context.Background(), first, strings.NewReader(""), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	provider, err := newManagedCertificateProvider(context.Background(), Options{DataDir: dataDir, DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.10:7444"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := provider.Status()
+	_ = provider.Close()
+	second := []string{"--config", configPath, "--mode", "lan-managed", "--data-dir", dataDir, "--listen", "0.0.0.0:7444", "--public-url", "https://192.168.20.11:7444", "--non-interactive", "--replace"}
+	if err := initializeServer(context.Background(), second, strings.NewReader(""), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := newManagedCertificateProvider(context.Background(), Options{DataDir: dataDir, DeploymentMode: DeploymentLANManaged, PublicURL: "https://192.168.20.11:7444"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer updated.Close()
+	after := updated.Status()
+	if before.CAFingerprint != after.CAFingerprint || before.Fingerprint == after.Fingerprint || len(after.SAN) != 1 || after.SAN[0] != "192.168.20.11" {
+		t.Fatalf("before=%+v after=%+v", before, after)
+	}
+}
+
+func TestServerInitRejectsReplacementWhileServerLockIsHeld(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "server.toml")
+	dataDir := filepath.Join(root, "data")
+	arguments := []string{"--config", configPath, "--mode", "local", "--data-dir", dataDir, "--listen", "127.0.0.1:7444", "--non-interactive"}
+	if err := initializeServer(context.Background(), arguments, strings.NewReader(""), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireDataLock(filepath.Join(dataDir, "server.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := initializeServer(context.Background(), append(arguments, "--replace"), strings.NewReader(""), io.Discard); err == nil {
+		t.Fatal("running Server configuration replacement was accepted")
 	}
 }
 

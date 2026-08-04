@@ -54,9 +54,13 @@ type Options struct {
 	Config                string
 	ServerConfig          string
 	Listen                string
+	DeploymentMode        server.DeploymentMode
 	PublicURL             string
 	TLSCertFile           string
 	TLSKeyFile            string
+	TLSTermination        string
+	ACME                  server.ACMEConfig
+	CertificateDataDir    string
 	AllowedControlOrigins []string
 	WebEnabled            *bool
 	MasterKeyFile         string
@@ -177,7 +181,14 @@ func parseArguments(args []string) (Options, error) {
 
 func validControlOrigin(value string) bool {
 	parsed, err := url.Parse(value)
-	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && (parsed.Path == "" || parsed.Path == "/")
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" && parsed.Path != "/" {
+		return false
+	}
+	if parsed.Scheme == "https" {
+		return true
+	}
+	host := parsed.Hostname()
+	return parsed.Scheme == "http" && (host == "127.0.0.1" || host == "::1")
 }
 
 func validListen(value string) bool {
@@ -190,6 +201,14 @@ func validListen(value string) bool {
 }
 
 func validPublicOptions(options Options) bool {
+	if options.DeploymentMode != "" {
+		return server.ValidateConfigFile(server.ConfigFile{
+			ConfigVersion: server.CurrentConfigVersion, DeploymentMode: options.DeploymentMode,
+			DataDir: options.DataDir, Listen: options.Listen, PublicURL: options.PublicURL,
+			AllowedControlOrigins: options.AllowedControlOrigins,
+			TLS:                   server.TLSFileConfig{Termination: options.TLSTermination, CertFile: options.TLSCertFile, KeyFile: options.TLSKeyFile}, ACME: options.ACME,
+		}) == nil
+	}
 	tlsCount := 0
 	for _, value := range []string{options.PublicURL, options.TLSCertFile, options.TLSKeyFile} {
 		if value != "" {
@@ -253,12 +272,22 @@ func Run(ctx context.Context, options Options) error {
 		if options.PublicURL == "" {
 			options.PublicURL = serverConfig.PublicURL
 		}
+		if options.DeploymentMode == "" {
+			options.DeploymentMode = serverConfig.DeploymentMode
+		}
 		if options.TLSCertFile == "" {
-			options.TLSCertFile = serverConfig.TLSCertFile
+			options.TLSCertFile = serverConfig.TLS.CertFile
 		}
 		if options.TLSKeyFile == "" {
-			options.TLSKeyFile = serverConfig.TLSKeyFile
+			options.TLSKeyFile = serverConfig.TLS.KeyFile
 		}
+		if options.TLSTermination == "" {
+			options.TLSTermination = serverConfig.TLS.Termination
+		}
+		if options.ACME.Environment == "" {
+			options.ACME = serverConfig.ACME
+		}
+		options.CertificateDataDir = serverConfig.DataDir
 		if len(options.AllowedControlOrigins) == 0 {
 			options.AllowedControlOrigins = append([]string(nil), serverConfig.AllowedControlOrigins...)
 		}
@@ -368,8 +397,11 @@ func Run(ctx context.Context, options Options) error {
 	go func() { results <- session.Run(runCtx) }()
 	go func() {
 		results <- server.Run(runCtx, server.Options{
-			DataDir: serverDir, Listen: options.Listen, PublicURL: options.PublicURL, TLSCertFile: options.TLSCertFile, TLSKeyFile: options.TLSKeyFile, AllowedControlOrigins: options.AllowedControlOrigins,
-			WebEnabled: options.WebEnabled, Stdout: options.Stdout, Random: options.Random, Clock: options.Clock,
+			DataDir: serverDir, Listen: options.Listen, DeploymentMode: options.DeploymentMode, PublicURL: options.PublicURL,
+			CertificateDataDir: options.CertificateDataDir,
+			TLSCertFile:        options.TLSCertFile, TLSKeyFile: options.TLSKeyFile, TLSTermination: options.TLSTermination, ACME: options.ACME,
+			AllowedControlOrigins: options.AllowedControlOrigins,
+			WebEnabled:            options.WebEnabled, Stdout: options.Stdout, Random: options.Random, Clock: options.Clock,
 			LocalNode: &server.LocalNodeSession{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID, Transport: serverSide},
 		})
 	}()

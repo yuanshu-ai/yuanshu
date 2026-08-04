@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net/http"
 	"net/url"
@@ -196,7 +198,7 @@ func (h *host) reload(ctx context.Context) error {
 	if bound && loaded.Config.Transport.Mode == config.TransportRelay {
 		credential, secretErr := h.options.platform.SecureStore().Get(ctx, loaded.Config.Relay.CredentialRef)
 		if secretErr == nil {
-			httpClient, clientErr := relayHTTPClient(loaded.Config.Relay.ProxyURL, time.Duration(loaded.Config.Relay.ConnectTimeoutSeconds)*time.Second)
+			httpClient, clientErr := relayHTTPClient(loaded.Config.Relay.ProxyURL, time.Duration(loaded.Config.Relay.ConnectTimeoutSeconds)*time.Second, loaded.Config.Relay.CABundleFile)
 			manager, managerErr := newPairingManager(pairingManagerOptions{
 				RelayURL: loaded.Config.Relay.URL, Timeout: time.Duration(loaded.Config.Relay.ConnectTimeoutSeconds) * time.Second,
 				HTTPClient: httpClient,
@@ -406,7 +408,7 @@ func sameRuntimeBoundary(left, right config.Config) bool {
 	return reflect.DeepEqual(left, right)
 }
 
-func relayHTTPClient(proxyValue string, timeout time.Duration) (*http.Client, error) {
+func relayHTTPClient(proxyValue string, timeout time.Duration, caBundleFiles ...string) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if proxyValue != "" {
 		proxyURL, err := url.Parse(proxyValue)
@@ -414,6 +416,22 @@ func relayHTTPClient(proxyValue string, timeout time.Duration) (*http.Client, er
 			return nil, errors.New("relay proxy is invalid")
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	if len(caBundleFiles) > 0 && caBundleFiles[0] != "" {
+		roots, err := x509.SystemCertPool()
+		if err != nil || roots == nil {
+			roots = x509.NewCertPool()
+		}
+		path := filepath.Clean(caBundleFiles[0])
+		info, err := os.Lstat(path)
+		if err != nil || !filepath.IsAbs(path) || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 64<<10 {
+			return nil, errors.New("relay CA bundle is unavailable")
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil || !roots.AppendCertsFromPEM(raw) {
+			return nil, errors.New("relay CA bundle is invalid")
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS13}
 	}
 	if timeout <= 0 {
 		timeout = 15 * time.Second
@@ -782,7 +800,7 @@ func (h *host) replaceRelayLocked(ctx context.Context, configuration config.Conf
 	if err != nil {
 		return err
 	}
-	httpClient, err := relayHTTPClient(configuration.Relay.ProxyURL, time.Duration(configuration.Relay.ConnectTimeoutSeconds)*time.Second)
+	httpClient, err := relayHTTPClient(configuration.Relay.ProxyURL, time.Duration(configuration.Relay.ConnectTimeoutSeconds)*time.Second, configuration.Relay.CABundleFile)
 	if err != nil {
 		clear(credential)
 		return err

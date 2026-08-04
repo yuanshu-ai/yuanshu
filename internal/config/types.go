@@ -44,6 +44,7 @@ type TransportConfig struct {
 type RelayConfig struct {
 	URL                   string                `toml:"url" json:"url"`
 	ProxyURL              string                `toml:"proxy_url" json:"proxy_url"`
+	CABundleFile          string                `toml:"ca_bundle_file,omitempty" json:"ca_bundle_file,omitempty"`
 	ConnectTimeoutSeconds int                   `toml:"connect_timeout_seconds" json:"connect_timeout_seconds"`
 	CredentialRef         platformpkg.SecretRef `toml:"credential_ref" json:"credential_ref"`
 	ProxyCredentialRef    platformpkg.SecretRef `toml:"proxy_credential_ref" json:"proxy_credential_ref"`

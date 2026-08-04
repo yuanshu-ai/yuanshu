@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,23 +20,50 @@ import (
 )
 
 const (
-	CurrentConfigVersion = 1
+	CurrentConfigVersion = 2
+	LegacyConfigVersion  = 1
 	MaxConfigBytes       = 1 << 20
 )
+
+type DeploymentMode string
+
+const (
+	DeploymentLocal        DeploymentMode = "local"
+	DeploymentLANManaged   DeploymentMode = "lan-managed"
+	DeploymentPublicIPACME DeploymentMode = "public-ip-acme"
+	DeploymentExternal     DeploymentMode = "external"
+)
+
+type TLSFileConfig struct {
+	Termination string `toml:"termination,omitempty" json:"termination,omitempty"`
+	CertFile    string `toml:"cert_file,omitempty" json:"cert_file,omitempty"`
+	KeyFile     string `toml:"key_file,omitempty" json:"key_file,omitempty"`
+}
+
+type ACMEConfig struct {
+	Environment string `toml:"environment,omitempty" json:"environment,omitempty"`
+	Email       string `toml:"email,omitempty" json:"email,omitempty"`
+	AcceptTerms bool   `toml:"accept_terms,omitempty" json:"accept_terms,omitempty"`
+}
 
 // ConfigFile is the local, non-secret Server configuration. TLS private keys
 // are referenced by path and are never read into this structure for logging or
 // transport purposes.
 type ConfigFile struct {
-	ConfigVersion         int         `toml:"config_version" json:"config_version"`
-	DataDir               string      `toml:"data_dir" json:"data_dir"`
-	Listen                string      `toml:"listen" json:"listen"`
-	PublicURL             string      `toml:"public_url" json:"public_url"`
-	TLSCertFile           string      `toml:"tls_cert_file" json:"tls_cert_file"`
-	TLSKeyFile            string      `toml:"tls_key_file" json:"tls_key_file"`
-	AllowedControlOrigins []string    `toml:"allowed_control_origins" json:"allowed_control_origins"`
-	Web                   WebConfig   `toml:"web" json:"web"`
-	Admin                 AdminConfig `toml:"admin" json:"admin"`
+	ConfigVersion  int            `toml:"config_version" json:"config_version"`
+	DeploymentMode DeploymentMode `toml:"deployment_mode,omitempty" json:"deployment_mode,omitempty"`
+	DataDir        string         `toml:"data_dir" json:"data_dir"`
+	Listen         string         `toml:"listen" json:"listen"`
+	PublicURL      string         `toml:"public_url" json:"public_url"`
+	// TLSCertFile and TLSKeyFile decode the v1 layout. Normalized v2 values
+	// live under TLS and never marshal these legacy fields back to disk.
+	TLSCertFile           string        `toml:"tls_cert_file,omitempty" json:"-"`
+	TLSKeyFile            string        `toml:"tls_key_file,omitempty" json:"-"`
+	AllowedControlOrigins []string      `toml:"allowed_control_origins" json:"allowed_control_origins"`
+	TLS                   TLSFileConfig `toml:"tls,omitempty" json:"tls,omitempty"`
+	ACME                  ACMEConfig    `toml:"acme,omitempty" json:"acme,omitempty"`
+	Web                   WebConfig     `toml:"web" json:"web"`
+	Admin                 AdminConfig   `toml:"admin" json:"admin"`
 }
 
 // WebConfig controls delivery of the embedded personal workbench. A nil
@@ -94,7 +122,8 @@ func (s *ConfigFileStore) Save(ctx context.Context, value ConfigFile) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := ValidateConfigFile(value); err != nil {
+	value, err := normalizeConfigFile(value)
+	if err != nil {
 		return err
 	}
 	encoded, err := toml.Marshal(value)
@@ -125,20 +154,17 @@ func LoadConfigFile(path string) (ConfigFile, error) {
 }
 
 func ValidateConfigFile(value ConfigFile) error {
-	if value.ConfigVersion != CurrentConfigVersion || value.DataDir == "" || !filepath.IsAbs(value.DataDir) {
+	value, err := normalizeConfigFile(value)
+	if err != nil || value.DataDir == "" || !filepath.IsAbs(value.DataDir) {
 		return ErrInvalid
 	}
 	if value.Listen == "" {
 		value.Listen = "127.0.0.1:7444"
 	}
-	if !validListen(value.Listen) || !validPublicOptions(Options{
-		DataDir: value.DataDir, Listen: value.Listen, PublicURL: value.PublicURL,
-		TLSCertFile: value.TLSCertFile, TLSKeyFile: value.TLSKeyFile,
-		AllowedControlOrigins: value.AllowedControlOrigins,
-	}) {
+	if !validListen(value.Listen) || !validDeploymentConfig(value) {
 		return ErrInvalid
 	}
-	if !validControlOrigins(value.AllowedControlOrigins) {
+	if !validControlOriginsForMode(value.AllowedControlOrigins, value.DeploymentMode == DeploymentLocal) {
 		return ErrInvalid
 	}
 	if (value.Admin.SessionIdleMinutes != 0 && (value.Admin.SessionIdleMinutes < 5 || value.Admin.SessionIdleMinutes > 120)) ||
@@ -146,12 +172,139 @@ func ValidateConfigFile(value ConfigFile) error {
 		(value.Admin.AuditRetentionDays != 0 && (value.Admin.AuditRetentionDays < 7 || value.Admin.AuditRetentionDays > 365)) {
 		return ErrInvalid
 	}
-	for _, path := range []string{value.TLSCertFile, value.TLSKeyFile} {
+	for _, path := range []string{value.TLS.CertFile, value.TLS.KeyFile} {
 		if path != "" && (!filepath.IsAbs(path) || strings.IndexByte(path, 0) >= 0) {
 			return ErrInvalid
 		}
 	}
 	return nil
+}
+
+func normalizeConfigFile(value ConfigFile) (ConfigFile, error) {
+	switch value.ConfigVersion {
+	case LegacyConfigVersion:
+		if value.DeploymentMode != "" || value.TLS.Termination != "" || value.TLS.CertFile != "" || value.TLS.KeyFile != "" || value.ACME.Environment != "" || value.ACME.Email != "" || value.ACME.AcceptTerms {
+			return ConfigFile{}, ErrInvalid
+		}
+		value.ConfigVersion = CurrentConfigVersion
+		if value.PublicURL == "" {
+			value.DeploymentMode = DeploymentLocal
+		} else {
+			value.DeploymentMode = DeploymentExternal
+			value.TLS = TLSFileConfig{Termination: "server", CertFile: value.TLSCertFile, KeyFile: value.TLSKeyFile}
+		}
+		value.TLSCertFile, value.TLSKeyFile = "", ""
+	case CurrentConfigVersion:
+		if value.TLSCertFile != "" || value.TLSKeyFile != "" {
+			return ConfigFile{}, ErrInvalid
+		}
+	default:
+		return ConfigFile{}, ErrInvalid
+	}
+	if value.DeploymentMode == "" {
+		if value.PublicURL == "" && value.TLS == (TLSFileConfig{}) {
+			value.DeploymentMode = DeploymentLocal
+		} else if value.PublicURL != "" && value.TLS.Termination == "server" {
+			value.DeploymentMode = DeploymentExternal
+		} else {
+			return ConfigFile{}, ErrInvalid
+		}
+	}
+	if value.ACME.Environment == "" && value.DeploymentMode == DeploymentPublicIPACME {
+		value.ACME.Environment = "production"
+	}
+	return value, nil
+}
+
+func validDeploymentConfig(value ConfigFile) bool {
+	parsed, publicIP, publicOK := parsePublicEndpoint(value.PublicURL)
+	switch value.DeploymentMode {
+	case DeploymentLocal:
+		return isExactLoopbackListen(value.Listen) && value.PublicURL == "" && value.TLS == (TLSFileConfig{}) && value.ACME == (ACMEConfig{}) && validControlOriginsForMode(value.AllowedControlOrigins, true)
+	case DeploymentLANManaged:
+		return publicOK && parsed.Scheme == "https" && publicIP != nil && isPrivateAddress(publicIP) && !isLoopbackListen(value.Listen) && value.TLS == (TLSFileConfig{}) && value.ACME == (ACMEConfig{}) && validControlOriginsForMode(value.AllowedControlOrigins, false)
+	case DeploymentPublicIPACME:
+		return publicOK && parsed.Scheme == "https" && publicIP != nil && isGlobalRoutableIP(publicIP) && effectiveURLPort(parsed) == "443" && !isLoopbackListen(value.Listen) && value.TLS == (TLSFileConfig{}) && (value.ACME.Environment == "production" || value.ACME.Environment == "staging") && value.ACME.AcceptTerms && validACMEEmail(value.ACME.Email) && validControlOriginsForMode(value.AllowedControlOrigins, false)
+	case DeploymentExternal:
+		if !publicOK || parsed.Scheme != "https" || value.ACME != (ACMEConfig{}) || !validControlOriginsForMode(value.AllowedControlOrigins, false) {
+			return false
+		}
+		switch value.TLS.Termination {
+		case "server":
+			return value.TLS.CertFile != "" && value.TLS.KeyFile != ""
+		case "proxy":
+			return isExactLoopbackListen(value.Listen) && value.TLS.CertFile == "" && value.TLS.KeyFile == ""
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+func parsePublicEndpoint(raw string) (*url.URL, net.IP, bool) {
+	if raw == "" {
+		return nil, nil, false
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return nil, nil, false
+	}
+	return parsed, net.ParseIP(parsed.Hostname()), true
+}
+
+func effectiveURLPort(parsed *url.URL) string {
+	if parsed == nil {
+		return ""
+	}
+	if parsed.Port() != "" {
+		return parsed.Port()
+	}
+	if parsed.Scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
+
+func isPrivateAddress(ip net.IP) bool {
+	return ip != nil && ip.IsPrivate() && !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsMulticast()
+}
+
+func isGlobalRoutableIP(ip net.IP) bool {
+	address, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	address = address.Unmap()
+	if !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsMulticast() || address.IsUnspecified() {
+		return false
+	}
+	for _, rawPrefix := range []string{
+		"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+		"64:ff9b:1::/48", "100::/64", "2001:db8::/32",
+	} {
+		prefix := netip.MustParsePrefix(rawPrefix)
+		if prefix.Contains(address) {
+			return false
+		}
+	}
+	return true
+}
+
+func validACMEEmail(value string) bool {
+	if value == "" {
+		return true
+	}
+	return len(value) <= 254 && !strings.ContainsAny(value, "\x00\r\n") && strings.Count(value, "@") == 1
+}
+
+func validControlOriginsForMode(origins []string, local bool) bool {
+	for _, origin := range origins {
+		if !validateControlOriginForMode(origin, local) {
+			return false
+		}
+	}
+	return true
 }
 
 func adminEnabled(value *bool) bool { return value == nil || *value }
@@ -190,6 +343,10 @@ func loadServerConfigFile(path string) (ConfigFile, error) {
 	var value ConfigFile
 	if err := decoder.Decode(&value); err != nil {
 		return ConfigFile{}, ErrInvalid
+	}
+	value, err = normalizeConfigFile(value)
+	if err != nil {
+		return ConfigFile{}, err
 	}
 	if err := ValidateConfigFile(value); err != nil {
 		return ConfigFile{}, err
@@ -249,6 +406,19 @@ func atomicWriteServerFile(path string, value []byte) error {
 	return nil
 }
 
+func syncServerDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = directory.Sync()
+	_ = directory.Close()
+	if err != nil && runtime.GOOS != "windows" {
+		return err
+	}
+	return nil
+}
+
 func configRevision(value ConfigFile) string {
 	encoded, _ := toml.Marshal(value)
 	digest := sha256.Sum256(encoded)
@@ -256,11 +426,18 @@ func configRevision(value ConfigFile) string {
 }
 
 func validateControlOrigin(value string) bool {
+	return validateControlOriginForMode(value, false)
+}
+
+func validateControlOriginForMode(value string, local bool) bool {
 	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return false
 	}
-	return parsed.Path == "" || parsed.Path == "/"
+	if parsed.Scheme == "https" {
+		return parsed.Path == "" || parsed.Path == "/"
+	}
+	return local && parsed.Scheme == "http" && net.ParseIP(parsed.Hostname()) != nil && net.ParseIP(parsed.Hostname()).IsLoopback() && (parsed.Path == "" || parsed.Path == "/")
 }
 
 func controlOrigin(value string) string {
@@ -278,4 +455,9 @@ func isLoopbackListen(value string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func isExactLoopbackListen(value string) bool {
+	host, _, err := net.SplitHostPort(value)
+	return err == nil && (host == "127.0.0.1" || host == "::1")
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"net/url"
+	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -36,7 +37,10 @@ func Validate(value Config) error {
 	if value.Transport.Mode == TransportRelay && value.Relay.URL == "" {
 		return configError("validation", ErrInvalid)
 	}
-	if value.Relay.URL != "" && !validURL(value.Relay.URL, map[string]bool{"wss": true}) {
+	if value.Relay.URL != "" && !validRelayURL(value.Relay.URL) {
+		return configError("validation", ErrInvalid)
+	}
+	if value.Relay.CABundleFile != "" && (!filepath.IsAbs(value.Relay.CABundleFile) || !validText(value.Relay.CABundleFile, true, maxPathBytes)) {
 		return configError("validation", ErrInvalid)
 	}
 	if value.Relay.ProxyURL != "" && !validURL(value.Relay.ProxyURL, map[string]bool{
@@ -75,6 +79,18 @@ func Validate(value Config) error {
 		return configError("validation", ErrInvalid)
 	}
 	return nil
+}
+
+func validRelayURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	if parsed.Scheme == "wss" {
+		return true
+	}
+	host := parsed.Hostname()
+	return parsed.Scheme == "ws" && (host == "127.0.0.1" || host == "::1")
 }
 
 func validWorkspaces(workspaces []WorkspaceConfig) bool {

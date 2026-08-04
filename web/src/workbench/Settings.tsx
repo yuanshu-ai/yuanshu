@@ -98,7 +98,7 @@ export function ConnectionSettings({ initial, storage, compact = false, onSaved 
 
   return <section className={`settings-card ${compact ? "compact" : ""}`} aria-label="连接设置">
     <div className="settings-card-heading"><div><p>浏览器连接</p><h2>Relay 与配对地址</h2></div><Icon name="lock" /></div>
-    <p className="settings-help">Relay 必须使用 <code>wss://</code>，配对页必须使用 <code>https://</code>。局域网 IP 仍需要可信 TLS 证书。</p>
+    <p className="settings-help">远程 Relay 必须使用 <code>wss://</code>，配对页必须使用 <code>https://</code>；只有字面量 <code>127.0.0.1</code> 或 <code>::1</code> 可使用本机明文连接。</p>
     <form onSubmit={(event) => void save(event)}>
       <label><span>Relay URL</span><input value={relayUrl} onChange={(event) => setRelayUrl(event.target.value)} placeholder="wss://192.168.1.20:7444/web/connect" inputMode="url" /></label>
       <label><span>Pairing URL</span><input value={pairingUrl} onChange={(event) => setPairingUrl(event.target.value)} placeholder="https://192.168.1.20:7444/pair" inputMode="url" /></label>
