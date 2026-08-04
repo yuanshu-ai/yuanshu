@@ -14,12 +14,13 @@ func newUnavailablePlatform(family Family) Platform {
 	return &unavailablePlatform{family: family}
 }
 
-func (p *unavailablePlatform) Family() Family                 { return p.family }
-func (p *unavailablePlatform) SecureStore() SecureStore       { return p.all }
-func (p *unavailablePlatform) Processes() ProcessManager      { return p.all }
-func (p *unavailablePlatform) IPC() LocalIPC                  { return p.all }
-func (p *unavailablePlatform) Autostart() AutostartManager    { return p.all }
-func (p *unavailablePlatform) Workspaces() WorkspaceInspector { return p.all }
+func (p *unavailablePlatform) Family() Family                   { return p.family }
+func (p *unavailablePlatform) SecureStore() SecureStore         { return p.all }
+func (p *unavailablePlatform) Processes() ProcessManager        { return p.all }
+func (p *unavailablePlatform) IPC() LocalIPC                    { return p.all }
+func (p *unavailablePlatform) Autostart() AutostartManager      { return p.all }
+func (p *unavailablePlatform) Workspaces() WorkspaceInspector   { return p.all }
+func (p *unavailablePlatform) DirectoryPicker() DirectoryPicker { return p.all }
 
 type unavailableCapabilities struct{}
 
@@ -63,4 +64,8 @@ func (unavailableCapabilities) Status(context.Context, string) (AutostartStatus,
 
 func (unavailableCapabilities) Inspect(context.Context, string) (WorkspaceFacts, error) {
 	return WorkspaceFacts{}, ErrUnavailable
+}
+
+func (unavailableCapabilities) PickDirectory(context.Context) (DirectorySelection, error) {
+	return DirectorySelection{}, ErrUnavailable
 }

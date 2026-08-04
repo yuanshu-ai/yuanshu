@@ -92,12 +92,9 @@ func (m *Manager) Reconcile(ctx context.Context, configured []config.WorkspaceCo
 			return ErrInvalid
 		}
 		ids[item.ID] = struct{}{}
-		facts, err := m.inspector.Inspect(ctx, item.Path)
+		facts, err := ValidateRoot(ctx, m.inspector, item.Path)
 		if err != nil {
-			return reconcileInspectionError(err)
-		}
-		if !safeWorkspaceRoot(facts) {
-			return ErrDenied
+			return err
 		}
 		pathKey := strings.ToLower(filepath.Clean(facts.CanonicalPath))
 		if _, exists := canonicalPaths[pathKey]; exists {
@@ -126,6 +123,26 @@ func (m *Manager) Reconcile(ctx context.Context, configured []config.WorkspaceCo
 		return ErrInternal
 	}
 	return nil
+}
+
+// ValidateRoot applies the complete Node-local workspace boundary without
+// registering the path. Setup uses it after a native picker selection and
+// Reconcile applies it again before persisting the workspace identity.
+func ValidateRoot(ctx context.Context, inspector platform.WorkspaceInspector, path string) (platform.WorkspaceFacts, error) {
+	if err := contextError(ctx); err != nil {
+		return platform.WorkspaceFacts{}, err
+	}
+	if inspector == nil || !inspector.Available() || path == "" {
+		return platform.WorkspaceFacts{}, ErrUnavailable
+	}
+	facts, err := inspector.Inspect(ctx, path)
+	if err != nil {
+		return platform.WorkspaceFacts{}, reconcileInspectionError(err)
+	}
+	if !safeWorkspaceRoot(facts) {
+		return platform.WorkspaceFacts{}, ErrDenied
+	}
+	return facts, nil
 }
 
 func (m *Manager) List(ctx context.Context) ([]Descriptor, error) {

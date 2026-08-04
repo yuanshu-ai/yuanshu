@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,7 @@ type runOptions struct {
 	background bool
 	platform   platform.Platform
 	tray       tray
+	setup      bool
 }
 
 type host struct {
@@ -52,6 +54,7 @@ type host struct {
 	controlName      string
 	configController configController
 	controlCenter    *controlCenter
+	setupController  *nodeSetupController
 	activeConfig     config.Config
 	workspaceManager *workspace.Manager
 	identityManager  *identity.Manager
@@ -87,6 +90,11 @@ func runHost(ctx context.Context, options runOptions) error {
 		options.tray = newPlatformTray(options.background)
 	}
 	h := &host{options: options, status: newStatusStore(string(options.platform.Family())), log: newOperationalLog(options.paths.log), runCtx: runCtx}
+	h.setupController = newNodeSetupController(options.platform, options.paths, options.configPath, options.setup, func(joinURL string) {
+		if h.reload(h.runCtx) == nil && joinURL != "" {
+			_ = h.handleLocalManagement(h.runCtx, localRequest{Protocol: localProtocol, Command: "enrollment_join", JoinURL: joinURL})
+		}
+	})
 	center, err := newControlCenter(h.status.snapshot, h.handleLocalManagement)
 	if err != nil {
 		return err
@@ -101,6 +109,9 @@ func runHost(ctx context.Context, options runOptions) error {
 	defer server.Close()
 	h.log.write("node_starting", "starting", 0)
 	_ = h.reload(runCtx)
+	if h.setupController.view() != nil && !options.background {
+		_ = h.openControlCenter(runCtx)
+	}
 	options.tray.Update(h.status.snapshot())
 	trayErr := options.tray.Run(runCtx, h.trayCallbacks(cancel))
 	cancel()
@@ -497,6 +508,12 @@ func (h *host) closeResourcesLocked() error {
 }
 
 func (h *host) handleLocalManagement(ctx context.Context, request localRequest) localResponse {
+	if request.Command == "setup_status" || strings.HasPrefix(request.Command, "setup_") {
+		if h.setupController == nil {
+			return localResponse{Protocol: localProtocol, Error: "setup_unavailable"}
+		}
+		return h.setupController.handle(ctx, request)
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	response := localResponse{Protocol: localProtocol}

@@ -38,6 +38,7 @@ func (p *linuxStandalonePlatform) Processes() ProcessManager      { return p.pro
 func (p *linuxStandalonePlatform) IPC() LocalIPC                  { return p.ipc }
 func (p *linuxStandalonePlatform) Workspaces() WorkspaceInspector { return p.workspaces }
 func (*linuxStandalonePlatform) Autostart() AutostartManager      { return unavailableCapabilities{} }
+func (*linuxStandalonePlatform) DirectoryPicker() DirectoryPicker { return unavailableCapabilities{} }
 
 func (p *linuxStandalonePlatform) Close() error {
 	if p.secure == nil {

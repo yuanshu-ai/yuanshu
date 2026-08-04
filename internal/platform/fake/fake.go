@@ -39,6 +39,7 @@ type Platform struct {
 	ipc        *LocalIPC
 	autostart  *AutostartManager
 	workspaces *WorkspaceInspector
+	picker     *DirectoryPicker
 }
 
 var _ platformpkg.Platform = (*Platform)(nil)
@@ -56,17 +57,20 @@ func New(family platformpkg.Family) (*Platform, error) {
 		ipc:        NewLocalIPC(),
 		autostart:  NewAutostartManager(),
 		workspaces: NewWorkspaceInspector(),
+		picker:     NewDirectoryPicker(),
 	}, nil
 }
 
-func (p *Platform) Family() platformpkg.Family                 { return p.family }
-func (p *Platform) SecureStore() platformpkg.SecureStore       { return p.secrets }
-func (p *Platform) Processes() platformpkg.ProcessManager      { return p.processes }
-func (p *Platform) IPC() platformpkg.LocalIPC                  { return p.ipc }
-func (p *Platform) Autostart() platformpkg.AutostartManager    { return p.autostart }
-func (p *Platform) Workspaces() platformpkg.WorkspaceInspector { return p.workspaces }
-func (p *Platform) FakeSecureStore() *SecureStore              { return p.secrets }
-func (p *Platform) FakeProcesses() *ProcessManager             { return p.processes }
-func (p *Platform) FakeIPC() *LocalIPC                         { return p.ipc }
-func (p *Platform) FakeAutostart() *AutostartManager           { return p.autostart }
-func (p *Platform) FakeWorkspaces() *WorkspaceInspector        { return p.workspaces }
+func (p *Platform) Family() platformpkg.Family                   { return p.family }
+func (p *Platform) SecureStore() platformpkg.SecureStore         { return p.secrets }
+func (p *Platform) Processes() platformpkg.ProcessManager        { return p.processes }
+func (p *Platform) IPC() platformpkg.LocalIPC                    { return p.ipc }
+func (p *Platform) Autostart() platformpkg.AutostartManager      { return p.autostart }
+func (p *Platform) Workspaces() platformpkg.WorkspaceInspector   { return p.workspaces }
+func (p *Platform) DirectoryPicker() platformpkg.DirectoryPicker { return p.picker }
+func (p *Platform) FakeSecureStore() *SecureStore                { return p.secrets }
+func (p *Platform) FakeProcesses() *ProcessManager               { return p.processes }
+func (p *Platform) FakeIPC() *LocalIPC                           { return p.ipc }
+func (p *Platform) FakeAutostart() *AutostartManager             { return p.autostart }
+func (p *Platform) FakeWorkspaces() *WorkspaceInspector          { return p.workspaces }
+func (p *Platform) FakeDirectoryPicker() *DirectoryPicker        { return p.picker }

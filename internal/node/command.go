@@ -15,6 +15,7 @@ import (
 
 const Usage = `Usage:
   yuanshu node [run] [--config <absolute-path>] [--background]
+  yuanshu node setup [--config <absolute-path>]
   yuanshu node status [--json]
   yuanshu node stop
   yuanshu node ui
@@ -72,6 +73,16 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			return err
 		}
 		return runHost(ctx, runOptions{paths: defaults, configPath: configPath, background: background, platform: current})
+	case "setup":
+		defaults, err := defaultPaths()
+		if err != nil {
+			return err
+		}
+		configPath, _, _, err := parseNodeFlags(args, defaults.config, false, false)
+		if err != nil {
+			return err
+		}
+		return runHost(ctx, runOptions{paths: defaults, configPath: configPath, platform: current, setup: true})
 	case "status":
 		_, _, jsonOutput, err := parseNodeFlags(args, "", true, false)
 		if err != nil {
@@ -143,6 +154,9 @@ func validateNodeArguments(args []string) error {
 	switch command {
 	case "run":
 		_, _, _, err := parseNodeFlags(args, "", false, true)
+		return err
+	case "setup":
+		_, _, _, err := parseNodeFlags(args, "", false, false)
 		return err
 	case "status":
 		_, _, _, err := parseNodeFlags(args, "", true, false)

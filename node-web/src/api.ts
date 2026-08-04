@@ -46,6 +46,7 @@ export type Overview = {
   clients?: Array<{ ClientID: string; KeyID: string; Fingerprint: string; Status: string }>;
   enrollments?: Array<{ EnrollmentID: string; Name: string; OS: string; Fingerprint: string; ExpiresAt: string }>;
   devices?: Array<{ NodeID: string; Name: string; OS: string; Version: string; Status: string; Fingerprint: string; Online: boolean }>;
+  setup?: { required: boolean; pickerAvailable: boolean; platform: string; defaultName: string; defaultCodex: string };
 };
 
 type SessionResponse = { session: string };

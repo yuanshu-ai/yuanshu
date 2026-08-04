@@ -67,6 +67,7 @@ export function App() {
   };
 
   if (!overview) return <Gate error={error} />;
+  if (overview.setup?.required) return <SetupWizard value={overview} run={run} busy={busy} error={error} message={message} />;
   const status = overview.status;
   return (
     <main className="shell">
@@ -90,6 +91,41 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function SetupWizard({ value, run, busy, error, message }: { value: Overview; run: (command: string, fields?: Record<string, unknown>) => Promise<Record<string, unknown>>; busy: boolean; error: string; message: string }) {
+  const setup = value.setup!;
+  const [name, setName] = useState(setup.defaultName);
+  const [relayUrl, setRelayUrl] = useState("");
+  const [codexBinary, setCodexBinary] = useState(setup.defaultCodex || "codex");
+  const [enrollmentMode, setEnrollmentMode] = useState<"bootstrap" | "join">("bootstrap");
+  const [enrollmentSecret, setEnrollmentSecret] = useState("");
+  const [workspaceToken, setWorkspaceToken] = useState("");
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [permission, setPermission] = useState("read-only");
+  const [allowNetwork, setAllowNetwork] = useState(false);
+  const [relayTested, setRelayTested] = useState(false);
+
+  const pick = async () => {
+    const result = await run("setup_pick");
+    if (typeof result.workspaceToken === "string") setWorkspaceToken(result.workspaceToken);
+    if (typeof result.workspaceName === "string") setWorkspaceName(result.workspaceName);
+  };
+  const test = async () => {
+    const result = await run("setup_test", { relayUrl });
+    setRelayTested(Boolean(result.config));
+  };
+  const complete = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const result = await run("setup_complete", {
+      name, relayUrl, codexBinary, workspaceToken, workspaceName, permissionProfile: permission, allowNetwork,
+      bootstrapSecret: enrollmentMode === "bootstrap" ? enrollmentSecret : undefined,
+      joinUrl: enrollmentMode === "join" ? enrollmentSecret : undefined,
+    });
+    if (result.ok === true) setEnrollmentSecret("");
+  };
+
+  return <main className="setup-shell"><header className="setup-header"><div className="brand"><span className="brand-mark">枢</span><div><strong>设置 Yuanshu Node</strong><small>所有敏感步骤仅在这台电脑完成</small></div></div><span className="pending-badge">{setup.platform}</span></header>{error && <Notice tone="danger">{error}</Notice>}{message && <Notice>{message}</Notice>}<form className="setup-flow" onSubmit={(event) => void complete(event)}><section className="section-panel"><span className="step-label">01 · 设备</span><h2>这台电脑如何显示</h2><label><span>Node 名称</span><input value={name} maxLength={128} required onChange={(event) => setName(event.target.value)} /></label><label><span>Codex 可执行文件</span><input className="mono" value={codexBinary} required onChange={(event) => setCodexBinary(event.target.value)} /></label><p className="helper">Codex 版本只用于兼容提示；未验证版本仍会尝试启动。</p></section><section className="section-panel"><span className="step-label">02 · Relay</span><h2>连接个人 Server</h2><label><span>Relay WSS 地址</span><input className="mono" type="url" value={relayUrl} placeholder="wss://192.168.1.20:7444/node/connect" required onChange={(event) => { setRelayUrl(event.target.value); setRelayTested(false); }} /></label><div className="actions"><button type="button" className="secondary" disabled={busy || !relayUrl} onClick={() => void test()}>{relayTested ? "重新测试" : "测试 TLS 连接"}</button></div><div className="segmented" role="group" aria-label="绑定方式"><button type="button" className={enrollmentMode === "bootstrap" ? "active" : ""} onClick={() => { setEnrollmentMode("bootstrap"); setEnrollmentSecret(""); }}>首台 Node</button><button type="button" className={enrollmentMode === "join" ? "active" : ""} onClick={() => { setEnrollmentMode("join"); setEnrollmentSecret(""); }}>加入已有 Owner</button></div><label><span>{enrollmentMode === "bootstrap" ? "Server bootstrap secret" : "Enrollment join URL"}</span><input className="mono" type="password" autoComplete="off" value={enrollmentSecret} required onChange={(event) => setEnrollmentSecret(event.target.value)} /></label><p className="helper">秘密只用于本次本机请求，不会写入配置、日志或浏览器存储。</p></section><section className="section-panel"><span className="step-label">03 · 工作区</span><h2>授权一个本机目录</h2><p className="helper">浏览器不能输入路径。目录由系统选择器返回给 Node，并在保存前再次检查边界。</p><button type="button" className="secondary" disabled={busy || !setup.pickerAvailable} onClick={() => void pick()}>{workspaceToken ? "重新选择目录" : "选择工作区…"}</button>{!setup.pickerAvailable && <Notice tone="danger">当前环境没有可用的原生目录选择器，请改用本机 CLI。</Notice>}{workspaceToken && <div className="selection-summary"><strong>{workspaceName || "已选择工作区"}</strong><small>路径只保存在 Node 本机，不显示在此页面</small></div>}<label><span>显示名称</span><input value={workspaceName} required disabled={!workspaceToken} onChange={(event) => setWorkspaceName(event.target.value)} /></label><div className="settings-form two-columns"><label><span>权限</span><select value={permission} onChange={(event) => setPermission(event.target.value)}><option value="read-only">只读（推荐）</option><option value="workspace-write">允许工作区写入</option></select></label><label className="check"><input type="checkbox" checked={allowNetwork} onChange={(event) => setAllowNetwork(event.target.checked)} /><span>允许任务使用网络</span></label></div></section><section className="section-panel safety-review"><span className="step-label">04 · 确认</span><h2>安全摘要</h2><ul><li>Node 只向 Relay 建立出站 WSS。</li><li>Codex app-server 不会监听公网。</li><li>工作区默认为只读且禁止网络。</li><li>凭据保存于系统安全存储。</li></ul><button className="primary" type="submit" disabled={busy || !name.trim() || !relayUrl || !enrollmentSecret || !workspaceToken}>{busy ? "正在设置…" : "完成设置并启动 Node"}</button></section></form></main>;
 }
 
 function Gate({ error }: { error: string }) {

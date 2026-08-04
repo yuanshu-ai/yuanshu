@@ -23,33 +23,45 @@ const (
 )
 
 type localRequest struct {
-	Protocol     string         `json:"protocol"`
-	Command      string         `json:"command"`
-	PairingID    string         `json:"pairingId,omitempty"`
-	ClientID     string         `json:"clientId,omitempty"`
-	KeyID        string         `json:"keyId,omitempty"`
-	EnrollmentID string         `json:"enrollmentId,omitempty"`
-	NodeID       string         `json:"nodeId,omitempty"`
-	JoinURL      string         `json:"joinUrl,omitempty"`
-	ChangeID     string         `json:"changeId,omitempty"`
-	Enabled      *bool          `json:"enabled,omitempty"`
-	BaseRevision string         `json:"baseRevision,omitempty"`
-	Changes      map[string]any `json:"changes,omitempty"`
+	Protocol          string         `json:"protocol"`
+	Command           string         `json:"command"`
+	PairingID         string         `json:"pairingId,omitempty"`
+	ClientID          string         `json:"clientId,omitempty"`
+	KeyID             string         `json:"keyId,omitempty"`
+	EnrollmentID      string         `json:"enrollmentId,omitempty"`
+	NodeID            string         `json:"nodeId,omitempty"`
+	JoinURL           string         `json:"joinUrl,omitempty"`
+	ChangeID          string         `json:"changeId,omitempty"`
+	Enabled           *bool          `json:"enabled,omitempty"`
+	BaseRevision      string         `json:"baseRevision,omitempty"`
+	Changes           map[string]any `json:"changes,omitempty"`
+	Name              string         `json:"name,omitempty"`
+	RelayURL          string         `json:"relayUrl,omitempty"`
+	BootstrapSecret   string         `json:"bootstrapSecret,omitempty"`
+	WorkspaceToken    string         `json:"workspaceToken,omitempty"`
+	WorkspaceName     string         `json:"workspaceName,omitempty"`
+	PermissionProfile string         `json:"permissionProfile,omitempty"`
+	AllowNetwork      *bool          `json:"allowNetwork,omitempty"`
+	CodexBinary       string         `json:"codexBinary,omitempty"`
+	localSession      string
 }
 
 type localResponse struct {
-	Protocol      string                    `json:"protocol"`
-	OK            bool                      `json:"ok"`
-	Error         string                    `json:"error,omitempty"`
-	Status        *Status                   `json:"status,omitempty"`
-	PairingURL    string                    `json:"pairingUrl,omitempty"`
-	Pairings      []PairingCandidate        `json:"pairings,omitempty"`
-	Clients       []TrustedClientSummary    `json:"clients,omitempty"`
-	EnrollmentURL string                    `json:"enrollmentUrl,omitempty"`
-	Enrollments   []NodeEnrollmentCandidate `json:"enrollments,omitempty"`
-	Devices       []DeviceSummary           `json:"devices,omitempty"`
-	Config        map[string]any            `json:"config,omitempty"`
-	ConfigChanges []ConfigChangeSummary     `json:"configChanges,omitempty"`
+	Protocol       string                    `json:"protocol"`
+	OK             bool                      `json:"ok"`
+	Error          string                    `json:"error,omitempty"`
+	Status         *Status                   `json:"status,omitempty"`
+	PairingURL     string                    `json:"pairingUrl,omitempty"`
+	Pairings       []PairingCandidate        `json:"pairings,omitempty"`
+	Clients        []TrustedClientSummary    `json:"clients,omitempty"`
+	EnrollmentURL  string                    `json:"enrollmentUrl,omitempty"`
+	Enrollments    []NodeEnrollmentCandidate `json:"enrollments,omitempty"`
+	Devices        []DeviceSummary           `json:"devices,omitempty"`
+	Config         map[string]any            `json:"config,omitempty"`
+	ConfigChanges  []ConfigChangeSummary     `json:"configChanges,omitempty"`
+	Setup          *SetupView                `json:"setup,omitempty"`
+	WorkspaceToken string                    `json:"workspaceToken,omitempty"`
+	WorkspaceName  string                    `json:"workspaceName,omitempty"`
 }
 
 type localServer struct {

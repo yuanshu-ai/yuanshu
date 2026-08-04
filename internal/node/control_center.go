@@ -137,7 +137,8 @@ func (c *controlCenter) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	if strings.HasPrefix(request.URL.Path, "/api/") {
-		if !c.authorize(request) {
+		session, authorized := c.authorize(request)
+		if !authorized {
 			writeControlCenterJSON(writer, http.StatusUnauthorized, map[string]string{"error": "session_required"})
 			return
 		}
@@ -145,7 +146,7 @@ func (c *controlCenter) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		case "/api/v1/overview":
 			c.serveOverview(writer, request)
 		case "/api/v1/action":
-			c.serveAction(writer, request)
+			c.serveAction(writer, request, session)
 		default:
 			writeControlCenterJSON(writer, http.StatusNotFound, map[string]string{"error": "not_found"})
 		}
@@ -187,14 +188,14 @@ func (c *controlCenter) exchangeSession(writer http.ResponseWriter, request *htt
 	writeControlCenterJSON(writer, http.StatusOK, map[string]string{"session": session})
 }
 
-func (c *controlCenter) authorize(request *http.Request) bool {
+func (c *controlCenter) authorize(request *http.Request) (string, bool) {
 	if request.Header.Get("Origin") != "" && request.Header.Get("Origin") != "http://"+request.Host {
-		return false
+		return "", false
 	}
 	const prefix = "YuanshuLocal "
 	authorization := request.Header.Get("Authorization")
 	if !strings.HasPrefix(authorization, prefix) {
-		return false
+		return "", false
 	}
 	token := strings.TrimPrefix(authorization, prefix)
 	now := time.Now().UTC()
@@ -203,10 +204,10 @@ func (c *controlCenter) authorize(request *http.Request) bool {
 	lastSeen, ok := c.sessions[token]
 	if !ok || now.Sub(lastSeen) >= controlCenterSessionTTL {
 		delete(c.sessions, token)
-		return false
+		return "", false
 	}
 	c.sessions[token] = now
-	return true
+	return token, true
 }
 
 func (c *controlCenter) serveOverview(writer http.ResponseWriter, request *http.Request) {
@@ -223,6 +224,7 @@ func (c *controlCenter) serveOverview(writer http.ResponseWriter, request *http.
 		Clients       []TrustedClientSummary    `json:"clients,omitempty"`
 		Enrollments   []NodeEnrollmentCandidate `json:"enrollments,omitempty"`
 		Devices       []DeviceSummary           `json:"devices,omitempty"`
+		Setup         *SetupView                `json:"setup,omitempty"`
 	}{Status: c.status()}
 	if response := c.manage(request.Context(), localRequest{Protocol: localProtocol, Command: "config_show"}); response.OK {
 		result.Config = response.Config
@@ -242,10 +244,13 @@ func (c *controlCenter) serveOverview(writer http.ResponseWriter, request *http.
 	if response := c.manage(request.Context(), localRequest{Protocol: localProtocol, Command: "device_list"}); response.OK {
 		result.Devices = response.Devices
 	}
+	if response := c.manage(request.Context(), localRequest{Protocol: localProtocol, Command: "setup_status"}); response.OK {
+		result.Setup = response.Setup
+	}
 	writeControlCenterJSON(writer, http.StatusOK, result)
 }
 
-func (c *controlCenter) serveAction(writer http.ResponseWriter, request *http.Request) {
+func (c *controlCenter) serveAction(writer http.ResponseWriter, request *http.Request, session string) {
 	if request.Method != http.MethodPost || request.Header.Get("Origin") != "http://"+request.Host || request.Header.Get("Content-Type") != "application/json" {
 		writeControlCenterJSON(writer, http.StatusForbidden, map[string]string{"error": "action_rejected"})
 		return
@@ -259,6 +264,7 @@ func (c *controlCenter) serveAction(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	input.Protocol = localProtocol
+	input.localSession = session
 	response := c.manage(request.Context(), input)
 	if !response.OK {
 		status := http.StatusConflict
@@ -331,7 +337,7 @@ func (c *controlCenter) Close() error {
 func controlCenterCommand(value string) bool {
 	switch value {
 	case "reload", "autostart_set", "pairing_create", "pairing_list", "client_list", "enrollment_list", "device_list",
-		"config_show", "config_update", "config_pending":
+		"config_show", "config_update", "config_pending", "setup_pick", "setup_test", "setup_complete":
 		return true
 	default:
 		return false

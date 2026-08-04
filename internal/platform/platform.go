@@ -32,6 +32,7 @@ type Platform interface {
 	IPC() LocalIPC
 	Autostart() AutostartManager
 	Workspaces() WorkspaceInspector
+	DirectoryPicker() DirectoryPicker
 }
 
 // SecretRef is an opaque identifier. Its representation is owned by the
@@ -119,4 +120,19 @@ type WorkspaceFacts struct {
 type WorkspaceInspector interface {
 	Available() bool
 	Inspect(ctx context.Context, path string) (WorkspaceFacts, error)
+}
+
+// DirectorySelection is returned only to trusted local setup code. Callers
+// must not expose Path to a remote browser or persist it outside Node config.
+type DirectorySelection struct {
+	Path        string
+	DisplayName string
+}
+
+// DirectoryPicker opens the operating system's native folder picker. A
+// canceled picker returns context.Canceled; headless platforms return
+// ErrUnavailable.
+type DirectoryPicker interface {
+	Available() bool
+	PickDirectory(ctx context.Context) (DirectorySelection, error)
 }
