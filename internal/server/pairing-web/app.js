@@ -1,10 +1,12 @@
 import { base64url, sessionSigningInput } from '/pair/session.js';
+import { CONTROL_STORES, controlStorageKey, withControlStore } from '/pair/storage.js';
 
 const button = document.querySelector('#pair');
 const statusText = document.querySelector('#status');
 const result = document.querySelector('#result');
 const details = document.querySelector('#details');
 const fingerprint = document.querySelector('#fingerprint');
+const continueLink = document.querySelector('#continue');
 let activeSocket;
 let realtimeTimer;
 let realtimeAttempt = 0;
@@ -22,35 +24,18 @@ const parseSecret = () => {
   if (split < 1) return null;
   return { pairingId: raw.slice(0, split), secret: raw.slice(split + 1) };
 };
-const openDB = () => new Promise((resolve, reject) => {
-  const request = indexedDB.open('yuanshu-control-client', 3);
-  request.onupgradeneeded = () => {
-    const database = request.result;
-    if (!database.objectStoreNames.contains('keys')) database.createObjectStore('keys');
-    if (!database.objectStoreNames.contains('event-cursors')) database.createObjectStore('event-cursors');
-    if (!database.objectStoreNames.contains('control-sequences')) database.createObjectStore('control-sequences');
-    if (!database.objectStoreNames.contains('node-bindings')) database.createObjectStore('node-bindings');
-  };
-  request.onsuccess = () => resolve(request.result);
-  request.onerror = () => reject(new Error('storage unavailable'));
-});
-const withStore = async (storeName, mode, operation) => {
-  const db = await openDB();
-  try {
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction(storeName, mode);
-      const request = operation(tx.objectStore(storeName));
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(new Error('storage unavailable'));
-    });
-  } finally {
-    db.close();
-  }
+const stopRealtime = () => {
+  realtimeGeneration += 1;
+  if (realtimeTimer) clearTimeout(realtimeTimer);
+  realtimeTimer = undefined;
+  const socket = activeSocket;
+  activeSocket = undefined;
+  socket?.close();
 };
-const storeKey = (id, value) => withStore('keys', 'readwrite', store => store.put(value, id));
-const getKey = id => withStore('keys', 'readonly', store => store.get(id));
-const deleteKey = id => withStore('keys', 'readwrite', store => store.delete(id));
-const storeNodeBinding = binding => withStore('node-bindings', 'readwrite', store => store.put(binding, `${binding.ownerId}\u001f${binding.nodeId}`));
+const storeKey = (id, value) => withControlStore(CONTROL_STORES.keys, 'readwrite', store => store.put(value, id));
+const getKey = id => withControlStore(CONTROL_STORES.keys, 'readonly', store => store.get(id));
+const deleteKey = id => withControlStore(CONTROL_STORES.keys, 'readwrite', store => store.delete(id));
+const storeNodeBinding = binding => withControlStore(CONTROL_STORES.nodes, 'readwrite', store => store.put(binding, controlStorageKey(binding.ownerId, binding.nodeId)));
 
 const connectRealtime = client => {
   if (!client?.clientId || !client?.privateKey) return Promise.reject(new Error('identity unavailable'));
@@ -93,7 +78,7 @@ const connectRealtime = client => {
       if (!settled) {
         if (realtimeAuthFailures >= 10) {
           settled = true;
-          firstConnection.reject(new Error('reauthentication required'));
+          firstConnection.reject(new Error('reauthentication_required'));
           setStatus('需要重新配对', 'error');
         } else {
           schedule();
@@ -122,6 +107,7 @@ const connectRealtime = client => {
           firstConnection.resolve();
         }
         setStatus('HTTPS/WSS 已安全连接', 'done');
+        continueLink.hidden = false;
       } catch {
         socket.close();
       }
@@ -137,7 +123,7 @@ const poll = async (pairing, client) => {
     const response = await fetch(`/v1/control-client-pairings/${encodeURIComponent(pairing.pairingId)}/status`, {
       headers: { Authorization: `Bearer ${pairing.secret}` }, cache: 'no-store'
     });
-    if (!response.ok) throw new Error('status unavailable');
+    if (!response.ok) throw new Error(await responseErrorCode(response, 'status_unavailable'));
     const value = await response.json();
     if (value.status === 'approved') {
       const identity = { ...client, ownerId: value.ownerId };
@@ -152,7 +138,7 @@ const poll = async (pairing, client) => {
         online: true,
       });
       await deleteKey(`pending:${pairing.pairingId}`);
-      location.hash = '';
+      history.replaceState(null, '', `${location.pathname}${location.search}`);
       setStatus('正在建立安全实时连接', 'waiting');
       await connectRealtime(identity);
       return;
@@ -180,16 +166,20 @@ button.addEventListener('click', async () => {
   let claimed = false;
   try {
     if (!crypto.subtle || !indexedDB) throw new Error('unsupported');
+    continueLink.hidden = true;
     const existing = await getKey('active');
-    const client = existing?.clientId && existing?.keyId && existing?.publicKey && existing?.privateKey
+    const pending = await getKey(`pending:${pairing.pairingId}`);
+    const client = pending?.clientId && pending?.keyId && pending?.publicKey && pending?.privateKey
+      ? stripLegacyNodeFields(pending, name)
+      : existing?.clientId && existing?.keyId && existing?.publicKey && existing?.privateKey
       ? stripLegacyNodeFields(existing, name)
       : await createClientIdentity(name);
     await storeKey(`pending:${pairing.pairingId}`, client);
     const response = await fetch(`/v1/control-client-pairings/${encodeURIComponent(pairing.pairingId)}/claim`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pairing.secret}` },
-      body: JSON.stringify({ clientId: client.clientId, keyId: client.keyId, name, publicKey })
+      body: JSON.stringify({ clientId: client.clientId, keyId: client.keyId, name, publicKey: client.publicKey })
     });
-    if (!response.ok) throw new Error('claim failed');
+    if (!response.ok) throw new Error(await responseErrorCode(response, 'claim_failed'));
     claimed = true;
     const value = await response.json();
     fingerprint.textContent = value.fingerprint;
@@ -198,23 +188,34 @@ button.addEventListener('click', async () => {
     await poll(pairing, client);
   } catch (error) {
     if (!claimed) await deleteKey(`pending:${pairing.pairingId}`).catch(() => {});
-    const text = error instanceof Error && error.message === 'declined' ? '办公室电脑拒绝了请求' : '配对未完成，请重新生成链接';
-    setStatus(text, 'error');
+    setStatus(pairingErrorMessage(error), 'error');
     button.disabled = false;
   }
 });
 
-if (parseSecret()) {
-  setStatus('配对链接已就绪');
-} else {
+const initializeFromLocation = () => {
+  if (parseSecret()) {
+    stopRealtime();
+    button.disabled = false;
+    continueLink.hidden = true;
+    details.hidden = true;
+    fingerprint.textContent = '';
+    setStatus('配对链接已就绪');
+    return;
+  }
   getKey('active').then(active => {
     if (active) {
       button.disabled = true;
       setStatus('正在恢复安全实时连接', 'waiting');
       return connectRealtime(stripLegacyNodeFields(active, nameFromClient(active)));
     }
-  }).catch(() => setStatus('请从办公室电脑生成配对链接', 'error'));
-}
+    button.disabled = false;
+    setStatus('请从办公室电脑生成配对链接', 'error');
+  }).catch(error => setStatus(pairingErrorMessage(error), 'error'));
+};
+
+window.addEventListener('hashchange', initializeFromLocation);
+initializeFromLocation();
 
 async function createClientIdentity(name) {
   const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
@@ -229,4 +230,27 @@ function nameFromClient(client) {
 function stripLegacyNodeFields(identity, name) {
   const { nodeId: _nodeId, nodePublicKey: _nodePublicKey, proof: _proof, ...ownerIdentity } = identity;
   return { ...ownerIdentity, name };
+}
+
+async function responseErrorCode(response, fallback) {
+  try {
+    const value = await response.json();
+    return typeof value?.code === 'string' ? value.code : typeof value?.error === 'string' ? value.error : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function pairingErrorMessage(error) {
+  const code = error instanceof Error ? error.message : 'unknown';
+  return ({
+    declined: '办公室电脑拒绝了请求',
+    expired: '配对链接已过期，请从办公室电脑重新生成',
+    unauthorized: '配对链接无效或已经失效',
+    pairing_disabled: 'Server 当前已关闭新的控制端配对',
+    conflict: '配对状态已变化，请从办公室电脑重新生成链接',
+    status_unavailable: '暂时无法读取确认状态，请检查网络后重试',
+    unsupported: '当前浏览器不支持安全密钥存储',
+    reauthentication_required: '控制端身份未通过认证，请重新配对',
+  })[code] ?? '配对未完成，请检查网络或重新生成链接';
 }

@@ -1,3 +1,12 @@
+import {
+  CONTROL_DATABASE_NAME,
+  CONTROL_STORES,
+  controlStorageKey,
+  openControlDatabase,
+  requestValue,
+  transactionComplete,
+} from "../../../internal/server/pairing-web/storage.js";
+
 export interface CursorKey {
   ownerId: string;
   nodeId: string;
@@ -51,32 +60,30 @@ export interface ControlStorage {
   removeRuntimeSettings(): Promise<void>;
 }
 
-const DATABASE_NAME = "yuanshu-control-client";
-const DATABASE_VERSION = 4;
-const KEYS_STORE = "keys";
-const CURSORS_STORE = "event-cursors";
-const SEQUENCES_STORE = "control-sequences";
-const NODES_STORE = "node-bindings";
-const RUNTIME_SETTINGS_STORE = "runtime-settings";
+const KEYS_STORE = CONTROL_STORES.keys;
+const CURSORS_STORE = CONTROL_STORES.cursors;
+const SEQUENCES_STORE = CONTROL_STORES.sequences;
+const NODES_STORE = CONTROL_STORES.nodes;
+const RUNTIME_SETTINGS_STORE = CONTROL_STORES.runtimeSettings;
 
 export function cursorStorageKey(key: CursorKey): string {
-  return [key.ownerId, key.nodeId, key.streamId].map(encodeURIComponent).join("\u001f");
+  return controlStorageKey(key.ownerId, key.nodeId, key.streamId);
 }
 
 export function controlSequenceStorageKey(key: ControlSequenceKey): string {
-  return [key.ownerId, key.nodeId, key.clientId, key.keyId].map(encodeURIComponent).join("\u001f");
+  return controlStorageKey(key.ownerId, key.nodeId, key.clientId, key.keyId);
 }
 
 export function nodeBindingStorageKey(ownerId: string, nodeId: string): string {
-  return [ownerId, nodeId].map(encodeURIComponent).join("\u001f");
+  return controlStorageKey(ownerId, nodeId);
 }
 
 export class IndexedDBControlStorage implements ControlStorage {
   private readonly database: Promise<IDBDatabase>;
 
-  constructor(databaseName = DATABASE_NAME) {
+  constructor(databaseName = CONTROL_DATABASE_NAME) {
     if (typeof indexedDB === "undefined") throw new Error("IndexedDB is unavailable");
-    this.database = openDatabase(databaseName);
+    this.database = openControlDatabase(databaseName);
   }
 
   async getEventCursor(key: CursorKey): Promise<number> {
@@ -228,23 +235,6 @@ export class MemoryControlStorage implements ControlStorage {
   private runtimeSettings?: StoredRuntimeSettings;
 }
 
-function openDatabase(databaseName: string): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(databaseName, DATABASE_VERSION);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(KEYS_STORE)) database.createObjectStore(KEYS_STORE);
-      if (!database.objectStoreNames.contains(CURSORS_STORE)) database.createObjectStore(CURSORS_STORE);
-      if (!database.objectStoreNames.contains(SEQUENCES_STORE)) database.createObjectStore(SEQUENCES_STORE);
-      if (!database.objectStoreNames.contains(NODES_STORE)) database.createObjectStore(NODES_STORE);
-      if (!database.objectStoreNames.contains(RUNTIME_SETTINGS_STORE)) database.createObjectStore(RUNTIME_SETTINGS_STORE);
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB could not be opened"));
-    request.onblocked = () => reject(new Error("IndexedDB upgrade is blocked"));
-  });
-}
-
 function validateNodeBinding(binding: StoredNodeBinding): void {
   if (!binding.ownerId || !binding.nodeId || (binding.online !== undefined && typeof binding.online !== "boolean")) {
     throw new Error("node binding is invalid");
@@ -262,19 +252,4 @@ function validateRuntimeSettings(settings: StoredRuntimeSettings): void {
 
 function copyNodeBinding(binding: StoredNodeBinding): StoredNodeBinding {
   return { ...binding };
-}
-
-function requestValue<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
-  });
-}
-
-function transactionComplete(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error ?? new Error("IndexedDB transaction failed"));
-    transaction.onabort = () => reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
-  });
 }

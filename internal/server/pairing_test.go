@@ -122,18 +122,25 @@ func TestPairingPageUsesStrictBrowserBoundary(t *testing.T) {
 	handler := PairingPageHandler()
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/pair", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "连接这个浏览器") || !strings.Contains(page.Header().Get("Content-Security-Policy"), "default-src 'none'") || page.Header().Get("Referrer-Policy") != "no-referrer" {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "连接这个浏览器") || !strings.Contains(page.Header().Get("Content-Security-Policy"), "default-src 'none'") || page.Header().Get("Referrer-Policy") != "no-referrer" || page.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("page status=%d headers=%v", page.Code, page.Header())
 	}
 	script := httptest.NewRecorder()
 	handler.ServeHTTP(script, httptest.NewRequest(http.MethodGet, "/pair/app.js", nil))
-	for _, required := range []string{"crypto.subtle.generateKey", "indexedDB", "textContent", "deleteKey"} {
+	for _, required := range []string{"crypto.subtle.generateKey", "indexedDB", "textContent", "deleteKey", "client.publicKey", "/pair/storage.js"} {
 		if !strings.Contains(script.Body.String(), required) {
 			t.Fatalf("pairing script missing %q", required)
 		}
 	}
 	if strings.Contains(script.Body.String(), "innerHTML") {
 		t.Fatal("pairing script uses unsafe HTML rendering")
+	}
+	storage := httptest.NewRecorder()
+	handler.ServeHTTP(storage, httptest.NewRequest(http.MethodGet, "/pair/storage.js", nil))
+	for _, required := range []string{"CONTROL_DATABASE_VERSION = 4", "runtime-settings", "node-bindings"} {
+		if storage.Code != http.StatusOK || !strings.Contains(storage.Body.String(), required) {
+			t.Fatalf("pairing storage module missing %q", required)
+		}
 	}
 }
 
