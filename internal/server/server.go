@@ -113,6 +113,7 @@ func Run(ctx context.Context, options Options) error {
 	defer hub.Close()
 	var tlsSAN []string
 	var tlsNotAfter time.Time
+	var tlsFingerprint string
 	if tlsConfig != nil && len(tlsConfig.Certificates) > 0 && tlsConfig.Certificates[0].Leaf != nil {
 		leaf := tlsConfig.Certificates[0].Leaf
 		tlsSAN = append(tlsSAN, leaf.DNSNames...)
@@ -120,6 +121,7 @@ func Run(ctx context.Context, options Options) error {
 			tlsSAN = append(tlsSAN, ip.String())
 		}
 		tlsNotAfter = leaf.NotAfter.UTC()
+		tlsFingerprint = certificateFingerprint(leaf.Raw)
 	}
 	handler, err := newHandler(service, local, hub, adminHandlerOptions{
 		Enabled: adminEnabled(options.AdminEnabled), PublicURL: options.PublicURL,
@@ -128,7 +130,7 @@ func Run(ctx context.Context, options Options) error {
 		SessionIdle: options.AdminSessionIdle, SessionMax: options.AdminSessionMax,
 		AuditRetention: options.AdminAuditRetention, Random: options.Random, Clock: options.Clock,
 		StartedAt: time.Now().UTC(), DatabasePath: filepath.Join(options.DataDir, "server.db"), ConfigRevision: options.ConfigRevision,
-		TLSSAN: tlsSAN, TLSNotAfter: tlsNotAfter,
+		TLSSAN: tlsSAN, TLSNotAfter: tlsNotAfter, TLSFingerprint: tlsFingerprint,
 	})
 	if err != nil {
 		return err

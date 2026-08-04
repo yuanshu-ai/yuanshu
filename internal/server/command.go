@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,6 +22,12 @@ const Usage = `Usage:
     [--web | --no-web]
   yuanshu server doctor [--config <absolute-path>] [--json]
   yuanshu server healthcheck [--address 127.0.0.1:7444]
+  yuanshu server init --config <absolute-path> [--mode loopback|lan] [--data-dir <absolute-path>]
+    [--listen <ip:port>] [--public-url https://host[:port]] [--tls-cert <absolute-path>]
+    [--tls-key <absolute-path>] [--allowed-control-origin https://web-host[:port]]
+    [--non-interactive] [--replace]
+  yuanshu server backup --config <absolute-path> [--output <absolute-path>]
+  yuanshu server restore --config <absolute-path> --from <absolute-path>
 `
 
 var ErrUsage = errors.New("server command arguments are invalid")
@@ -38,6 +45,15 @@ func Command(ctx context.Context, args []string, stdout, _ io.Writer) error {
 	}
 	if len(args) > 0 && args[0] == "doctor" {
 		return doctor(ctx, args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "init" {
+		return initializeServer(ctx, args[1:], os.Stdin, stdout)
+	}
+	if len(args) > 0 && args[0] == "backup" {
+		return backupServer(ctx, args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "restore" {
+		return restoreServer(ctx, args[1:], stdout)
 	}
 	options, err := parseServerOptions(args)
 	if err != nil {
@@ -186,6 +202,8 @@ type doctorStatus struct {
 	TLS                   string   `json:"tls"`
 	TLSSAN                []string `json:"tlsSan,omitempty"`
 	TLSNotAfter           string   `json:"tlsNotAfter,omitempty"`
+	TLSFingerprint        string   `json:"tlsFingerprint,omitempty"`
+	TLSExpiryWarning      string   `json:"tlsExpiryWarning,omitempty"`
 	TLSError              string   `json:"tlsError,omitempty"`
 	AllowedControlOrigins []string `json:"allowedControlOrigins,omitempty"`
 	Revision              string   `json:"revision,omitempty"`
@@ -248,6 +266,8 @@ func doctor(ctx context.Context, args []string, stdout io.Writer) error {
 				status.TLSSAN = append(status.TLSSAN, ip.String())
 			}
 			status.TLSNotAfter = leaf.NotAfter.UTC().Format(time.RFC3339)
+			status.TLSFingerprint = certificateFingerprint(leaf.Raw)
+			status.TLSExpiryWarning = certificateExpiryWarning(time.Now().UTC(), leaf.NotAfter.UTC())
 		}
 	}
 	status.State = "ready"

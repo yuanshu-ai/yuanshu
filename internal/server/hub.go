@@ -58,6 +58,20 @@ type HubConnectionSnapshot struct {
 	ConnectedAt time.Time `json:"connectedAt"`
 }
 
+type HubNodeDetail struct {
+	NodeID          string    `json:"nodeId"`
+	Online          bool      `json:"online"`
+	ConnectedAt     time.Time `json:"connectedAt,omitempty"`
+	LastFrameAt     time.Time `json:"lastFrameAt,omitempty"`
+	LastEventAt     time.Time `json:"lastEventAt,omitempty"`
+	RuntimeStatus   string    `json:"runtimeStatus,omitempty"`
+	RelayStatus     string    `json:"relayStatus,omitempty"`
+	RecoveryStatus  string    `json:"recoveryStatus,omitempty"`
+	WorkspaceCount  int       `json:"workspaceCount"`
+	LastErrorCode   string    `json:"lastErrorCode,omitempty"`
+	LastCloseReason string    `json:"lastCloseReason,omitempty"`
+}
+
 type Hub struct {
 	store         sessionStore
 	replay        protocolv1.ReplayStore
@@ -75,6 +89,7 @@ type Hub struct {
 	leaseLocks    map[string]*sync.Mutex
 	nodes         map[string]*hubConnection
 	controls      map[string]*hubConnection
+	nodeDetails   map[string]HubNodeDetail
 	closed        bool
 }
 
@@ -152,7 +167,8 @@ func NewHub(store sessionStore, options HubOptions) (*Hub, error) {
 	return &Hub{
 		store: store, replay: replay, leases: leases, notifications: notifications, random: random, clock: clock, origins: origins, authTimeout: authTimeout, challengeTTL: challengeTTL,
 		relayOptions: transport.RelayOptions{QueueCapacity: options.QueueCapacity, HeartbeatInterval: options.HeartbeatInterval, IdleTimeout: options.IdleTimeout},
-		limit:        make(chan struct{}, connectionLimit), nodes: make(map[string]*hubConnection), controls: make(map[string]*hubConnection), leaseLocks: make(map[string]*sync.Mutex),
+		limit:        make(chan struct{}, connectionLimit), nodes: make(map[string]*hubConnection), controls: make(map[string]*hubConnection),
+		nodeDetails: make(map[string]HubNodeDetail), leaseLocks: make(map[string]*sync.Mutex),
 	}, nil
 }
 
@@ -417,6 +433,10 @@ func (h *Hub) register(connection *hubConnection) bool {
 	if connection.role == transport.SessionRoleNode {
 		previous = h.nodes[key]
 		h.nodes[key] = connection
+		detail := h.nodeDetails[key]
+		detail.NodeID, detail.Online, detail.ConnectedAt = connection.subjectID, true, connection.connectedAt
+		detail.RelayStatus, detail.LastErrorCode, detail.LastCloseReason = "online", "", ""
+		h.nodeDetails[key] = detail
 	} else {
 		previous = h.controls[key]
 		h.controls[key] = connection
@@ -474,12 +494,23 @@ func (h *Hub) unregister(connection *hubConnection) {
 	if connection.role == transport.SessionRoleNode {
 		if h.nodes[key] == connection {
 			delete(h.nodes, key)
+			detail := h.nodeDetails[key]
+			detail.NodeID, detail.Online, detail.RelayStatus = connection.subjectID, false, "offline"
+			detail.LastErrorCode, detail.LastCloseReason = "node_offline", "connection_closed"
+			h.nodeDetails[key] = detail
 			_ = h.saveNotification(context.Background(), serverstore.Notification{ID: h.randomNotificationID(), OwnerID: connection.ownerID, NodeID: connection.subjectID, Type: "node.offline", Summary: "节点已离线", DedupKey: "node.offline:" + connection.subjectID + ":" + h.clock().UTC().Format("20060102150405"), CreatedAt: h.clock().UTC()})
 		}
 	} else if h.controls[key] == connection {
 		delete(h.controls, key)
 	}
 	h.mu.Unlock()
+}
+
+func (h *Hub) OwnerNodeDetail(ownerID, nodeID string) (HubNodeDetail, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	detail, ok := h.nodeDetails[ownerID+"\x00"+nodeID]
+	return detail, ok
 }
 
 func (h *Hub) node(ownerID, nodeID string) *hubConnection {

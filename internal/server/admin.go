@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -48,6 +49,7 @@ type adminHandlerOptions struct {
 	ConfigRevision string
 	TLSSAN         []string
 	TLSNotAfter    time.Time
+	TLSFingerprint string
 }
 
 type adminChallenge struct {
@@ -151,6 +153,7 @@ func (s *adminService) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/admin/auth/action-challenge", s.issueActionChallenge)
 	mux.HandleFunc("GET /v1/admin/overview", s.overview)
 	mux.HandleFunc("GET /v1/admin/nodes", s.nodes)
+	mux.HandleFunc("GET /v1/admin/nodes/{id}", s.nodeDetail)
 	mux.HandleFunc("GET /v1/admin/control-clients", s.controlClients)
 	mux.HandleFunc("GET /v1/admin/access-requests", s.accessRequests)
 	mux.HandleFunc("GET /v1/admin/leases", s.leases)
@@ -449,7 +452,7 @@ func (s *adminService) overview(w http.ResponseWriter, r *http.Request) {
 	if info, err := os.Stat(s.options.DatabasePath); err == nil {
 		size = info.Size()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "uptimeSeconds": int64(s.clock().UTC().Sub(s.options.StartedAt).Seconds()), "build": serverBuildMetadata(), "database": map[string]any{"schemaVersion": serverstore.CurrentSchemaVersion, "quickCheck": "ok", "sizeBytes": size}, "connections": map[string]int{"nodes": nodes, "controlClients": controls}, "counts": counts, "tls": s.tlsView()})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "uptimeSeconds": int64(s.clock().UTC().Sub(s.options.StartedAt).Seconds()), "build": serverBuildMetadata(), "database": map[string]any{"schemaVersion": serverstore.CurrentSchemaVersion, "quickCheck": "ok", "sizeBytes": size}, "connections": map[string]int{"nodes": nodes, "controlClients": controls}, "counts": counts, "tls": s.tlsView(), "backup": s.backupView(r.Context())})
 }
 
 func (s *adminService) nodes(w http.ResponseWriter, r *http.Request) {
@@ -468,6 +471,40 @@ func (s *adminService) nodes(w http.ResponseWriter, r *http.Request) {
 		result = append(result, map[string]any{"id": item.ID, "name": item.Name, "os": item.OS, "version": item.Version, "status": item.Status, "online": online[item.ID], "createdAt": item.CreatedAt.Format(time.RFC3339Nano), "lastSeenAt": timeValue(item.LastSeenAt)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": result})
+}
+
+func (s *adminService) nodeDetail(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.requireSession(w, r)
+	if !ok {
+		return
+	}
+	nodeID := r.PathValue("id")
+	items, err := s.store.OwnerNodes(r.Context(), session.ownerID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	var selected *serverstore.Node
+	for index := range items {
+		if items[index].ID == nodeID {
+			selected = &items[index]
+			break
+		}
+	}
+	if selected == nil {
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	detail, found := s.hub.OwnerNodeDetail(session.ownerID, nodeID)
+	if !found {
+		detail = HubNodeDetail{NodeID: nodeID, Online: false, RelayStatus: "offline"}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"node": map[string]any{
+			"id": selected.ID, "name": selected.Name, "os": selected.OS, "version": selected.Version,
+			"status": selected.Status, "lastSeenAt": timeValue(selected.LastSeenAt), "runtime": detail,
+		},
+	})
 }
 
 func (s *adminService) controlClients(w http.ResponseWriter, r *http.Request) {
@@ -805,8 +842,28 @@ func (s *adminService) tlsView() map[string]any {
 	}
 	if !s.options.TLSNotAfter.IsZero() {
 		result["notAfter"] = s.options.TLSNotAfter.Format(time.RFC3339)
+		if warning := certificateExpiryWarning(s.clock().UTC(), s.options.TLSNotAfter); warning != "" {
+			result["expiryWarning"] = warning
+		}
+	}
+	if s.options.TLSFingerprint != "" {
+		result["fingerprint"] = s.options.TLSFingerprint
 	}
 	return result
+}
+
+func (s *adminService) backupView(ctx context.Context) map[string]any {
+	directory := filepath.Join(filepath.Dir(s.options.DatabasePath), "backups")
+	items, err := listBackupArchives(directory)
+	if err != nil || len(items) == 0 {
+		return map[string]any{"available": false, "integrity": "unavailable", "operation": "local_cli_only"}
+	}
+	latest := items[0]
+	integrity := "valid"
+	if err := inspectBackupArchive(ctx, filepath.Join(directory, latest.Name()), filepath.Dir(s.options.DatabasePath)); err != nil {
+		integrity = "invalid"
+	}
+	return map[string]any{"available": true, "lastBackupAt": latest.ModTime().UTC().Format(time.RFC3339Nano), "sizeBytes": latest.Size(), "integrity": integrity, "operation": "local_cli_only"}
 }
 
 func adminSigningInput(domain string, value any) ([]byte, error) {

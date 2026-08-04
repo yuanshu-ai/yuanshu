@@ -375,6 +375,7 @@ func (h *Hub) observeNodeEvent(ctx context.Context, source *hubConnection, frame
 	if err != nil {
 		return
 	}
+	h.observeNodeHealth(source, event)
 	typeName := ""
 	summary := ""
 	switch protocolv1.EventType(event.Type) {
@@ -397,6 +398,33 @@ func (h *Hub) observeNodeEvent(ctx context.Context, source *hubConnection, frame
 		WorkspaceID: value(event.WorkspaceID), ThreadID: value(event.ThreadID), TurnID: value(event.TurnID),
 		Type: typeName, Summary: summary, SourceSequence: event.Sequence, DedupKey: dedup, CreatedAt: h.clock().UTC(),
 	})
+}
+
+func (h *Hub) observeNodeHealth(source *hubConnection, event protocolv1.YuanshuMessage) {
+	key := source.ownerID + "\x00" + source.subjectID
+	now := h.clock().UTC()
+	h.mu.Lock()
+	detail := h.nodeDetails[key]
+	detail.NodeID, detail.Online, detail.LastFrameAt, detail.LastEventAt, detail.RelayStatus = source.subjectID, true, now, now, "online"
+	switch protocolv1.EventType(event.Type) {
+	case protocolv1.EventRuntimeStatus:
+		if state, ok := event.Payload["state"].(string); ok {
+			detail.RuntimeStatus = state
+		} else if state, ok := event.Payload["status"].(string); ok {
+			detail.RuntimeStatus = state
+		}
+	case protocolv1.EventDeviceStatus:
+		if workspaces, ok := event.Payload["workspaces"].([]any); ok {
+			detail.WorkspaceCount = len(workspaces)
+		}
+		if recovery, ok := event.Payload["recovery"].(string); ok {
+			detail.RecoveryStatus = recovery
+		}
+	case protocolv1.EventHistoryGap:
+		detail.RecoveryStatus = "history_gap"
+	}
+	h.nodeDetails[key] = detail
+	h.mu.Unlock()
 }
 
 func value(pointer *string) string {

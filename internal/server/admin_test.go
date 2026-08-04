@@ -78,6 +78,17 @@ func TestAdminSignedSessionOverviewAndAdmissionProof(t *testing.T) {
 	if overview.Code != http.StatusOK || bytes.Contains(overview.Body.Bytes(), clientPrivate) {
 		t.Fatalf("overview status=%d body=%s", overview.Code, overview.Body.String())
 	}
+	if !bytes.Contains(overview.Body.Bytes(), []byte(`"operation":"local_cli_only"`)) {
+		t.Fatalf("overview backup guidance missing: %s", overview.Body.String())
+	}
+	nodeDetail := adminJSONRequest(t, admin.Handler(), http.MethodGet, origin+"/v1/admin/nodes/"+bound.NodeID, nil, cookies[0], "", "", "")
+	if nodeDetail.Code != http.StatusOK || !bytes.Contains(nodeDetail.Body.Bytes(), []byte(`"relayStatus":"offline"`)) || bytes.Contains(nodeDetail.Body.Bytes(), clientPrivate) {
+		t.Fatalf("node detail status=%d body=%s", nodeDetail.Code, nodeDetail.Body.String())
+	}
+	unknownNode := adminJSONRequest(t, admin.Handler(), http.MethodGet, origin+"/v1/admin/nodes/other-owner-node", nil, cookies[0], "", "", "")
+	if unknownNode.Code != http.StatusNotFound {
+		t.Fatalf("unknown node status=%d body=%s", unknownNode.Code, unknownNode.Body.String())
+	}
 
 	payload, _ := json.Marshal(map[string]any{"controlPairingEnabled": false, "nodeEnrollmentEnabled": true, "baseRevision": float64(1)})
 	digest, err := canonicalJSONDigest(payload)

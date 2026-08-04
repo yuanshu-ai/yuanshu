@@ -149,13 +149,24 @@ func TestHubRoutesSignedControlsAndRawEvents(t *testing.T) {
 	if err != nil || !bytes.Equal(fromControl.Bytes(), controlRaw) {
 		t.Fatalf("node received=%q err=%v", fromControl.Bytes(), err)
 	}
-	eventRaw := []byte(`{"protocolVersion":"1.0","type":"runtime.status","ownerId":"own_test","nodeId":"nod_test","payload":{"status":"ready"}}`)
+	eventRaw, err := json.Marshal(protocolv1.YuanshuMessage{
+		ProtocolVersion: protocolv1.CurrentVersion, MessageID: "event-runtime-ready", Type: string(protocolv1.EventRuntimeStatus),
+		SentAt: time.Now().UTC().Format(time.RFC3339Nano), OwnerID: "own_test", NodeID: "nod_test",
+		StreamID: "node-events", Sequence: 1, CorrelationID: "event-runtime-ready", Payload: map[string]any{"status": "ready"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := node.Send(context.Background(), transport.NewFrame(eventRaw)); err != nil {
 		t.Fatal(err)
 	}
 	fromNode, err := control.Receive(context.Background())
 	if err != nil || !bytes.Equal(fromNode.Bytes(), eventRaw) {
 		t.Fatalf("control received=%q err=%v", fromNode.Bytes(), err)
+	}
+	detail, ok := fixture.hub.OwnerNodeDetail("own_test", "nod_test")
+	if !ok || !detail.Online || detail.RuntimeStatus != "ready" || detail.LastEventAt.IsZero() {
+		t.Fatalf("node detail=%+v found=%v", detail, ok)
 	}
 }
 
