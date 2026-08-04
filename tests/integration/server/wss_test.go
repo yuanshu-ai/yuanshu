@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
 	"github.com/yuanshu-ai/yuanshu/internal/server"
 	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
@@ -105,7 +108,7 @@ func TestTLSHubAuthenticatesPersistedIdentitiesAndRoutes(t *testing.T) {
 	}
 	defer control.Close()
 
-	controlRaw := []byte(`{"protocolVersion":"1.0","type":"thread.list","ownerId":"` + claim.OwnerID + `","nodeId":"` + claim.NodeID + `"}`)
+	controlRaw := signedIntegrationControl(t, claim.OwnerID, claim.NodeID, "cli_integration", "primary", controlPrivate, 1)
 	if err := control.Send(context.Background(), transport.NewFrame(controlRaw)); err != nil {
 		t.Fatal(err)
 	}
@@ -124,3 +127,28 @@ func TestTLSHubAuthenticatesPersistedIdentitiesAndRoutes(t *testing.T) {
 }
 
 func toWSS(value string) string { return "wss" + strings.TrimPrefix(value, "https") }
+
+func signedIntegrationControl(t *testing.T, ownerID, nodeID, clientID, keyID string, private ed25519.PrivateKey, sequence int64) []byte {
+	t.Helper()
+	now := time.Now().UTC()
+	expires := now.Add(time.Minute).Format(time.RFC3339Nano)
+	nonce := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(sequence)}, 16))
+	messageID := "control-" + fmt.Sprint(sequence)
+	message := protocolv1.YuanshuMessage{
+		ProtocolVersion: protocolv1.CurrentVersion, MessageID: messageID, Type: string(protocolv1.ControlDeviceSync),
+		SentAt: now.Format(time.RFC3339Nano), ExpiresAt: &expires, OwnerID: ownerID, NodeID: nodeID,
+		StreamID: "control-stream", Sequence: sequence, CorrelationID: messageID, Nonce: &nonce,
+		Signer: &protocolv1.Signer{ClientID: clientID, KeyID: keyID}, Payload: map[string]any{},
+	}
+	input, err := protocolv1.ControlSigningInput(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, input))
+	message.Signature = &signature
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}

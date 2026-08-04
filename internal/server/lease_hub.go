@@ -36,7 +36,7 @@ func serverControl(controlType string) bool {
 	}
 }
 
-func (h *Hub) validateControlFrame(source *hubConnection, raw []byte) (protocolv1.YuanshuMessage, error) {
+func (h *Hub) validateControlFrame(ctx context.Context, source *hubConnection, raw []byte) (protocolv1.YuanshuMessage, error) {
 	message, err := protocolv1.ParseControl(raw)
 	if err != nil || source.role != transport.SessionRoleControl || message.OwnerID != source.ownerID || message.Signer == nil || message.Signer.ClientID != source.subjectID || message.Signer.KeyID != source.keyID || message.Signature == nil || message.ExpiresAt == nil || message.Nonce == nil {
 		return protocolv1.YuanshuMessage{}, errors.New("control frame authorization failed")
@@ -59,6 +59,14 @@ func (h *Hub) validateControlFrame(source *hubConnection, raw []byte) (protocolv
 	input, err := protocolv1.ControlSigningInput(message)
 	if err != nil || !ed25519.Verify(source.publicKey, input, decoded) {
 		return protocolv1.YuanshuMessage{}, errors.New("control frame signature is invalid")
+	}
+	record := protocolv1.ReplayRecord{
+		OwnerID: message.OwnerID, NodeID: message.NodeID, MessageID: message.MessageID,
+		ClientID: message.Signer.ClientID, KeyID: message.Signer.KeyID, Nonce: *message.Nonce,
+		Sequence: message.Sequence, NonceRetainTo: expiresAt.Add(protocolv1.DefaultControlClockSkew),
+	}
+	if err := h.replay.CheckAndRecord(ctx, record); err != nil {
+		return message, err
 	}
 	return message, nil
 }

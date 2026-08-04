@@ -60,6 +60,7 @@ type HubConnectionSnapshot struct {
 
 type Hub struct {
 	store         sessionStore
+	replay        protocolv1.ReplayStore
 	leases        hubLeaseStore
 	notifications hubNotificationStore
 	random        io.Reader
@@ -144,8 +145,12 @@ func NewHub(store sessionStore, options HubOptions) (*Hub, error) {
 	if !ok {
 		notifications = newMemoryNotificationStore(clock)
 	}
+	replay, ok := store.(protocolv1.ReplayStore)
+	if !ok {
+		replay = protocolv1.NewMemoryReplayStore()
+	}
 	return &Hub{
-		store: store, leases: leases, notifications: notifications, random: random, clock: clock, origins: origins, authTimeout: authTimeout, challengeTTL: challengeTTL,
+		store: store, replay: replay, leases: leases, notifications: notifications, random: random, clock: clock, origins: origins, authTimeout: authTimeout, challengeTTL: challengeTTL,
 		relayOptions: transport.RelayOptions{QueueCapacity: options.QueueCapacity, HeartbeatInterval: options.HeartbeatInterval, IdleTimeout: options.IdleTimeout},
 		limit:        make(chan struct{}, connectionLimit), nodes: make(map[string]*hubConnection), controls: make(map[string]*hubConnection), leaseLocks: make(map[string]*sync.Mutex),
 	}, nil
@@ -318,18 +323,21 @@ func (h *Hub) route(ctx context.Context, source *hubConnection) {
 			h.broadcast(source.ownerID, frame)
 			continue
 		}
-		var control protocolv1.YuanshuMessage
-		if leaseRequired(header.Type) || serverControl(header.Type) {
-			control, err = h.validateControlFrame(source, frame.Bytes())
-			if err != nil {
-				return
-			}
-			if serverControl(header.Type) {
-				if err := h.handleServerControl(ctx, source, control); err != nil {
+		control, err := h.validateControlFrame(ctx, source, frame.Bytes())
+		if err != nil {
+			if errors.Is(err, protocolv1.ErrReplayDetected) {
+				if sendErr := h.sendServerResult(ctx, source, control, protocolv1.ControlResultRejected, protocolv1.ErrorReplay, nil); sendErr != nil {
 					return
 				}
 				continue
 			}
+			return
+		}
+		if serverControl(header.Type) {
+			if err := h.handleServerControl(ctx, source, control); err != nil {
+				return
+			}
+			continue
 		}
 		target := h.node(source.ownerID, header.NodeID)
 		if target == nil {

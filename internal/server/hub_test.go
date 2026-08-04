@@ -133,7 +133,7 @@ func TestHubControlBrowserQueryAuthenticationAndConflict(t *testing.T) {
 	}
 }
 
-func TestHubRoutesRawFramesInBothDirections(t *testing.T) {
+func TestHubRoutesSignedControlsAndRawEvents(t *testing.T) {
 	fixture := newHubFixture(t)
 	node := fixture.dialNode(t)
 	defer node.Close()
@@ -141,7 +141,7 @@ func TestHubRoutesRawFramesInBothDirections(t *testing.T) {
 	defer control.Close()
 	waitHubSnapshot(t, fixture.hub, 1, 1)
 
-	controlRaw := []byte(` {"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"nod_test","payload":{"canary":"unchanged"}} `)
+	controlRaw := signedControl(t, fixture, protocolv1.ControlDeviceSync, 1, map[string]any{}, "", "", "", "")
 	if err := control.Send(context.Background(), transport.NewFrame(controlRaw)); err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +159,43 @@ func TestHubRoutesRawFramesInBothDirections(t *testing.T) {
 	}
 }
 
+func TestHubRejectsReplayedForwardedControlWithoutClosingSession(t *testing.T) {
+	fixture := newHubFixture(t)
+	node := fixture.dialNode(t)
+	defer node.Close()
+	control := fixture.dialControl(t)
+	defer control.Close()
+	waitHubSnapshot(t, fixture.hub, 1, 1)
+
+	request := signedControl(t, fixture, protocolv1.ControlDeviceSync, 1, map[string]any{}, "", "", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(request)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.Receive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.Send(context.Background(), transport.NewFrame(request)); err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := receiveJSONType(control, string(protocolv1.EventControlResult))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := rejected["payload"].(map[string]any)
+	if rejected["correlationId"] != "control-1" || payload["status"] != string(protocolv1.ControlResultRejected) || payload["errorCode"] != string(protocolv1.ErrorReplay) {
+		t.Fatalf("replay result=%v", rejected)
+	}
+
+	next := signedControl(t, fixture, protocolv1.ControlDeviceSync, 2, map[string]any{}, "", "", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(next)); err != nil {
+		t.Fatal(err)
+	}
+	forwarded, err := node.Receive(context.Background())
+	if err != nil || !bytes.Equal(forwarded.Bytes(), next) {
+		t.Fatalf("session did not survive replay: %q %v", forwarded.Bytes(), err)
+	}
+}
+
 func TestHubKeepsControlSessionAliveWhenTargetNodeIsOffline(t *testing.T) {
 	fixture := newHubFixture(t)
 	node := fixture.dialNode(t)
@@ -167,11 +204,11 @@ func TestHubKeepsControlSessionAliveWhenTargetNodeIsOffline(t *testing.T) {
 	defer control.Close()
 	waitHubSnapshot(t, fixture.hub, 1, 1)
 
-	offline := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"offline-node","payload":{}}`)
+	offline := signedControlForNode(t, fixture, "offline-node", protocolv1.ControlDeviceSync, 1, map[string]any{}, "", "", "", "")
 	if err := control.Send(context.Background(), transport.NewFrame(offline)); err != nil {
 		t.Fatal(err)
 	}
-	valid := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"nod_test","payload":{}}`)
+	valid := signedControl(t, fixture, protocolv1.ControlDeviceSync, 2, map[string]any{}, "", "", "", "")
 	if err := control.Send(context.Background(), transport.NewFrame(valid)); err != nil {
 		t.Fatal(err)
 	}
@@ -296,9 +333,18 @@ func TestHubNotificationsStayOwnerScopedAndCanBeMarkedRead(t *testing.T) {
 }
 
 func signedControl(t *testing.T, fixture hubFixture, kind protocolv1.ControlType, sequence int64, payload map[string]any, workspaceID, threadID, turnID, itemID string) []byte {
+	return signedControlForNode(t, fixture, fixture.store.node.NodeID, kind, sequence, payload, workspaceID, threadID, turnID, itemID)
+}
+
+func signedControlForNode(t *testing.T, fixture hubFixture, nodeID string, kind protocolv1.ControlType, sequence int64, payload map[string]any, workspaceID, threadID, turnID, itemID string) []byte {
+	t.Helper()
+	return signedRoutedControl(t, fixture.store.control.OwnerID, nodeID, fixture.store.control.ClientID, fixture.store.control.KeyID, fixture.controlPrivate, kind, sequence, payload, workspaceID, threadID, turnID, itemID)
+}
+
+func signedRoutedControl(t *testing.T, ownerID, nodeID, clientID, keyID string, private ed25519.PrivateKey, kind protocolv1.ControlType, sequence int64, payload map[string]any, workspaceID, threadID, turnID, itemID string) []byte {
 	t.Helper()
 	now := time.Now().UTC()
-	message := protocolv1.YuanshuMessage{ProtocolVersion: protocolv1.CurrentVersion, MessageID: "control-" + fmt.Sprint(sequence), Type: string(kind), SentAt: now.Format(time.RFC3339Nano), ExpiresAt: stringPtr(now.Add(time.Minute).Format(time.RFC3339Nano)), OwnerID: fixture.store.control.OwnerID, NodeID: fixture.store.node.NodeID, StreamID: "control-stream", Sequence: sequence, CorrelationID: "control-" + fmt.Sprint(sequence), Nonce: stringPtr(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(sequence)}, 16))), Signer: &protocolv1.Signer{ClientID: fixture.store.control.ClientID, KeyID: fixture.store.control.KeyID}, Payload: payload}
+	message := protocolv1.YuanshuMessage{ProtocolVersion: protocolv1.CurrentVersion, MessageID: "control-" + fmt.Sprint(sequence), Type: string(kind), SentAt: now.Format(time.RFC3339Nano), ExpiresAt: stringPtr(now.Add(time.Minute).Format(time.RFC3339Nano)), OwnerID: ownerID, NodeID: nodeID, StreamID: "control-stream", Sequence: sequence, CorrelationID: "control-" + fmt.Sprint(sequence), Nonce: stringPtr(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(sequence)}, 16))), Signer: &protocolv1.Signer{ClientID: clientID, KeyID: keyID}, Payload: payload}
 	if workspaceID != "" {
 		message.WorkspaceID = stringPtr(workspaceID)
 	}
@@ -315,7 +361,7 @@ func signedControl(t *testing.T, fixture hubFixture, kind protocolv1.ControlType
 	if err != nil {
 		t.Fatal(err)
 	}
-	signature := ed25519.Sign(fixture.controlPrivate, input)
+	signature := ed25519.Sign(private, input)
 	encoded := base64.RawURLEncoding.EncodeToString(signature)
 	message.Signature = &encoded
 	result, err := json.Marshal(message)
@@ -363,7 +409,7 @@ func TestHubRoutesRemoteControlThroughStandaloneLocalNode(t *testing.T) {
 	defer control.Close()
 	waitHubSnapshot(t, fixture.hub, 1, 1)
 
-	controlRaw := []byte(` {"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"nod_test","payload":{}} `)
+	controlRaw := signedControl(t, fixture, protocolv1.ControlDeviceSync, 1, map[string]any{}, "", "", "", "")
 	if err := control.Send(context.Background(), transport.NewFrame(controlRaw)); err != nil {
 		t.Fatal(err)
 	}
@@ -401,8 +447,8 @@ func TestHubKeepsStandaloneAndRemoteNodeStreamsIndependent(t *testing.T) {
 	control := fixture.dialControl(t)
 	defer control.Close()
 	waitHubSnapshot(t, fixture.hub, 2, 1)
-	localRaw := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"nod_local","payload":{}}`)
-	remoteRaw := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"own_test","nodeId":"nod_test","payload":{}}`)
+	localRaw := signedControlForNode(t, fixture, "nod_local", protocolv1.ControlDeviceSync, 1, map[string]any{}, "", "", "", "")
+	remoteRaw := signedControl(t, fixture, protocolv1.ControlDeviceSync, 2, map[string]any{}, "", "", "", "")
 	if err := control.Send(context.Background(), transport.NewFrame(localRaw)); err != nil {
 		t.Fatal(err)
 	}

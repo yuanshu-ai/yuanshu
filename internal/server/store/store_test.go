@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
 )
 
 var testNow = time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC)
@@ -30,7 +32,7 @@ func openTestStore(t *testing.T) (*Store, string) {
 
 func TestOpenCreatesServerSchemaAndReopens(t *testing.T) {
 	local, path := openTestStore(t)
-	for _, table := range []string{"admin_audit_logs", "bootstrap", "control_clients", "node_credentials", "node_enrollments", "nodes", "owners", "pairings", "control_leases", "notifications", "schema_migrations", "server_security_settings"} {
+	for _, table := range []string{"admin_audit_logs", "bootstrap", "control_clients", "node_credentials", "node_enrollments", "nodes", "owners", "pairings", "control_leases", "notifications", "schema_migrations", "server_security_settings", "server_replay_messages", "server_replay_nonces", "server_signer_sequences"} {
 		var count int
 		if err := local.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("table %s count=%d err=%v", table, count, err)
@@ -50,6 +52,51 @@ func TestOpenCreatesServerSchemaAndReopens(t *testing.T) {
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestServerReplayPersistsAndIsSignerScoped(t *testing.T) {
+	local, path := openTestStore(t)
+	if _, err := local.db.Exec(`INSERT INTO owners(id,singleton,status,created_at) VALUES('owner',1,'active',?)`, timestamp(testNow)); err != nil {
+		t.Fatal(err)
+	}
+	base := protocolv1.ReplayRecord{
+		OwnerID: "owner", NodeID: "node-a", ClientID: "client", KeyID: "key-a",
+		MessageID: "message-1", Nonce: "nonce-1", Sequence: 1, NonceRetainTo: testNow.Add(time.Minute),
+	}
+	if err := local.CheckAndRecord(context.Background(), base); err != nil {
+		t.Fatal(err)
+	}
+	for _, replay := range []protocolv1.ReplayRecord{
+		base,
+		withServerReplay(base, "message-2", "nonce-1", 2, "node-a", "key-a"),
+		withServerReplay(base, "message-3", "nonce-3", 1, "node-a", "key-a"),
+	} {
+		if err := local.CheckAndRecord(context.Background(), replay); !errors.Is(err, protocolv1.ErrReplayDetected) {
+			t.Fatalf("replay %+v error=%v", replay, err)
+		}
+	}
+	if err := local.CheckAndRecord(context.Background(), withServerReplay(base, "message-4", "nonce-4", 1, "node-b", "key-a")); err != nil {
+		t.Fatalf("node scope: %v", err)
+	}
+	if err := local.CheckAndRecord(context.Background(), withServerReplay(base, "message-5", "nonce-5", 1, "node-a", "key-b")); err != nil {
+		t.Fatalf("key scope: %v", err)
+	}
+	if err := local.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(context.Background(), path, Options{Clock: func() time.Time { return testNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if err := reopened.CheckAndRecord(context.Background(), withServerReplay(base, "message-after-restart", "nonce-after-restart", 1, "node-a", "key-a")); !errors.Is(err, protocolv1.ErrReplayDetected) {
+		t.Fatalf("sequence survived restart: %v", err)
+	}
+}
+
+func withServerReplay(base protocolv1.ReplayRecord, messageID, nonce string, sequence int64, nodeID, keyID string) protocolv1.ReplayRecord {
+	base.MessageID, base.Nonce, base.Sequence, base.NodeID, base.KeyID = messageID, nonce, sequence, nodeID, keyID
+	return base
 }
 
 func TestNotificationsAreRedactedDeduplicatedAndReadable(t *testing.T) {

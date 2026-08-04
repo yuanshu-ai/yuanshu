@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/yuanshu-ai/yuanshu/internal/enrollment"
+	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
 
@@ -225,8 +226,8 @@ func TestPersonalNodeEnrollmentRoutesOneControlToTwoIsolatedNodes(t *testing.T) 
 	}
 	defer control.Close()
 	waitHubSnapshot(t, hub, 2, 1)
-	first := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"` + bound.OwnerID + `","nodeId":"` + bound.NodeID + `","payload":{}}`)
-	second := []byte(`{"protocolVersion":"1.0","type":"device.sync","ownerId":"` + bound.OwnerID + `","nodeId":"` + claimValue.CandidateNodeID + `","payload":{}}`)
+	first := signedRoutedControl(t, bound.OwnerID, bound.NodeID, clientID, keyID, clientPrivate, protocolv1.ControlDeviceSync, 1, map[string]any{}, "", "", "", "")
+	second := signedRoutedControl(t, bound.OwnerID, claimValue.CandidateNodeID, clientID, keyID, clientPrivate, protocolv1.ControlDeviceSync, 1, map[string]any{}, "", "", "", "")
 	if err := control.Send(context.Background(), transport.NewFrame(first)); err != nil {
 		t.Fatal(err)
 	}

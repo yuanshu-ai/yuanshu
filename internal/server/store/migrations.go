@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const CurrentSchemaVersion = 6
+const CurrentSchemaVersion = 7
 
 type migration struct {
 	version    int
@@ -214,6 +214,44 @@ var serverMigrations = []migration{{
 		) STRICT`,
 		`CREATE INDEX admin_audit_owner_created ON admin_audit_logs(owner_id, created_at DESC, id DESC)`,
 	},
+}, {
+	version: 7,
+	name:    "server_control_replay",
+	statements: []string{
+		`CREATE TABLE server_replay_messages (
+			owner_id TEXT NOT NULL,
+			node_id TEXT NOT NULL CHECK (length(node_id) BETWEEN 1 AND 128),
+			client_id TEXT NOT NULL CHECK (length(client_id) BETWEEN 1 AND 128),
+			key_id TEXT NOT NULL CHECK (length(key_id) BETWEEN 1 AND 128),
+			message_id TEXT NOT NULL CHECK (length(message_id) BETWEEN 1 AND 128),
+			retain_until INTEGER NOT NULL,
+			accepted_at TEXT NOT NULL,
+			PRIMARY KEY (owner_id, node_id, client_id, key_id, message_id),
+			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
+		) STRICT`,
+		`CREATE INDEX server_replay_messages_expiry ON server_replay_messages(retain_until)`,
+		`CREATE TABLE server_replay_nonces (
+			owner_id TEXT NOT NULL,
+			node_id TEXT NOT NULL CHECK (length(node_id) BETWEEN 1 AND 128),
+			client_id TEXT NOT NULL CHECK (length(client_id) BETWEEN 1 AND 128),
+			key_id TEXT NOT NULL CHECK (length(key_id) BETWEEN 1 AND 128),
+			nonce TEXT NOT NULL CHECK (length(nonce) BETWEEN 1 AND 128),
+			retain_until INTEGER NOT NULL,
+			PRIMARY KEY (owner_id, node_id, client_id, key_id, nonce),
+			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
+		) STRICT`,
+		`CREATE INDEX server_replay_nonces_expiry ON server_replay_nonces(retain_until)`,
+		`CREATE TABLE server_signer_sequences (
+			owner_id TEXT NOT NULL,
+			node_id TEXT NOT NULL CHECK (length(node_id) BETWEEN 1 AND 128),
+			client_id TEXT NOT NULL CHECK (length(client_id) BETWEEN 1 AND 128),
+			key_id TEXT NOT NULL CHECK (length(key_id) BETWEEN 1 AND 128),
+			highest_sequence INTEGER NOT NULL CHECK (highest_sequence >= 1),
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (owner_id, node_id, client_id, key_id),
+			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
+		) STRICT`,
+	},
 }}
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -284,6 +322,8 @@ func schemaLiteral(version int) string {
 		return "6"
 	case 7:
 		return "7"
+	case 8:
+		return "8"
 	default:
 		panic("unsupported server schema version")
 	}
