@@ -6,6 +6,7 @@ export const CONTROL_STORES: Readonly<{
   sequences: string;
   nodes: string;
   runtimeSettings: string;
+  preferences: string;
 }>;
 
 export function openControlDatabase(databaseName?: string, factory?: IDBFactory): Promise<IDBDatabase>;

@@ -190,3 +190,4 @@ dd {
   font-size: 12px;
   text-align: center;
 }
+header{justify-content:space-between}header>span:first-child{display:flex;align-items:center;gap:10px}.language-switch{display:flex;align-items:center;gap:5px;font-size:12px;color:#758078}.language-switch button{padding:4px;border:0;background:transparent;color:inherit}.language-switch button.active{color:#72d7a2}.language-switch i{font-style:normal}

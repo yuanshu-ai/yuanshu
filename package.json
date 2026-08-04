@@ -4,7 +4,9 @@
   "scripts": {
     "brand:sync": "node scripts/brand-assets.mjs sync",
     "brand:check": "node scripts/brand-assets.mjs check",
-    "build": "pnpm brand:sync && pnpm --dir web build && pnpm --dir node-web build",
+    "build": "pnpm brand:sync && pnpm i18n:generate && pnpm --dir web build && pnpm --dir node-web build",
+    "i18n:check": "node scripts/i18n.mjs check",
+    "i18n:generate": "node scripts/i18n.mjs generate",
     "protocol:check": "node scripts/protocol.mjs check",
     "protocol:generate": "node scripts/protocol.mjs generate",
     "protocol:test": "node scripts/protocol-test.mjs",

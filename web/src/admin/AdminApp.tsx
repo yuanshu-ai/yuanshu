@@ -1,6 +1,7 @@
 import { Children, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { BrandMark } from "../BrandMark";
+import { LanguageSwitch } from "../i18n";
 import { IndexedDBControlStorage } from "../relay/storage";
 import { AdminClient, type AdminAccessRequest, type AdminAudit, type AdminConfig, type AdminControlClient, type AdminLease, type AdminNode, type AdminNodeDetail, type AdminOverview } from "./admin-client";
 import { machineStatus } from "../status/catalog.generated";
@@ -120,6 +121,7 @@ export function AdminApp() {
   };
 
   return <main className="admin-shell">
+    <LanguageSwitch compact />
     <aside className="admin-nav" aria-label="Server 管理导航">
       <a className="admin-brand" href="/"><BrandMark /><span><strong>远枢</strong><small>Server 管理</small></span></a>
       <nav>{(["overview", "nodes", "clients", "access", "security"] as Section[]).map((item) => <button key={item} className={section === item ? "active" : ""} onClick={() => setSection(item)}>{sectionLabel(item)}<span>{sectionCount(item, data)}</span></button>)}</nav>

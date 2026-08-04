@@ -1,4 +1,5 @@
 import { base64url, sessionSigningInput } from '/pair/session.js';
+import { catalogs } from '/pair/catalog.generated.js';
 import { CONTROL_STORES, controlStorageKey, withControlStore } from '/pair/storage.js';
 
 const button = document.querySelector('#pair');
@@ -12,6 +13,18 @@ let realtimeTimer;
 let realtimeAttempt = 0;
 let realtimeAuthFailures = 0;
 let realtimeGeneration = 0;
+let locale = 'zh-CN';
+const text = key => catalogs[locale]?.[key] ?? catalogs['zh-CN'][key] ?? key;
+
+const setLocale = async value => {
+  locale = value === 'en-US' ? 'en-US' : 'zh-CN';
+  document.documentElement.lang = locale;
+  document.querySelectorAll('[data-i18n]').forEach(element => { element.textContent = text(element.dataset.i18n); });
+  document.querySelectorAll('[data-locale]').forEach(element => element.classList.toggle('active', element.dataset.locale === locale));
+  await withControlStore(CONTROL_STORES.preferences, 'readwrite', store => store.put(locale, 'language')).catch(() => {});
+};
+document.querySelectorAll('[data-locale]').forEach(button => button.addEventListener('click', () => void setLocale(button.dataset.locale)));
+withControlStore(CONTROL_STORES.preferences, 'readonly', store => store.get('language')).then(value => setLocale(value)).catch(() => setLocale('zh-CN'));
 
 const setStatus = (text, state = '') => {
   statusText.textContent = text;
@@ -49,7 +62,7 @@ const connectRealtime = client => {
   const firstConnected = new Promise((resolve, reject) => { firstConnection = { resolve, reject }; });
   const schedule = () => {
     if (generation !== realtimeGeneration || realtimeAuthFailures >= 10 || realtimeTimer) return;
-    setStatus(realtimeAuthFailures >= 10 ? '需要重新配对' : '实时连接已断开，正在重连', 'waiting');
+    setStatus(realtimeAuthFailures >= 10 ? text('pair.reauth') : text('pair.reconnecting'), 'waiting');
     const base = Math.min(30000, 500 * 2 ** realtimeAttempt++);
     const jitter = 0.8 + crypto.getRandomValues(new Uint8Array(1))[0] / 255 * 0.4;
     realtimeTimer = setTimeout(() => {
@@ -59,7 +72,7 @@ const connectRealtime = client => {
   };
   const attempt = () => {
     if (generation !== realtimeGeneration) return;
-    setStatus(realtimeAttempt ? '正在重连安全实时连接' : '正在建立安全实时连接', 'waiting');
+    setStatus(realtimeAttempt ? text('pair.reconnecting') : text('pair.connecting'), 'waiting');
     const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
     let socket;
     try {
@@ -79,7 +92,7 @@ const connectRealtime = client => {
         if (realtimeAuthFailures >= 10) {
           settled = true;
           firstConnection.reject(new Error('reauthentication_required'));
-          setStatus('需要重新配对', 'error');
+          setStatus(text('pair.reauth'), 'error');
         } else {
           schedule();
         }
@@ -106,7 +119,7 @@ const connectRealtime = client => {
           settled = true;
           firstConnection.resolve();
         }
-        setStatus('HTTPS/WSS 已安全连接', 'done');
+        setStatus(text('pair.connected'), 'done');
         continueLink.hidden = false;
       } catch {
         socket.close();
@@ -139,7 +152,7 @@ const poll = async (pairing, client) => {
       });
       await deleteKey(`pending:${pairing.pairingId}`);
       history.replaceState(null, '', `${location.pathname}${location.search}`);
-      setStatus('正在建立安全实时连接', 'waiting');
+      setStatus(text('pair.connecting'), 'waiting');
       await connectRealtime(identity);
       return;
     }
@@ -200,7 +213,7 @@ const initializeFromLocation = () => {
     continueLink.hidden = true;
     details.hidden = true;
     fingerprint.textContent = '';
-    setStatus('配对链接已就绪');
+    setStatus(text('pair.ready'));
     return;
   }
   getKey('active').then(active => {

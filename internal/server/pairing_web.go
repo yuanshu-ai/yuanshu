@@ -37,6 +37,12 @@ func PairingPageHandler() http.Handler {
 		raw, _ := pairingWeb.ReadFile("pairing-web/storage.js")
 		_, _ = w.Write(raw)
 	})
+	mux.HandleFunc("GET /pair/catalog.generated.js", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		raw, _ := pairingWeb.ReadFile("pairing-web/catalog.generated.js")
+		_, _ = w.Write(raw)
+	})
 	mux.HandleFunc("GET /pair/style.css", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")

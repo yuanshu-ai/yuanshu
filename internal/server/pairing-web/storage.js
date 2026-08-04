@@ -1,11 +1,12 @@
 export const CONTROL_DATABASE_NAME = 'yuanshu-control-client';
-export const CONTROL_DATABASE_VERSION = 4;
+export const CONTROL_DATABASE_VERSION = 5;
 export const CONTROL_STORES = Object.freeze({
   keys: 'keys',
   cursors: 'event-cursors',
   sequences: 'control-sequences',
   nodes: 'node-bindings',
   runtimeSettings: 'runtime-settings',
+  preferences: 'preferences',
 });
 
 export function openControlDatabase(databaseName = CONTROL_DATABASE_NAME, factory = globalThis.indexedDB) {

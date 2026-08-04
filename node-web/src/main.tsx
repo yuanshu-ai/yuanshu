@@ -3,9 +3,10 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
 import "./app.css";
+import { LanguageProvider, LanguageSwitch } from "./i18n";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <LanguageProvider><LanguageSwitch /><App /></LanguageProvider>
   </StrictMode>,
 );

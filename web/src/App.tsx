@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { BrandMark } from "./BrandMark";
+import { LanguageSwitch, useI18n } from "./i18n";
 import { IndexedDBControlStorage, type ControlStorage, type StoredControlIdentity } from "./relay/storage";
 import { loadRuntimeSettings, type RuntimeSettings } from "./relay/runtime-config";
 import { ConnectionSettings } from "./workbench/Settings";
@@ -64,9 +65,11 @@ export function WorkbenchApp() {
 export const App = WorkbenchApp;
 
 function LoadingScreen() {
-  return <main className="loading-screen"><BrandMark className="brand-mark-large" /><h1>正在恢复工作台</h1><p>从浏览器安全存储读取控制端身份和本地上下文。</p><div className="loading-line" /></main>;
+  const { t } = useI18n();
+  return <main className="loading-screen"><LanguageSwitch /><BrandMark className="brand-mark-large" /><h1>{t("workbench.loading.title")}</h1><p>{t("workbench.loading.description")}</p><div className="loading-line" /></main>;
 }
 
 function PairingScreen({ pairingURL, settings, storage, reason, configured, onRestart }: { pairingURL: string; settings: RuntimeSettings; storage?: ControlStorage; reason?: string; configured: boolean; onRestart: () => void }) {
-  return <main className="pairing-screen"><div className="pairing-card"><BrandMark className="brand-mark-large" /><p className="pairing-kicker">个人控制端</p><h1>连接你的 Codex 工作区</h1><p>{configured ? "填写办公室或家庭电脑的 HTTPS 和 WSS 地址，保存后即可从手机连接。" : "先从办公室或家庭电脑生成配对链接。控制端身份只保存在当前浏览器。"}</p>{reason && <small className="form-error">{reason}</small>}{!configured && pairingURL && <a className="button primary pairing-link" href={pairingURL}>打开配对页</a>}{storage ? <ConnectionSettings initial={settings} storage={storage} compact onSaved={onRestart} /> : <small className="form-error">浏览器 IndexedDB 不可用，无法保存连接设置。</small>}<div className="trust-note">私钥不会进入 URL、日志或 Server。</div></div></main>;
+  const { t } = useI18n();
+  return <main className="pairing-screen"><LanguageSwitch /><div className="pairing-card"><BrandMark className="brand-mark-large" /><p className="pairing-kicker">{t("workbench.pairing.kicker")}</p><h1>{t("workbench.pairing.title")}</h1><p>{configured ? t("setup.node.serverURL.help") : t("workbench.pairing.description")}</p>{reason && <small className="form-error">{reason}</small>}{!configured && pairingURL && <a className="button primary pairing-link" href={pairingURL}>{t("workbench.openPairing")}</a>}{storage ? <ConnectionSettings initial={settings} storage={storage} compact onSaved={onRestart} /> : <small className="form-error">{t("error.indexedDBUnavailable")}</small>}<div className="trust-note">{t("workbench.securityNote")}</div></div></main>;
 }

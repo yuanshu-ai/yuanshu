@@ -524,3 +524,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 
 @keyframes status-pulse { 50% { opacity: .35; } }
+/* Language choice is deliberately independent from workbench state so the
+   first decision never creates a Relay connection or control identity. */
+.language-loading,.language-choice{min-height:100dvh;display:grid;place-items:center;padding:24px;background:#0b0d0f;color:#eef2ef}.language-choice section{width:min(520px,100%);border:1px solid #2a2f2d;border-radius:8px;padding:32px;background:#111513}.language-choice h1{font-size:clamp(28px,5vw,42px);letter-spacing:-.035em;margin:8px 0 12px}.language-choice p{color:#9ca8a1;line-height:1.65}.language-choice-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:28px}.language-switch{display:inline-flex;align-items:center;gap:7px;color:#728078;font-size:12px}.language-switch button{border:0;background:none;color:inherit;padding:4px;cursor:pointer}.language-switch button.active{color:#72d7a2}.language-switch button:focus-visible{outline:2px solid #72d7a2;outline-offset:2px}
