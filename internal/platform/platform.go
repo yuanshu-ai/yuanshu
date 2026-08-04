@@ -29,6 +29,7 @@ type Platform interface {
 	Family() Family
 	SecureStore() SecureStore
 	Processes() ProcessManager
+	ProcessInspector() ProcessInspector
 	IPC() LocalIPC
 	Autostart() AutostartManager
 	Workspaces() WorkspaceInspector
@@ -71,6 +72,30 @@ type Process interface {
 type ProcessManager interface {
 	Available() bool
 	Start(ctx context.Context, spec ProcessSpec) (Process, error)
+}
+
+type ProcessState string
+
+const (
+	ProcessRunning ProcessState = "running"
+	ProcessStopped ProcessState = "stopped"
+	ProcessUnknown ProcessState = "unknown"
+)
+
+// ProcessQuery deliberately accepts executable basenames only. Implementations
+// must not collect or return command lines, environment values, PIDs, or paths.
+type ProcessQuery struct {
+	ExecutableNames []string
+}
+
+type ProcessSummary struct {
+	State   ProcessState
+	Matches int
+}
+
+type ProcessInspector interface {
+	Available() bool
+	Inspect(ctx context.Context, query ProcessQuery) (ProcessSummary, error)
 }
 
 // IPCName is a logical endpoint identifier. Only a LocalIPC implementation

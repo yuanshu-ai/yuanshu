@@ -346,6 +346,7 @@ func Run(ctx context.Context, options Options) error {
 
 	registry, err := builtin.NewRegistry(builtin.Options{
 		CodexConfig: loaded.Config.Adapters.Codex, Processes: options.Platform.Processes(),
+		Inspector:  options.Platform.ProcessInspector(),
 		Workspaces: workspaceManager, Threads: local,
 	})
 	if err != nil {

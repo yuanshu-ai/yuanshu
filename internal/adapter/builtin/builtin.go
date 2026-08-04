@@ -34,10 +34,21 @@ type RuntimeThreadStore interface {
 type Options struct {
 	CodexConfig     config.CodexAdapterConfig
 	Processes       platform.ProcessManager
+	Inspector       platform.ProcessInspector
 	Workspaces      WorkspaceResolver
 	Threads         RuntimeThreadStore
 	EventCapacity   int
 	ApprovalTimeout time.Duration
+}
+
+func NewInventory(options Options) (*adapter.Inventory, error) {
+	detector, err := codex.NewDetector(codex.DetectorOptions{
+		Config: options.CodexConfig, Processes: options.Processes, Inspector: options.Inspector,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adapter.NewInventory(detector)
 }
 
 func NewRegistry(options Options) (*adapter.Registry, error) {

@@ -50,6 +50,8 @@ type host struct {
 	mu               sync.Mutex
 	local            *store.Store
 	runtime          adapter.Runtime
+	inventory        *adapter.Inventory
+	inventoryCancel  context.CancelFunc
 	pairing          *pairingManager
 	joiner           *nodeEnrollmentJoiner
 	trustCancel      context.CancelFunc
@@ -238,6 +240,7 @@ func (h *host) reload(ctx context.Context) error {
 	}
 	registry, err := builtin.NewRegistry(builtin.Options{
 		CodexConfig: loaded.Config.Adapters.Codex, Processes: h.options.platform.Processes(),
+		Inspector:  h.options.platform.ProcessInspector(),
 		Workspaces: workspaceManager, Threads: local,
 	})
 	if err != nil {
@@ -254,6 +257,12 @@ func (h *host) reload(ctx context.Context) error {
 		return h.fail("codex_unavailable")
 	}
 	adapterInstance := handle.Adapter
+	if inventory, inventoryErr := builtin.NewInventory(builtin.Options{
+		CodexConfig: loaded.Config.Adapters.Codex, Processes: h.options.platform.Processes(),
+		Inspector: h.options.platform.ProcessInspector(),
+	}); inventoryErr == nil {
+		h.startInventoryLocked(inventory)
+	}
 	h.status.update(func(value *Status) { value.Codex = "ready" })
 	threads, err := local.RuntimeThreads(ctx)
 	if err != nil {
@@ -530,6 +539,11 @@ func (h *host) closeResourcesLocked() error {
 		cancel()
 		h.runtime = nil
 	}
+	if h.inventoryCancel != nil {
+		h.inventoryCancel()
+		h.inventoryCancel = nil
+		h.inventory = nil
+	}
 	if h.local != nil {
 		if err := h.local.Close(); err != nil {
 			result = errors.Join(result, errors.New("database close failed"))
@@ -537,6 +551,27 @@ func (h *host) closeResourcesLocked() error {
 		h.local = nil
 	}
 	return result
+}
+
+func (h *host) startInventoryLocked(inventory *adapter.Inventory) {
+	if h.inventoryCancel != nil {
+		h.inventoryCancel()
+	}
+	ctx, cancel := context.WithCancel(h.runCtx)
+	h.inventory, h.inventoryCancel = inventory, cancel
+	go func() {
+		_, _ = inventory.Refresh(ctx)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, _ = inventory.Refresh(ctx)
+			}
+		}
+	}()
 }
 
 func (h *host) handleLocalManagement(ctx context.Context, request localRequest) localResponse {

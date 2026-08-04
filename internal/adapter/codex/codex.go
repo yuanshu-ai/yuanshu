@@ -82,28 +82,7 @@ func (*Adapter) Capabilities() adapter.CapabilitySet {
 }
 
 func (a *Adapter) Detect(ctx context.Context) (adapter.Installation, error) {
-	output, err := a.runVersion(ctx)
-	if err != nil {
-		return adapter.Installation{}, err
-	}
-	version := normalizeDetectedVersion(output)
-	if version == "" {
-		return adapter.Installation{}, adapter.ErrUnavailable
-	}
-	protocol := ProtocolVersion
-	compatibility := adapter.CompatibilityUnverified
-	if profile, known := compatibilityForVersion(version); known {
-		compatibility = adapter.CompatibilityKnown
-		if profile.Protocol != "" {
-			protocol = profile.Protocol
-		}
-	}
-	// The compatibility matrix is intentionally informational. Codex evolves
-	// independently of Yuanshu, so an unknown version is allowed to proceed to
-	// app-server initialization and capability probing.
-	return adapter.Installation{
-		Detected: true, Version: version, Protocol: protocol, Compatibility: compatibility,
-	}, nil
+	return detectInstallation(ctx, a.options.Config, a.options.Processes)
 }
 
 func normalizeDetectedVersion(output string) string {

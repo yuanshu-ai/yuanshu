@@ -14,9 +14,12 @@ func newUnavailablePlatform(family Family) Platform {
 	return &unavailablePlatform{family: family}
 }
 
-func (p *unavailablePlatform) Family() Family                   { return p.family }
-func (p *unavailablePlatform) SecureStore() SecureStore         { return p.all }
-func (p *unavailablePlatform) Processes() ProcessManager        { return p.all }
+func (p *unavailablePlatform) Family() Family            { return p.family }
+func (p *unavailablePlatform) SecureStore() SecureStore  { return p.all }
+func (p *unavailablePlatform) Processes() ProcessManager { return p.all }
+func (p *unavailablePlatform) ProcessInspector() ProcessInspector {
+	return unavailableProcessInspector{}
+}
 func (p *unavailablePlatform) IPC() LocalIPC                    { return p.all }
 func (p *unavailablePlatform) Autostart() AutostartManager      { return p.all }
 func (p *unavailablePlatform) Workspaces() WorkspaceInspector   { return p.all }
@@ -40,6 +43,14 @@ func (unavailableCapabilities) Delete(context.Context, SecretRef) error {
 
 func (unavailableCapabilities) Start(context.Context, ProcessSpec) (Process, error) {
 	return nil, ErrUnavailable
+}
+
+type unavailableProcessInspector struct{}
+
+func (unavailableProcessInspector) Available() bool { return false }
+
+func (unavailableProcessInspector) Inspect(context.Context, ProcessQuery) (ProcessSummary, error) {
+	return ProcessSummary{State: ProcessUnknown}, ErrUnavailable
 }
 
 func (unavailableCapabilities) Listen(context.Context, IPCName) (net.Listener, error) {

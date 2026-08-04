@@ -11,6 +11,7 @@ import (
 type windowsPlatform struct {
 	secure     SecureStore
 	processes  ProcessManager
+	inspector  ProcessInspector
 	ipc        LocalIPC
 	autostart  AutostartManager
 	workspaces WorkspaceInspector
@@ -27,6 +28,7 @@ func Current() Platform {
 			return filepath.Join(root, "Yuanshu", "secrets-v1"), nil
 		}),
 		processes:  newWindowsProcessManager(),
+		inspector:  newWindowsProcessInspector(),
 		ipc:        newWindowsLocalIPC(),
 		autostart:  newWindowsAutostartManager(),
 		workspaces: newWindowsWorkspaceInspector(),
@@ -34,10 +36,11 @@ func Current() Platform {
 	}
 }
 
-func (*windowsPlatform) Family() Family                     { return FamilyWindows }
-func (p *windowsPlatform) SecureStore() SecureStore         { return p.secure }
-func (p *windowsPlatform) Processes() ProcessManager        { return p.processes }
-func (p *windowsPlatform) IPC() LocalIPC                    { return p.ipc }
-func (p *windowsPlatform) Autostart() AutostartManager      { return p.autostart }
-func (p *windowsPlatform) Workspaces() WorkspaceInspector   { return p.workspaces }
-func (p *windowsPlatform) DirectoryPicker() DirectoryPicker { return p.picker }
+func (*windowsPlatform) Family() Family                       { return FamilyWindows }
+func (p *windowsPlatform) SecureStore() SecureStore           { return p.secure }
+func (p *windowsPlatform) Processes() ProcessManager          { return p.processes }
+func (p *windowsPlatform) ProcessInspector() ProcessInspector { return p.inspector }
+func (p *windowsPlatform) IPC() LocalIPC                      { return p.ipc }
+func (p *windowsPlatform) Autostart() AutostartManager        { return p.autostart }
+func (p *windowsPlatform) Workspaces() WorkspaceInspector     { return p.workspaces }
+func (p *windowsPlatform) DirectoryPicker() DirectoryPicker   { return p.picker }

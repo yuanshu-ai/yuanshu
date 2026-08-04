@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/yuanshu-ai/yuanshu/internal/platform"
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
 )
 
@@ -34,8 +35,26 @@ type Installation struct {
 type Compatibility string
 
 const (
-	CompatibilityKnown      Compatibility = "known"
-	CompatibilityUnverified Compatibility = "unverified"
+	CompatibilityKnown       Compatibility = "known"
+	CompatibilityUnverified  Compatibility = "unverified"
+	CompatibilityUnsupported Compatibility = "unsupported"
+)
+
+type InstallationState string
+
+const (
+	InstallationInstalled    InstallationState = "installed"
+	InstallationNotInstalled InstallationState = "not_installed"
+	InstallationIncompatible InstallationState = "incompatible"
+	InstallationUnavailable  InstallationState = "unavailable"
+)
+
+type ProcessState = platform.ProcessState
+
+const (
+	ProcessRunning = platform.ProcessRunning
+	ProcessStopped = platform.ProcessStopped
+	ProcessUnknown = platform.ProcessUnknown
 )
 
 type CapabilitySet struct {

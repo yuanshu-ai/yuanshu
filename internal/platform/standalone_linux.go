@@ -16,6 +16,7 @@ type LinuxStandaloneOptions struct {
 type linuxStandalonePlatform struct {
 	secure     *linuxEncryptedStore
 	processes  ProcessManager
+	inspector  ProcessInspector
 	ipc        LocalIPC
 	workspaces WorkspaceInspector
 }
@@ -28,17 +29,18 @@ func NewLinuxStandalone(options LinuxStandaloneOptions) (Platform, io.Closer, er
 	if err != nil {
 		return nil, nil, err
 	}
-	value := &linuxStandalonePlatform{secure: secure, processes: newLinuxProcessManager(), ipc: newLinuxLocalIPC(), workspaces: newLinuxWorkspaceInspector()}
+	value := &linuxStandalonePlatform{secure: secure, processes: newLinuxProcessManager(), inspector: newLinuxProcessInspector(), ipc: newLinuxLocalIPC(), workspaces: newLinuxWorkspaceInspector()}
 	return value, value, nil
 }
 
-func (*linuxStandalonePlatform) Family() Family                   { return FamilyLinux }
-func (p *linuxStandalonePlatform) SecureStore() SecureStore       { return p.secure }
-func (p *linuxStandalonePlatform) Processes() ProcessManager      { return p.processes }
-func (p *linuxStandalonePlatform) IPC() LocalIPC                  { return p.ipc }
-func (p *linuxStandalonePlatform) Workspaces() WorkspaceInspector { return p.workspaces }
-func (*linuxStandalonePlatform) Autostart() AutostartManager      { return unavailableCapabilities{} }
-func (*linuxStandalonePlatform) DirectoryPicker() DirectoryPicker { return unavailableCapabilities{} }
+func (*linuxStandalonePlatform) Family() Family                       { return FamilyLinux }
+func (p *linuxStandalonePlatform) SecureStore() SecureStore           { return p.secure }
+func (p *linuxStandalonePlatform) Processes() ProcessManager          { return p.processes }
+func (p *linuxStandalonePlatform) ProcessInspector() ProcessInspector { return p.inspector }
+func (p *linuxStandalonePlatform) IPC() LocalIPC                      { return p.ipc }
+func (p *linuxStandalonePlatform) Workspaces() WorkspaceInspector     { return p.workspaces }
+func (*linuxStandalonePlatform) Autostart() AutostartManager          { return unavailableCapabilities{} }
+func (*linuxStandalonePlatform) DirectoryPicker() DirectoryPicker     { return unavailableCapabilities{} }
 
 func (p *linuxStandalonePlatform) Close() error {
 	if p.secure == nil {

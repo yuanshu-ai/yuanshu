@@ -18,6 +18,32 @@ type Adapter struct {
 	StartError       error
 }
 
+type Detector struct {
+	AgentValue adapter.AgentDescriptor
+	Items      []adapter.InstallationDescriptor
+	Error      error
+}
+
+var _ adapter.Detector = (*Detector)(nil)
+
+func NewDetector(agentType, displayName string, items ...adapter.InstallationDescriptor) *Detector {
+	agent := adapter.AgentDescriptor{Type: agentType, DisplayName: displayName}
+	copyItems := append([]adapter.InstallationDescriptor(nil), items...)
+	for index := range copyItems {
+		copyItems[index].Agent = agent
+	}
+	return &Detector{AgentValue: agent, Items: copyItems}
+}
+
+func (d *Detector) Agent() adapter.AgentDescriptor { return d.AgentValue }
+
+func (d *Detector) Detect(context.Context) ([]adapter.InstallationDescriptor, error) {
+	if d.Error != nil {
+		return nil, d.Error
+	}
+	return append([]adapter.InstallationDescriptor(nil), d.Items...), nil
+}
+
 var _ adapter.AgentAdapter = (*Adapter)(nil)
 
 func New(id string) *Adapter {

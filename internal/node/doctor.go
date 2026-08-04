@@ -85,8 +85,32 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 			return status, false
 		}
 	}
+	inventory, err := builtin.NewInventory(builtin.Options{
+		CodexConfig: loaded.Config.Adapters.Codex, Processes: current.Processes(), Inspector: current.ProcessInspector(),
+	})
+	if err != nil {
+		status.Codex, status.Compatibility = "unavailable", "unavailable"
+		return status, false
+	}
+	inventorySnapshot, err := inventory.Refresh(ctx)
+	if err != nil || len(inventorySnapshot.Installations) != 1 {
+		status.Codex, status.Compatibility = "unavailable", "unavailable"
+		return status, false
+	}
+	detected := inventorySnapshot.Installations[0]
+	switch detected.State {
+	case adapter.InstallationInstalled:
+		status.Codex = "ready"
+	case adapter.InstallationIncompatible:
+		status.Codex, status.Compatibility = "unsupported", "unsupported"
+		return status, false
+	default:
+		status.Codex, status.Compatibility = "unavailable", "unavailable"
+		return status, false
+	}
+	status.Compatibility = string(detected.Installation.Compatibility)
 	registry, err := builtin.NewRegistry(builtin.Options{
-		CodexConfig: loaded.Config.Adapters.Codex, Processes: current.Processes(),
+		CodexConfig: loaded.Config.Adapters.Codex, Processes: current.Processes(), Inspector: current.ProcessInspector(),
 		Workspaces: diagnosticWorkspace{}, Threads: diagnosticThreads{}, ApprovalTimeout: time.Second,
 	})
 	if err != nil {
