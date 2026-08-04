@@ -9,6 +9,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/adapter/builtin"
 	"github.com/yuanshu-ai/yuanshu/internal/config"
+	noderuntime "github.com/yuanshu-ai/yuanshu/internal/node/runtime"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
@@ -138,7 +139,15 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 	if status.Compatibility == "" {
 		status.Compatibility = "unverified"
 	}
-	runtime, err := handle.Adapter.StartRuntime(ctx)
+	runtimeManager, err := noderuntime.NewManager(noderuntime.Options{})
+	if err != nil {
+		status.Authentication = "unavailable"
+		return status, false
+	}
+	runtime, err := runtimeManager.Open(ctx, noderuntime.OpenRequest{
+		Key:  noderuntime.RuntimeKey{InstanceID: builtin.CodexDefaultInstanceID, EndpointID: builtin.CodexDefaultEndpointID},
+		Mode: adapter.RuntimeManaged, Factory: handle.Adapter.StartRuntime,
+	})
 	if err != nil {
 		status.Authentication = "unavailable"
 		return status, false
@@ -146,7 +155,7 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 	health := runtime.Health()
 	status.Authentication = health.Authentication
 	closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	closeErr := runtime.Close(closeCtx)
+	closeErr := runtimeManager.Close(closeCtx)
 	cancel()
 	if closeErr != nil {
 		status.Authentication = "unavailable"

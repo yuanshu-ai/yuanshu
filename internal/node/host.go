@@ -21,6 +21,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/config"
 	"github.com/yuanshu-ai/yuanshu/internal/node/eventlog"
 	"github.com/yuanshu-ai/yuanshu/internal/node/identity"
+	noderuntime "github.com/yuanshu-ai/yuanshu/internal/node/runtime"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
@@ -50,6 +51,7 @@ type host struct {
 	mu               sync.Mutex
 	local            *store.Store
 	runtime          adapter.Runtime
+	runtimeManager   *noderuntime.Manager
 	inventory        *adapter.Inventory
 	inventoryCancel  context.CancelFunc
 	pairing          *pairingManager
@@ -257,6 +259,11 @@ func (h *host) reload(ctx context.Context) error {
 		return h.fail("codex_unavailable")
 	}
 	adapterInstance := handle.Adapter
+	runtimeManager, err := noderuntime.NewManager(noderuntime.Options{})
+	if err != nil {
+		return h.fail("codex_unavailable")
+	}
+	h.runtimeManager = runtimeManager
 	if inventory, inventoryErr := builtin.NewInventory(builtin.Options{
 		CodexConfig: loaded.Config.Adapters.Codex, Processes: h.options.platform.Processes(),
 		Inspector: h.options.platform.ProcessInspector(),
@@ -277,7 +284,10 @@ func (h *host) reload(ctx context.Context) error {
 	}
 	if needsRecovery && bound {
 		h.status.update(func(value *Status) { value.Recovery = "recovering" })
-		runtime, err := adapterInstance.StartRuntime(ctx)
+		runtime, err := runtimeManager.Open(ctx, noderuntime.OpenRequest{
+			Key:  noderuntime.RuntimeKey{InstanceID: builtin.CodexDefaultInstanceID, EndpointID: builtin.CodexDefaultEndpointID},
+			Mode: adapter.RuntimeManaged, Factory: adapterInstance.StartRuntime,
+		})
 		if err != nil {
 			return h.fail("recovery_unavailable")
 		}
@@ -309,7 +319,10 @@ func (h *host) reload(ctx context.Context) error {
 		h.status.update(func(value *Status) { value.Recovery = "deferred_unpaired" })
 	}
 	if bound && loaded.Config.Transport.Mode == config.TransportRelay {
-		runtime, err := adapterInstance.StartRuntime(ctx)
+		runtime, err := runtimeManager.Open(ctx, noderuntime.OpenRequest{
+			Key:  noderuntime.RuntimeKey{InstanceID: builtin.CodexDefaultInstanceID, EndpointID: builtin.CodexDefaultEndpointID},
+			Mode: adapter.RuntimeManaged, Factory: adapterInstance.StartRuntime,
+		})
 		if err != nil {
 			return h.fail("codex_unavailable")
 		}
@@ -531,7 +544,15 @@ func (h *host) closeResourcesLocked() error {
 		h.joiner.Close()
 		h.joiner = nil
 	}
-	if h.runtime != nil {
+	if h.runtimeManager != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := h.runtimeManager.Close(ctx); err != nil {
+			result = errors.New("runtime close failed")
+		}
+		cancel()
+		h.runtimeManager = nil
+		h.runtime = nil
+	} else if h.runtime != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := h.runtime.Close(ctx); err != nil {
 			result = errors.New("runtime close failed")

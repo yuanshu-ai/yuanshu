@@ -57,6 +57,14 @@ const (
 	ProcessUnknown = platform.ProcessUnknown
 )
 
+type RuntimeMode string
+
+const (
+	RuntimeManaged      RuntimeMode = "managed"
+	RuntimeHistoryOnly  RuntimeMode = "history-only"
+	RuntimeDetectedOnly RuntimeMode = "detected-only"
+)
+
 type CapabilitySet struct {
 	ThreadList    bool
 	ThreadRead    bool

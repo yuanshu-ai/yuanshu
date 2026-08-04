@@ -22,6 +22,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/node"
 	"github.com/yuanshu-ai/yuanshu/internal/node/eventlog"
 	"github.com/yuanshu-ai/yuanshu/internal/node/identity"
+	noderuntime "github.com/yuanshu-ai/yuanshu/internal/node/runtime"
 	nodestore "github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
@@ -356,11 +357,18 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("Codex adapter is unavailable"))
 	}
-	runtime, err := handle.Adapter.StartRuntime(ctx)
+	runtimeManager, err := noderuntime.NewManager(noderuntime.Options{})
+	if err != nil {
+		return errors.Join(ErrUnavailable, errors.New("Codex runtime manager is unavailable"))
+	}
+	defer closeRuntimeManager(runtimeManager)
+	runtime, err := runtimeManager.Open(ctx, noderuntime.OpenRequest{
+		Key:  noderuntime.RuntimeKey{InstanceID: builtin.CodexDefaultInstanceID, EndpointID: builtin.CodexDefaultEndpointID},
+		Mode: adapter.RuntimeManaged, Factory: handle.Adapter.StartRuntime,
+	})
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("Codex runtime is unavailable"))
 	}
-	defer closeRuntime(runtime)
 	events, err := eventlog.NewManager(local, eventlog.Options{
 		OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID,
 		MaxAge:   time.Duration(loaded.Config.Events.MaxAgeHours) * time.Hour,
@@ -509,8 +517,8 @@ func prepareDirectory(path string) error {
 	return nil
 }
 
-func closeRuntime(runtime adapter.Runtime) {
+func closeRuntimeManager(manager *noderuntime.Manager) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = runtime.Close(ctx)
+	_ = manager.Close(ctx)
 }

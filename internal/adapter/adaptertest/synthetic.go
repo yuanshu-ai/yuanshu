@@ -82,6 +82,7 @@ type Runtime struct {
 	HealthValue    adapter.HealthStatus
 	events         chan adapter.AgentEvent
 	closed         bool
+	CloseHook      func()
 }
 
 var _ adapter.Runtime = (*Runtime)(nil)
@@ -127,14 +128,39 @@ func (r *Runtime) ResolveApproval(context.Context, adapter.ApprovalDecision) err
 
 func (r *Runtime) Events() <-chan adapter.AgentEvent { return r.events }
 
-func (r *Runtime) Health() adapter.HealthStatus { return r.HealthValue }
+func (r *Runtime) Health() adapter.HealthStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.HealthValue
+}
 
 func (r *Runtime) Close(context.Context) error {
 	r.mu.Lock()
 	if !r.closed {
 		close(r.events)
 		r.closed = true
+		if r.CloseHook != nil {
+			r.CloseHook()
+		}
 	}
 	r.mu.Unlock()
 	return nil
+}
+
+func (r *Runtime) Emit(event adapter.AgentEvent) bool {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return false
+	}
+	channel := r.events
+	r.mu.Unlock()
+	channel <- event
+	return true
+}
+
+func (r *Runtime) Closed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closed
 }

@@ -18,6 +18,7 @@ import (
 const (
 	CodexAgentType         = "codex"
 	CodexDefaultInstanceID = "codex-default"
+	CodexDefaultEndpointID = "codex-default-managed"
 )
 
 type WorkspaceResolver interface {
