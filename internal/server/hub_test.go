@@ -75,7 +75,6 @@ func (f hubFixture) dialNode(t *testing.T) transport.Transport {
 	t.Helper()
 	header := make(http.Header)
 	header.Set("X-Yuanshu-Node-ID", f.store.node.NodeID)
-	header.Set("Authorization", "Bearer "+f.credential)
 	result, _, err := transport.DialRelay(context.Background(), wssURL(f.server.URL)+"/node/connect", transport.RelayDialOptions{
 		HTTPClient: f.server.Client(), Header: header, Role: transport.SessionRoleNode, SubjectID: f.store.node.NodeID,
 		Sign:  func(_ context.Context, input []byte) ([]byte, error) { return ed25519.Sign(f.nodePrivate, input), nil },
@@ -515,7 +514,7 @@ func TestHubRejectsPlaintextOriginCredentialAndTargetSpoofing(t *testing.T) {
 		},
 		Relay: transport.RelayOptions{MaxSendBytes: 1 << 20, MaxReceiveBytes: 256 << 10},
 	})
-	if err == nil || handshake == nil || handshake.StatusCode != http.StatusUnauthorized || strings.Contains(err.Error(), "wrong-credential-canary") {
+	if err == nil || handshake == nil || handshake.StatusCode != http.StatusUpgradeRequired || strings.Contains(err.Error(), "wrong-credential-canary") {
 		t.Fatalf("credential response=%v err=%v", handshake, err)
 	}
 	wrongOrigin := make(http.Header)

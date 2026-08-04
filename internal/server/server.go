@@ -21,9 +21,11 @@ import (
 )
 
 type LocalNodeSession struct {
-	OwnerID   string
-	NodeID    string
-	Transport transport.Transport
+	OwnerID          string
+	NodeID           string
+	Transport        transport.Transport
+	SessionToken     []byte
+	SessionExpiresAt time.Time
 }
 
 type Options struct {
@@ -214,7 +216,7 @@ func Run(ctx context.Context, options Options) error {
 	localDone := make(chan error, 1)
 	if options.LocalNode != nil {
 		go func() {
-			localDone <- hub.AttachLocalNode(ctx, options.LocalNode.OwnerID, options.LocalNode.NodeID, options.LocalNode.Transport)
+			localDone <- hub.AttachLocalNodeSession(ctx, options.LocalNode.OwnerID, options.LocalNode.NodeID, options.LocalNode.Transport, options.LocalNode.SessionToken, options.LocalNode.SessionExpiresAt)
 		}()
 	}
 	go func() {

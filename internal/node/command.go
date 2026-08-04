@@ -26,7 +26,7 @@ const Usage = `Usage:
   yuanshu node pairing reject <pairing-id>
   yuanshu node clients list
   yuanshu node clients revoke <client-id> <key-id>
-  yuanshu node credential rotate
+  yuanshu node session refresh
   yuanshu node enrollment create
   yuanshu node enrollment list
   yuanshu node enrollment approve <enrollment-id>
@@ -144,7 +144,7 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			return err
 		}
 		return commandAutostart(ctx, current, defaults, args, stdout)
-	case "pairing", "clients", "credential", "enrollment", "devices", "config":
+	case "pairing", "clients", "session", "enrollment", "devices", "config":
 		return commandLocalManagement(ctx, current.IPC(), command, args, stdout)
 	default:
 		return ErrUsage
@@ -195,8 +195,8 @@ func validateNodeArguments(args []string) error {
 			return nil
 		}
 		return ErrUsage
-	case "credential":
-		if len(args) == 1 && args[0] == "rotate" {
+	case "session":
+		if len(args) == 1 && args[0] == "refresh" {
 			return nil
 		}
 		return ErrUsage
@@ -252,8 +252,8 @@ func commandLocalManagement(ctx context.Context, ipc platform.LocalIPC, command 
 		} else {
 			request.Command, request.ClientID, request.KeyID = "client_revoke", args[1], args[2]
 		}
-	case "credential":
-		request.Command = "credential_rotate"
+	case "session":
+		request.Command = "session_refresh"
 	case "enrollment":
 		switch args[0] {
 		case "create":
@@ -312,8 +312,8 @@ func commandLocalManagement(ctx context.Context, ipc platform.LocalIPC, command 
 		fmt.Fprintln(stdout, "Control client declined.")
 	case "client_revoke":
 		fmt.Fprintln(stdout, "Control client revoked.")
-	case "credential_rotate":
-		fmt.Fprintln(stdout, "Node connection credential rotated.")
+	case "session_refresh":
+		fmt.Fprintln(stdout, "Node management session refreshed.")
 	case "enrollment_create":
 		fmt.Fprintln(stdout, response.EnrollmentURL)
 	case "enrollment_list":

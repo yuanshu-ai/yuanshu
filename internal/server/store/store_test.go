@@ -281,7 +281,7 @@ func TestBootstrapClaimPersistsMetadataAndReplaysExactly(t *testing.T) {
 		t.Fatalf("owner=%+v err=%v", owner, err)
 	}
 	nodes, err := local.Nodes(context.Background())
-	if err != nil || len(nodes) != 1 || nodes[0].ID != claim.NodeID || !bytes.Equal(nodes[0].CredentialHash, claim.CredentialHash) {
+	if err != nil || len(nodes) != 1 || nodes[0].ID != claim.NodeID || len(nodes[0].CredentialHash) != 0 {
 		t.Fatalf("nodes=%+v err=%v", nodes, err)
 	}
 	clients, err := local.ControlClients(context.Background())
@@ -347,7 +347,7 @@ func TestSessionLookupsReturnDetachedActiveAndRevokedRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	node, err := local.NodeSession(context.Background(), claim.NodeID)
-	if err != nil || node.OwnerID != claim.OwnerID || node.Status != "active" || !bytes.Equal(node.CredentialHash, claim.CredentialHash) {
+	if err != nil || node.OwnerID != claim.OwnerID || node.Status != "active" || len(node.CredentialHash) != 0 {
 		t.Fatalf("node session=%+v err=%v", node, err)
 	}
 	node.PublicKey[0] ^= 0xff

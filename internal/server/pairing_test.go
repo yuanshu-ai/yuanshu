@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
 
-func TestControlClientPairingApprovalRevocationAndCredentialRotation(t *testing.T) {
+func TestControlClientPairingApprovalRevocationAndNodeSessionRotation(t *testing.T) {
 	service, local, bootstrapSecret := openServerService(t)
 	nodePublic, nodePrivate, _ := ed25519.GenerateKey(nil)
 	credential := "synthetic-current-node-credential"
@@ -108,15 +109,24 @@ func TestControlClientPairingApprovalRevocationAndCredentialRotation(t *testing.
 		t.Fatal("revoked control client remained connected")
 	}
 
-	newCredential := "synthetic-rotated-node-credential"
-	newHash := sha256.Sum256([]byte(newCredential))
-	rotation := enrollment.CredentialRotation{Version: "1", OwnerID: bound.OwnerID, NodeID: bound.NodeID, NewCredentialHash: base64.RawURLEncoding.EncodeToString(newHash[:]), IssuedAt: issued}
-	rotationInput, _ := enrollment.CredentialRotationSigningInput(rotation)
-	doPairingJSON(t, server.Client(), http.MethodPost, server.URL+"/v1/nodes/"+bound.NodeID+"/credential/rotate", map[string]string{"newCredentialHash": rotation.NewCredentialHash, "issuedAt": issued, "signature": base64.RawURLEncoding.EncodeToString(ed25519.Sign(nodePrivate, rotationInput))}, nodeHeaders(bound.NodeID, credential))
-	if _, err := node.Receive(context.Background()); err == nil {
-		t.Fatal("rotated Node connection remained connected")
+	oldHeaders := nodeHeaders(bound.NodeID, credential)
+	rotated := doPairingJSON(t, server.Client(), http.MethodPost, server.URL+"/v1/node-sessions/refresh", map[string]any{}, oldHeaders)
+	var session struct{ SessionToken, SessionExpiresAt string }
+	if json.Unmarshal(rotated, &session) != nil || session.SessionToken == "" || session.SessionToken == oldHeaders.Get("Authorization") {
+		t.Fatalf("session refresh=%s", rotated)
 	}
-	dialPairedTestNode(t, server, hub, bound.NodeID, newCredential, nodePrivate).Close()
+	pairedTestNodeSessions.Store(credential, session.SessionToken)
+	oldRequest, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/nodes", nil)
+	oldRequest.Header = oldHeaders
+	oldResponse, err := server.Client().Do(oldRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldResponse.Body.Close()
+	if oldResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old session status=%d", oldResponse.StatusCode)
+	}
+	_ = doPairingJSON(t, server.Client(), http.MethodGet, server.URL+"/v1/nodes", nil, nodeHeaders(bound.NodeID, credential))
 }
 
 func TestPairingPageUsesStrictBrowserBoundary(t *testing.T) {
@@ -276,15 +286,25 @@ type PairingCandidateWire struct {
 func nodeHeaders(nodeID, credential string) http.Header {
 	header := make(http.Header)
 	header.Set("X-Yuanshu-Node-ID", nodeID)
-	header.Set("Authorization", "Bearer "+credential)
+	if value, ok := pairedTestNodeSessions.Load(credential); ok {
+		header.Set("Authorization", "YuanshuNodeSession "+value.(string))
+	}
 	return header
 }
+
+var pairedTestNodeSessions sync.Map
+
 func dialPairedTestNode(t *testing.T, server *httptest.Server, hub *Hub, nodeID, credential string, private ed25519.PrivateKey) transport.Transport {
 	return dialPairedTestNodeCount(t, server, hub, nodeID, credential, private, 1)
 }
 func dialPairedTestNodeCount(t *testing.T, server *httptest.Server, hub *Hub, nodeID, credential string, private ed25519.PrivateKey, expected int) transport.Transport {
 	t.Helper()
-	result, _, err := transport.DialRelay(context.Background(), wssURL(server.URL)+"/node/connect", transport.RelayDialOptions{HTTPClient: server.Client(), Header: nodeHeaders(nodeID, credential), Role: transport.SessionRoleNode, SubjectID: nodeID, Sign: func(_ context.Context, input []byte) ([]byte, error) { return ed25519.Sign(private, input), nil }, Relay: transport.RelayOptions{MaxSendBytes: 1 << 20, MaxReceiveBytes: 256 << 10}})
+	header := make(http.Header)
+	header.Set("X-Yuanshu-Node-ID", nodeID)
+	result, _, err := transport.DialRelay(context.Background(), wssURL(server.URL)+"/node/connect", transport.RelayDialOptions{HTTPClient: server.Client(), Header: header, Role: transport.SessionRoleNode, SubjectID: nodeID, Sign: func(_ context.Context, input []byte) ([]byte, error) { return ed25519.Sign(private, input), nil }, OnAuthenticated: func(ready transport.SessionReady) error {
+		pairedTestNodeSessions.Store(credential, ready.SessionToken)
+		return nil
+	}, Relay: transport.RelayOptions{MaxSendBytes: 1 << 20, MaxReceiveBytes: 256 << 10}})
 	if err != nil {
 		t.Fatal(err)
 	}

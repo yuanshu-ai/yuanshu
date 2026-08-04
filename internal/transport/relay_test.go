@@ -178,7 +178,11 @@ func newAuthenticatedEchoServer(t *testing.T, public ed25519.PublicKey) *httptes
 			_ = conn.Close(websocket.StatusPolicyViolation, "authentication failed")
 			return
 		}
-		ready, _ := json.Marshal(SessionReady{Version: "1", Type: "authenticated"})
+		ready, _ := json.Marshal(SessionReady{
+			Version: "1", Type: "authenticated",
+			SessionToken:     base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
+			SessionExpiresAt: time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339Nano),
+		})
 		if err := conn.Write(request.Context(), websocket.MessageText, ready); err != nil {
 			return
 		}

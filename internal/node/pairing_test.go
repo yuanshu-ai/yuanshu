@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -32,11 +31,7 @@ func TestPairingManagerCreatesApprovesRevokesAndRotates(t *testing.T) {
 	fakePlatform, _ := platformfake.New(platform.FamilyWindows)
 	secrets := fakePlatform.SecureStore()
 	identityRef := platform.SecretRef("identity-test")
-	credentialRef := platform.SecretRef("credential-test")
-	credential := []byte("synthetic-node-credential-32-byte-value")
-	if err := secrets.Put(context.Background(), credentialRef, credential); err != nil {
-		t.Fatal(err)
-	}
+	sessionToken := []byte("01234567890123456789012345678901")
 	identityManager, err := identity.NewManager(local, secrets, identityRef, identity.Options{Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +49,7 @@ func TestPairingManagerCreatesApprovesRevokesAndRotates(t *testing.T) {
 	var mu sync.Mutex
 	seen := map[string]int{}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Yuanshu-Node-ID") != "nod_test" || r.Header.Get("Authorization") != "Bearer "+string(credential) {
+		if r.Header.Get("X-Yuanshu-Node-ID") != "nod_test" || r.Header.Get("Authorization") != "YuanshuNodeSession "+base64.RawURLEncoding.EncodeToString(sessionToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -71,17 +66,9 @@ func TestPairingManagerCreatesApprovesRevokesAndRotates(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]string{"status": "approved"})
 		case "DELETE /v1/control-clients/cli_test":
 			w.WriteHeader(http.StatusNoContent)
-		case "POST /v1/nodes/nod_test/credential/rotate":
-			var body struct {
-				NewCredentialHash string `json:"newCredentialHash"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			decoded, _ := base64.RawURLEncoding.DecodeString(body.NewCredentialHash)
-			if len(decoded) != sha256.Size {
-				http.Error(w, "bad", http.StatusBadRequest)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
+		case "POST /v1/node-sessions/refresh":
+			sessionToken = []byte("abcdefghijklmnopqrstuvwxyzABCDEF")
+			json.NewEncoder(w).Encode(map[string]string{"sessionToken": base64.RawURLEncoding.EncodeToString(sessionToken), "sessionExpiresAt": now.Add(15 * time.Minute).Format(time.RFC3339Nano)})
 		default:
 			http.NotFound(w, r)
 		}
@@ -89,7 +76,7 @@ func TestPairingManagerCreatesApprovesRevokesAndRotates(t *testing.T) {
 	server := httptest.NewTLSServer(handler)
 	defer server.Close()
 	relayURL := strings.Replace(server.URL, "https://", "wss://", 1) + "/node/connect"
-	manager, err := newPairingManager(pairingManagerOptions{RelayURL: relayURL, HTTPClient: server.Client(), Identity: nodeIdentity, Signer: identityManager, Local: local, Secrets: secrets, CredentialRef: credentialRef, Credential: credential, Clock: func() time.Time { return now }})
+	manager, err := newPairingManager(pairingManagerOptions{RelayURL: relayURL, HTTPClient: server.Client(), Identity: nodeIdentity, Signer: identityManager, Local: local, SessionToken: sessionToken, SessionExpiresAt: now.Add(15 * time.Minute), Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,14 +106,14 @@ func TestPairingManagerCreatesApprovesRevokesAndRotates(t *testing.T) {
 	if err := manager.RotateCredential(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	rotated, err := secrets.Get(context.Background(), credentialRef)
-	if err != nil || string(rotated) == string(credential) {
-		t.Fatal("connection credential did not rotate")
+	rotated, _ := manager.sessionCopy()
+	if string(rotated) != "abcdefghijklmnopqrstuvwxyzABCDEF" {
+		t.Fatal("node session did not rotate")
 	}
 	clear(rotated)
 	mu.Lock()
 	defer mu.Unlock()
-	for _, path := range []string{"POST /v1/control-client-pairings", "POST /v1/control-client-pairings/pair_test/decision", "DELETE /v1/control-clients/cli_test", "POST /v1/nodes/nod_test/credential/rotate"} {
+	for _, path := range []string{"POST /v1/control-client-pairings", "POST /v1/control-client-pairings/pair_test/decision", "DELETE /v1/control-clients/cli_test", "POST /v1/node-sessions/refresh"} {
 		if seen[path] != 1 {
 			t.Fatalf("%s count=%d", path, seen[path])
 		}

@@ -231,7 +231,7 @@ func (s *Store) ResolveNodeEnrollment(ctx context.Context, value NodeEnrollmentR
 		if _, err := tx.ExecContext(ctx, `INSERT INTO nodes(id,owner_id,public_key,name,os,version,status,created_at) VALUES(?,?,?,?,?,?,'active',?)`, item.CandidateNodeID, item.OwnerID, item.PublicKey, item.Name, item.OS, item.Version, now); err != nil {
 			return NodeEnrollment{}, pairingWriteError(ctx, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO node_credentials(node_id,credential_hash,status,created_at) VALUES(?,?,'active',?)`, item.CandidateNodeID, item.CredentialHash, now); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO node_credentials(node_id,credential_hash,status,created_at) VALUES(?,NULL,'active',?)`, item.CandidateNodeID, now); err != nil {
 			return NodeEnrollment{}, pairingWriteError(ctx, err)
 		}
 		status = "approved"

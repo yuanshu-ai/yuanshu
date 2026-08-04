@@ -3,7 +3,6 @@ package node
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -371,13 +370,12 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 		return "", err
 	}
 	identityRef := setupSecretRef("identity", s.configPath)
-	credentialRef := setupSecretRef("relay", s.configPath)
 	workspaceID := setupWorkspaceID(facts.FileIdentity)
 	value := config.Config{
 		ConfigVersion: config.CurrentVersion,
 		Host:          config.HostConfig{Name: name, Locale: setupLocale(request.Locale)},
 		Transport:     config.TransportConfig{Mode: config.TransportRelay},
-		Relay:         config.RelayConfig{URL: request.RelayURL, ConnectTimeoutSeconds: 15, CredentialRef: credentialRef},
+		Relay:         config.RelayConfig{URL: request.RelayURL, ConnectTimeoutSeconds: 15},
 		Identity:      config.IdentityConfig{PrivateKeyRef: identityRef},
 		Adapters:      config.AdaptersConfig{Codex: config.CodexAdapterConfig{Enabled: true, Binary: codexBinary, RuntimeMode: "stdio"}},
 		Events:        config.EventsConfig{MaxAgeHours: 168, MaxSizeMiB: 256},
@@ -430,11 +428,6 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 	if err != nil {
 		return "", errors.New("setup secure storage is unavailable")
 	}
-	credential, err := ensureSetupCredential(ctx, s.platform.SecureStore(), credentialRef)
-	if err != nil {
-		return "", err
-	}
-	defer clear(credential)
 	if request.BootstrapSecret != "" {
 		client := s.httpClient
 		var clientErr error
@@ -444,7 +437,7 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 		if clientErr != nil {
 			return "", errors.New("setup relay CA is invalid")
 		}
-		ownerID, nodeID, err := claimBootstrap(ctx, client, request.RelayURL, request.BootstrapSecret, name, nodeIdentity.PublicKey, credential)
+		ownerID, nodeID, err := claimBootstrap(ctx, client, request.RelayURL, request.BootstrapSecret, name, nodeIdentity.PublicKey)
 		if err != nil {
 			return "", err
 		}
@@ -481,40 +474,16 @@ func setupLocale(value string) string {
 	return "zh-CN"
 }
 
-func ensureSetupCredential(ctx context.Context, secrets platform.SecureStore, ref platform.SecretRef) ([]byte, error) {
-	credential, err := secrets.Get(ctx, ref)
-	if err == nil && len(credential) >= 32 {
-		return credential, nil
-	}
-	clear(credential)
-	if err != nil && !errors.Is(err, platform.ErrNotFound) {
-		return nil, errors.New("setup secure storage is unavailable")
-	}
-	raw := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
-		return nil, errors.New("setup credential generation failed")
-	}
-	credential = []byte(base64.RawURLEncoding.EncodeToString(raw))
-	clear(raw)
-	if err := secrets.Put(ctx, ref, credential); err != nil {
-		clear(credential)
-		return nil, errors.New("setup secure storage is unavailable")
-	}
-	return credential, nil
-}
-
-func claimBootstrap(ctx context.Context, client *http.Client, relayURL, secret, name string, publicKey, credential []byte) (string, string, error) {
+func claimBootstrap(ctx context.Context, client *http.Client, relayURL, secret, name string, publicKey []byte) (string, string, error) {
 	base, err := relayHTTPSBase(relayURL)
 	if err != nil || secret == "" {
 		return "", "", errors.New("setup bootstrap request is invalid")
 	}
-	credentialDigest := sha256.Sum256(credential)
 	requestDigest := sha256.Sum256(publicKey)
 	body := map[string]string{
 		"requestId": "setup_" + base64.RawURLEncoding.EncodeToString(requestDigest[:16]),
 		"name":      name, "os": runtime.GOOS, "version": "dev",
-		"publicKey":      base64.RawURLEncoding.EncodeToString(publicKey),
-		"credentialHash": base64.RawURLEncoding.EncodeToString(credentialDigest[:]),
+		"publicKey": base64.RawURLEncoding.EncodeToString(publicKey),
 	}
 	raw, _ := json.Marshal(body)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/bootstrap/claim", bytes.NewReader(raw))

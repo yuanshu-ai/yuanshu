@@ -110,9 +110,14 @@ func (m *pairingManager) RevokeNode(ctx context.Context, nodeID string) error {
 	return m.nodeJSON(ctx, http.MethodDelete, "/v1/nodes/"+url.PathEscape(nodeID), map[string]string{"issuedAt": issued, "signature": base64.RawURLEncoding.EncodeToString(signature)}, nil)
 }
 func (m *pairingManager) SyncTrust(ctx context.Context) error {
-	credential := m.credentialCopy()
-	defer clear(credential)
-	return syncOwnerTrust(ctx, m.httpClient, m.baseURL, m.identity.OwnerID, m.identity.NodeID, credential, m.local)
+	var wire struct {
+		Revision int64                                                 `json:"revision"`
+		Clients  []struct{ ClientID, KeyID, PublicKey, Status string } `json:"clients"`
+	}
+	if err := m.nodeJSON(ctx, http.MethodGet, "/v1/control-clients", nil, &wire); err != nil {
+		return err
+	}
+	return reconcileOwnerTrust(ctx, m.identity.OwnerID, m.identity.NodeID, wire.Revision, wire.Clients, m.local)
 }
 
 func syncOwnerTrust(ctx context.Context, client *http.Client, baseURL, ownerID, nodeID string, credential []byte, local *store.Store) error {
@@ -139,8 +144,12 @@ func syncOwnerTrust(ctx context.Context, client *http.Client, baseURL, ownerID, 
 	if decoder.Decode(&wire) != nil {
 		return errors.New("control trust synchronization response failed")
 	}
-	manifest := store.TrustManifest{OwnerID: ownerID, NodeID: nodeID, Revision: wire.Revision}
-	for _, item := range wire.Clients {
+	return reconcileOwnerTrust(ctx, ownerID, nodeID, wire.Revision, wire.Clients, local)
+}
+
+func reconcileOwnerTrust(ctx context.Context, ownerID, nodeID string, revision int64, clients []struct{ ClientID, KeyID, PublicKey, Status string }, local *store.Store) error {
+	manifest := store.TrustManifest{OwnerID: ownerID, NodeID: nodeID, Revision: revision}
+	for _, item := range clients {
 		key, err := base64.RawURLEncoding.DecodeString(item.PublicKey)
 		status := protocolv1.TrustStatus(item.Status)
 		if err != nil || len(key) != ed25519.PublicKeySize || (status != protocolv1.TrustStatusActive && status != protocolv1.TrustStatusRevoked) {

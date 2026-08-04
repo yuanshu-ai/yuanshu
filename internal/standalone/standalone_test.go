@@ -2,7 +2,6 @@ package standalone
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -55,20 +53,6 @@ func TestRunRejectsCanceledContextWithoutMutation(t *testing.T) {
 	cancel()
 	if err := Run(ctx, Options{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run() = %v", err)
-	}
-}
-
-func TestStandaloneCredentialIsCanonicalBearerValue(t *testing.T) {
-	credential, err := newStandaloneCredential(strings.NewReader(strings.Repeat("x", 32)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clear(credential)
-	if len(credential) != 43 || !validStandaloneCredential(credential) {
-		t.Fatalf("credential length=%d valid=%v", len(credential), validStandaloneCredential(credential))
-	}
-	if validStandaloneCredential(bytes.Repeat([]byte{0xff}, 32)) {
-		t.Fatal("raw binary credential was accepted")
 	}
 }
 

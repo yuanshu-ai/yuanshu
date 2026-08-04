@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -30,8 +29,6 @@ func TestTLSHubAuthenticatesPersistedIdentitiesAndRoutes(t *testing.T) {
 	}
 	nodePublic, nodePrivate, _ := ed25519.GenerateKey(nil)
 	controlPublic, controlPrivate, _ := ed25519.GenerateKey(nil)
-	credential := "integration-node-credential"
-	credentialHash := sha256.Sum256([]byte(credential))
 	bootstrap, err := server.NewBootstrapService(local, server.BootstrapOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +39,7 @@ func TestTLSHubAuthenticatesPersistedIdentitiesAndRoutes(t *testing.T) {
 	}
 	claim, _, err := bootstrap.Claim(context.Background(), secret, server.ClaimRequest{
 		RequestID: "wss-integration", Name: "Integration Node", OS: "windows", Version: "dev",
-		PublicKey: base64.RawURLEncoding.EncodeToString(nodePublic), CredentialHash: base64.RawURLEncoding.EncodeToString(credentialHash[:]),
+		PublicKey: base64.RawURLEncoding.EncodeToString(nodePublic),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +82,6 @@ func TestTLSHubAuthenticatesPersistedIdentitiesAndRoutes(t *testing.T) {
 
 	nodeHeader := make(http.Header)
 	nodeHeader.Set("X-Yuanshu-Node-ID", claim.NodeID)
-	nodeHeader.Set("Authorization", "Bearer "+credential)
 	node, _, err := transport.DialRelay(context.Background(), toWSS(tlsServer.URL)+"/node/connect", transport.RelayDialOptions{
 		HTTPClient: tlsServer.Client(), Header: nodeHeader, Role: transport.SessionRoleNode, SubjectID: claim.NodeID,
 		Sign:  func(_ context.Context, input []byte) ([]byte, error) { return ed25519.Sign(nodePrivate, input), nil },

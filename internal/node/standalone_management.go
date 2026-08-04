@@ -2,9 +2,9 @@ package node
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/yuanshu-ai/yuanshu/internal/node/identity"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
@@ -12,15 +12,14 @@ import (
 )
 
 type StandaloneManagementOptions struct {
-	IPC           platform.LocalIPC
-	RelayURL      string
-	Identity      identity.Identity
-	Signer        *identity.Manager
-	Local         *store.Store
-	Secrets       platform.SecureStore
-	CredentialRef platform.SecretRef
-	Credential    []byte
-	Stop          context.CancelFunc
+	IPC              platform.LocalIPC
+	RelayURL         string
+	Identity         identity.Identity
+	Signer           *identity.Manager
+	Local            *store.Store
+	SessionToken     []byte
+	SessionExpiresAt time.Time
+	Stop             context.CancelFunc
 }
 
 type StandaloneManagement struct {
@@ -30,12 +29,12 @@ type StandaloneManagement struct {
 }
 
 func StartStandaloneManagement(ctx context.Context, options StandaloneManagementOptions) (*StandaloneManagement, error) {
-	if ctx == nil || options.Stop == nil || options.IPC == nil || !options.IPC.Available() || options.Identity.OwnerID == "" || options.Identity.NodeID == "" || options.Signer == nil || options.Local == nil || options.Secrets == nil || !isCanonicalConnectionCredential(options.Credential) {
+	if ctx == nil || options.Stop == nil || options.IPC == nil || !options.IPC.Available() || options.Identity.OwnerID == "" || options.Identity.NodeID == "" || options.Signer == nil || options.Local == nil || len(options.SessionToken) != 32 || !options.SessionExpiresAt.After(time.Now().UTC()) {
 		return nil, errors.New("standalone local management is unavailable")
 	}
 	pairing, err := newPairingManager(pairingManagerOptions{
 		RelayURL: options.RelayURL, Identity: options.Identity, Signer: options.Signer, Local: options.Local,
-		Secrets: options.Secrets, CredentialRef: options.CredentialRef, Credential: options.Credential,
+		SessionToken: options.SessionToken, SessionExpiresAt: options.SessionExpiresAt,
 	})
 	if err != nil {
 		return nil, err
@@ -51,13 +50,6 @@ func StartStandaloneManagement(ctx context.Context, options StandaloneManagement
 	}
 	management.server = server
 	return management, nil
-}
-
-func isCanonicalConnectionCredential(value []byte) bool {
-	decoded, err := base64.RawURLEncoding.DecodeString(string(value))
-	valid := err == nil && len(decoded) == 32 && base64.RawURLEncoding.EncodeToString(decoded) == string(value)
-	clear(decoded)
-	return valid
 }
 
 func (m *StandaloneManagement) handle(ctx context.Context, request localRequest) localResponse {
@@ -95,7 +87,7 @@ func (m *StandaloneManagement) handle(ctx context.Context, request localRequest)
 		if !response.OK {
 			response.Error = "client_failed"
 		}
-	case "credential_rotate":
+	case "session_refresh":
 		response.OK = m.pairing.RotateCredential(ctx) == nil
 		if !response.OK {
 			response.Error = "rotation_failed"

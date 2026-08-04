@@ -23,13 +23,13 @@ const (
 )
 
 type relaySupervisorOptions struct {
-	Connect  func(context.Context) (transport.Transport, error)
-	Serve    func(context.Context, transport.Transport) error
-	OnState  func(string)
-	Random   func() float64
-	Clock    func() time.Time
-	Initial  time.Duration
-	Maximum  time.Duration
+	Connect   func(context.Context) (transport.Transport, error)
+	Serve     func(context.Context, transport.Transport) error
+	OnState   func(string)
+	Random    func() float64
+	Clock     func() time.Time
+	Initial   time.Duration
+	Maximum   time.Duration
 	StableFor time.Duration
 }
 
@@ -50,10 +50,10 @@ type relaySupervisor struct {
 	done   chan struct{}
 	wake   chan struct{}
 
-	mu     sync.Mutex
-	active *relayBinding
+	mu      sync.Mutex
+	active  *relayBinding
 	started bool
-	closed bool
+	closed  bool
 }
 
 type relayBinding struct {

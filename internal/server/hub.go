@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -28,6 +27,7 @@ const (
 	defaultAuthenticationTimeout = 5 * time.Second
 	defaultChallengeTTL          = 30 * time.Second
 	defaultConnectionLimit       = 64
+	defaultNodeSessionTTL        = 15 * time.Minute
 )
 
 type sessionStore interface {
@@ -49,6 +49,7 @@ type HubOptions struct {
 	HeartbeatInterval       time.Duration
 	IdleTimeout             time.Duration
 	MaxConnections          int
+	NodeSessionTTL          time.Duration
 }
 
 type HubSnapshot struct {
@@ -95,34 +96,59 @@ type Hub struct {
 	limit                   chan struct{}
 	mu                      sync.RWMutex
 	leaseMu                 sync.Mutex
+	nodeSessionMu           sync.Mutex
 	leaseLocks              map[string]*sync.Mutex
 	nodes                   map[string]*hubConnection
 	controls                map[string]*hubConnection
 	nodeDetails             map[string]HubNodeDetail
+	nodeSessions            map[[sha256.Size]byte]nodeHTTPSession
+	nodeSessionTTL          time.Duration
 	closed                  bool
 }
 
 type hubConnection struct {
-	ownerID     string
-	subjectID   string
-	keyID       string
-	publicKey   ed25519.PublicKey
-	role        transport.SessionRole
-	relay       transport.Transport
-	connectedAt time.Time
+	ownerID      string
+	subjectID    string
+	keyID        string
+	publicKey    ed25519.PublicKey
+	role         transport.SessionRole
+	relay        transport.Transport
+	connectedAt  time.Time
+	connectionID string
 }
 
 // AttachLocalNode registers an already authenticated in-process Node
 // transport. Remote Nodes must continue to authenticate through NodeHandler.
 func (h *Hub) AttachLocalNode(ctx context.Context, ownerID, nodeID string, local transport.Transport) error {
+	return h.attachLocalNode(ctx, ownerID, nodeID, local, nil, time.Time{})
+}
+
+// AttachLocalNodeSession registers an in-process Node and a memory-only HTTP
+// session used by its local management client.
+func (h *Hub) AttachLocalNodeSession(ctx context.Context, ownerID, nodeID string, local transport.Transport, sessionToken []byte, sessionExpiresAt time.Time) error {
+	return h.attachLocalNode(ctx, ownerID, nodeID, local, sessionToken, sessionExpiresAt)
+}
+
+func (h *Hub) attachLocalNode(ctx context.Context, ownerID, nodeID string, local transport.Transport, sessionToken []byte, sessionExpiresAt time.Time) error {
 	if ctx == nil || local == nil || !validOpaque(ownerID, 128) || !validOpaque(nodeID, 128) {
 		return ErrInvalid
 	}
-	connection := &hubConnection{ownerID: ownerID, subjectID: nodeID, role: transport.SessionRoleNode, relay: local, connectedAt: h.clock().UTC()}
+	connectionID, err := h.randomValue(16)
+	if err != nil {
+		return err
+	}
+	connection := &hubConnection{ownerID: ownerID, subjectID: nodeID, role: transport.SessionRoleNode, relay: local, connectedAt: h.clock().UTC(), connectionID: connectionID}
+	if len(sessionToken) > 0 {
+		if err := h.registerNodeSession(ownerID, nodeID, connectionID, sessionToken, sessionExpiresAt); err != nil {
+			return err
+		}
+	}
 	if !h.register(connection) {
+		h.invalidateNodeSessionScope(ownerID, nodeID, connectionID)
 		return errors.New("server hub is closed")
 	}
 	defer func() {
+		h.invalidateNodeSessionScope(ownerID, nodeID, connectionID)
 		h.unregister(connection)
 		_ = local.Close()
 	}()
@@ -131,7 +157,7 @@ func (h *Hub) AttachLocalNode(ctx context.Context, ownerID, nodeID string, local
 }
 
 func NewHub(store sessionStore, options HubOptions) (*Hub, error) {
-	if store == nil || options.QueueCapacity < 0 || options.AuthenticationTimeout < 0 || options.ChallengeTTL < 0 || options.HeartbeatInterval < 0 || options.IdleTimeout < 0 || options.MaxConnections < 0 {
+	if store == nil || options.QueueCapacity < 0 || options.AuthenticationTimeout < 0 || options.ChallengeTTL < 0 || options.HeartbeatInterval < 0 || options.IdleTimeout < 0 || options.MaxConnections < 0 || options.NodeSessionTTL < 0 {
 		return nil, ErrInvalid
 	}
 	random := options.Random
@@ -153,6 +179,10 @@ func NewHub(store sessionStore, options HubOptions) (*Hub, error) {
 	connectionLimit := options.MaxConnections
 	if connectionLimit == 0 {
 		connectionLimit = defaultConnectionLimit
+	}
+	nodeSessionTTL := options.NodeSessionTTL
+	if nodeSessionTTL == 0 {
+		nodeSessionTTL = defaultNodeSessionTTL
 	}
 	origins := make(map[string]struct{}, len(options.AllowedControlOrigins))
 	for _, origin := range options.AllowedControlOrigins {
@@ -181,6 +211,7 @@ func NewHub(store sessionStore, options HubOptions) (*Hub, error) {
 		relayOptions: transport.RelayOptions{QueueCapacity: options.QueueCapacity, HeartbeatInterval: options.HeartbeatInterval, IdleTimeout: options.IdleTimeout},
 		limit:        make(chan struct{}, connectionLimit), nodes: make(map[string]*hubConnection), controls: make(map[string]*hubConnection),
 		nodeDetails: make(map[string]HubNodeDetail), leaseLocks: make(map[string]*sync.Mutex),
+		nodeSessions: make(map[[sha256.Size]byte]nodeHTTPSession), nodeSessionTTL: nodeSessionTTL,
 	}, nil
 }
 
@@ -199,18 +230,16 @@ func (h *Hub) NodeHandler(writer http.ResponseWriter, request *http.Request) {
 	}
 	defer h.release()
 	nodeID := request.Header.Get("X-Yuanshu-Node-ID")
-	credential, ok := bearerToken(request.Header.Get("Authorization"))
-	if !ok || !validOpaque(nodeID, 128) {
+	if request.Header.Get("Authorization") != "" {
+		writeError(writer, http.StatusUpgradeRequired, "node_auth_upgrade_required")
+		return
+	}
+	if !validOpaque(nodeID, 128) {
 		writeError(writer, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	record, err := h.store.NodeSession(request.Context(), nodeID)
-	if err != nil || record.Status != "active" || len(record.PublicKey) != ed25519.PublicKeySize || len(record.CredentialHash) != sha256.Size {
-		writeError(writer, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	digest := sha256.Sum256([]byte(credential))
-	if subtle.ConstantTimeCompare(digest[:], record.CredentialHash) != 1 {
+	if err != nil || record.Status != "active" || len(record.PublicKey) != ed25519.PublicKeySize {
 		writeError(writer, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -288,13 +317,16 @@ func (h *Hub) serve(writer http.ResponseWriter, request *http.Request, role tran
 		return
 	}
 	authCtx, cancel := context.WithTimeout(request.Context(), h.authTimeout)
-	challenge, err := h.authenticate(authCtx, conn, role, subjectID, publicKey)
+	challenge, err := h.authenticate(authCtx, conn, role, ownerID, subjectID, publicKey)
 	cancel()
 	if err != nil {
 		_ = conn.Close(websocket.StatusPolicyViolation, "authentication failed")
 		return
 	}
 	_ = challenge
+	if role == transport.SessionRoleNode {
+		defer h.invalidateNodeSessionScope(ownerID, subjectID, challenge.ConnectionID)
+	}
 	options := h.relayOptions
 	if role == transport.SessionRoleNode {
 		options.MaxSendBytes = protocolv1.EventFrameMaxBytes
@@ -308,7 +340,7 @@ func (h *Hub) serve(writer http.ResponseWriter, request *http.Request, role tran
 		_ = conn.CloseNow()
 		return
 	}
-	connection := &hubConnection{ownerID: ownerID, subjectID: subjectID, keyID: keyID, publicKey: append(ed25519.PublicKey(nil), publicKey...), role: role, relay: relay, connectedAt: h.clock().UTC()}
+	connection := &hubConnection{ownerID: ownerID, subjectID: subjectID, keyID: keyID, publicKey: append(ed25519.PublicKey(nil), publicKey...), role: role, relay: relay, connectedAt: h.clock().UTC(), connectionID: challenge.ConnectionID}
 	if !h.register(connection) {
 		_ = relay.Close()
 		return
@@ -320,7 +352,7 @@ func (h *Hub) serve(writer http.ResponseWriter, request *http.Request, role tran
 	h.route(request.Context(), connection)
 }
 
-func (h *Hub) authenticate(ctx context.Context, conn *websocket.Conn, role transport.SessionRole, subjectID string, publicKey []byte) (transport.SessionChallenge, error) {
+func (h *Hub) authenticate(ctx context.Context, conn *websocket.Conn, role transport.SessionRole, ownerID, subjectID string, publicKey []byte) (transport.SessionChallenge, error) {
 	connectionID, err := h.randomValue(16)
 	if err != nil {
 		return transport.SessionChallenge{}, err
@@ -349,7 +381,15 @@ func (h *Hub) authenticate(ctx context.Context, conn *websocket.Conn, role trans
 	if err != nil || !ed25519.Verify(publicKey, input, signature) {
 		return transport.SessionChallenge{}, errors.New("session authentication failed")
 	}
-	ready, _ := json.Marshal(transport.SessionReady{Version: "1", Type: "authenticated"})
+	readyValue := transport.SessionReady{Version: "1", Type: "authenticated"}
+	if role == transport.SessionRoleNode {
+		token, expiresAt, issueErr := h.issueNodeSession(ownerID, subjectID, connectionID)
+		if issueErr != nil {
+			return transport.SessionChallenge{}, errors.New("session authentication failed")
+		}
+		readyValue.SessionToken, readyValue.SessionExpiresAt = token, expiresAt.Format(time.RFC3339Nano)
+	}
+	ready, _ := json.Marshal(readyValue)
 	if err := conn.Write(ctx, websocket.MessageText, ready); err != nil {
 		return transport.SessionChallenge{}, errors.New("session authentication failed")
 	}
@@ -626,6 +666,10 @@ func (h *Hub) Close() error {
 	h.nodes = make(map[string]*hubConnection)
 	h.controls = make(map[string]*hubConnection)
 	h.mu.Unlock()
+	h.nodeSessionMu.Lock()
+	clear(h.nodeSessions)
+	h.nodeSessions = make(map[[sha256.Size]byte]nodeHTTPSession)
+	h.nodeSessionMu.Unlock()
 	for _, connection := range connections {
 		_ = connection.relay.Close()
 	}

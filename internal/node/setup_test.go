@@ -67,8 +67,8 @@ func TestNodeSetupUsesSessionBoundNativeWorkspaceToken(t *testing.T) {
 	if _, err := fakePlatform.SecureStore().Get(context.Background(), value.Config.Identity.PrivateKeyRef); err != nil {
 		t.Fatalf("identity was not stored securely: %v", err)
 	}
-	if _, err := fakePlatform.SecureStore().Get(context.Background(), value.Config.Relay.CredentialRef); err != nil {
-		t.Fatalf("credential was not stored securely: %v", err)
+	if value.Config.Relay.CredentialRef != "" {
+		t.Fatalf("legacy relay credential reference = %q", value.Config.Relay.CredentialRef)
 	}
 }
 

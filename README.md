@@ -148,7 +148,7 @@ yuanshu standalone   Server + Web + local Node in one deployment
 | Data | Node machine | Server | Browser |
 | --- | --- | --- | --- |
 | Codex login, API keys, Git/SSH credentials | Remain in local Agent or OS secure storage | Never stored | Never stored |
-| Node and Relay secrets | OS secure storage; configuration contains only secret references | Stores only required credential hashes/metadata | Never stored |
+| Node identity and sessions | Ed25519 private key in OS secure storage; short session in memory | Public key and revocation metadata; short session in memory | Never stored |
 | Thread content, command output, and Diffs | Runtime and bounded local recovery state | Not permanently stored | In-memory projection only |
 | Control-client private key | Not stored | Public key only | Non-exportable IndexedDB CryptoKey |
 | Workspace paths | Canonical local configuration and policy store | Opaque workspace IDs only | Opaque IDs and display names only |

@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const CurrentSchemaVersion = 7
+const CurrentSchemaVersion = 8
 
 type migration struct {
 	version    int
@@ -252,6 +252,24 @@ var serverMigrations = []migration{{
 			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
 		) STRICT`,
 	},
+}, {
+	version: 8,
+	name:    "device_signed_node_identity",
+	statements: []string{
+		`ALTER TABLE node_credentials RENAME TO legacy_node_credentials`,
+		`CREATE TABLE node_credentials (
+			node_id TEXT PRIMARY KEY,
+			credential_hash BLOB CHECK (credential_hash IS NULL),
+			status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
+			created_at TEXT NOT NULL,
+			rotated_at TEXT,
+			revoked_at TEXT,
+			FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+		) STRICT`,
+		`INSERT INTO node_credentials(node_id, credential_hash, status, created_at, rotated_at, revoked_at)
+			SELECT node_id, NULL, status, created_at, rotated_at, revoked_at FROM legacy_node_credentials`,
+		`DROP TABLE legacy_node_credentials`,
+	},
 }}
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -324,6 +342,8 @@ func schemaLiteral(version int) string {
 		return "7"
 	case 8:
 		return "8"
+	case 9:
+		return "9"
 	default:
 		panic("unsupported server schema version")
 	}

@@ -33,7 +33,7 @@ type ClaimRequest struct {
 	OS             string `json:"os"`
 	Version        string `json:"version"`
 	PublicKey      string `json:"publicKey"`
-	CredentialHash string `json:"credentialHash"`
+	CredentialHash string `json:"credentialHash,omitempty"`
 }
 
 type ClaimResponse struct {
@@ -132,7 +132,10 @@ func (s *BootstrapService) Claim(ctx context.Context, secret string, request Cla
 	if err != nil {
 		return ClaimResponse{}, false, ErrInvalid
 	}
-	credentialHash, err := decodeCanonical(request.CredentialHash, 32)
+	var credentialHash []byte
+	if request.CredentialHash != "" {
+		credentialHash, err = decodeCanonical(request.CredentialHash, 32)
+	}
 	if err != nil || !validOpaque(request.RequestID, 128) || !validDisplay(request.Name, 128) || !validVersion(request.Version) || !validOS(request.OS) {
 		return ClaimResponse{}, false, ErrInvalid
 	}

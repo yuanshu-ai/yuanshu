@@ -308,10 +308,11 @@ func configView(value config.Config, revision string, pending int) map[string]an
 		"transport": map[string]any{"mode": string(value.Transport.Mode)},
 		"relay": map[string]any{
 			"url": value.Relay.URL, "proxyUrl": value.Relay.ProxyURL,
-			"connectTimeoutSeconds": value.Relay.ConnectTimeoutSeconds,
-			"credentialConfigured":  value.Relay.CredentialRef != "",
-			"customCAConfigured":    value.Relay.CABundleFile != "",
-			"customCAFingerprint":   relayCAFingerprint(value.Relay.CABundleFile),
+			"connectTimeoutSeconds":   value.Relay.ConnectTimeoutSeconds,
+			"authenticationMode":      "device_signature",
+			"legacyCredentialPending": value.Relay.CredentialRef != "",
+			"customCAConfigured":      value.Relay.CABundleFile != "",
+			"customCAFingerprint":     relayCAFingerprint(value.Relay.CABundleFile),
 		},
 		"adapter": map[string]any{
 			"codexEnabled":     value.Adapters.Codex.Enabled,

@@ -3,10 +3,8 @@
 package standalone
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -37,8 +35,6 @@ var (
 	ErrUsage       = errors.New("standalone command arguments are invalid")
 	ErrUnavailable = errors.New("standalone runtime is unavailable")
 )
-
-const standaloneCredentialRef = platform.SecretRef("yuanshu/standalone/node-credential")
 
 const Usage = `Usage:
   yuanshu standalone [run] --data-dir <absolute-path> --config <absolute-path> [--listen <ip:port>]
@@ -337,11 +333,16 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("node identity is unavailable"))
 	}
-	nodeIdentity, credential, err := ensureServerBinding(ctx, serverDir, loaded.Config.Host.Name, options.Platform.Family(), nodeIdentity, identityManager, options.Platform.SecureStore(), options.Random, options.Clock)
+	nodeIdentity, err = ensureServerBinding(ctx, serverDir, loaded.Config.Host.Name, options.Platform.Family(), nodeIdentity, identityManager, options.Random, options.Clock)
 	if err != nil {
 		return err
 	}
-	defer clear(credential)
+	sessionToken := make([]byte, 32)
+	if _, err := io.ReadFull(options.Random, sessionToken); err != nil {
+		return errors.Join(ErrUnavailable, errors.New("standalone session generation failed"))
+	}
+	defer clear(sessionToken)
+	sessionExpiresAt := options.Clock().UTC().Add(15 * time.Minute)
 
 	agent, err := codex.New(codex.Options{Config: loaded.Config.Adapters.Codex, Processes: options.Platform.Processes(), Workspaces: workspaceManager, Threads: local})
 	if err != nil {
@@ -386,7 +387,7 @@ func Run(ctx context.Context, options Options) error {
 		relayURL := "wss" + strings.TrimPrefix(strings.TrimSuffix(options.PublicURL, "/"), "https") + "/node/connect"
 		localManagement, err = node.StartStandaloneManagement(runCtx, node.StandaloneManagementOptions{
 			IPC: options.Platform.IPC(), RelayURL: relayURL, Identity: nodeIdentity, Signer: identityManager, Local: local,
-			Secrets: options.Platform.SecureStore(), CredentialRef: standaloneCredentialRef, Credential: credential, Stop: cancel,
+			SessionToken: sessionToken, SessionExpiresAt: sessionExpiresAt, Stop: cancel,
 		})
 		if err != nil {
 			return errors.Join(ErrUnavailable, errors.New("standalone local management is unavailable"))
@@ -402,7 +403,7 @@ func Run(ctx context.Context, options Options) error {
 			TLSCertFile:        options.TLSCertFile, TLSKeyFile: options.TLSKeyFile, TLSTermination: options.TLSTermination, ACME: options.ACME,
 			AllowedControlOrigins: options.AllowedControlOrigins,
 			WebEnabled:            options.WebEnabled, Stdout: options.Stdout, Random: options.Random, Clock: options.Clock,
-			LocalNode: &server.LocalNodeSession{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID, Transport: serverSide},
+			LocalNode: &server.LocalNodeSession{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID, Transport: serverSide, SessionToken: sessionToken, SessionExpiresAt: sessionExpiresAt},
 		})
 	}()
 	first := <-results
@@ -436,93 +437,54 @@ func validControlOrigins(values []string) bool {
 	return true
 }
 
-func ensureServerBinding(ctx context.Context, serverDir, name string, family platform.Family, current identity.Identity, manager *identity.Manager, secrets platform.SecureStore, random io.Reader, clock func() time.Time) (identity.Identity, []byte, error) {
+func ensureServerBinding(ctx context.Context, serverDir, name string, family platform.Family, current identity.Identity, manager *identity.Manager, random io.Reader, clock func() time.Time) (identity.Identity, error) {
 	database, err := serverstore.Open(ctx, filepath.Join(serverDir, "server.db"), serverstore.Options{Clock: clock})
 	if err != nil {
-		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("server database is unavailable"))
+		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("server database is unavailable"))
 	}
 	defer database.Close()
 	if current.OwnerID != "" || current.NodeID != "" {
 		record, err := database.NodeSession(ctx, current.NodeID)
-		if err != nil || record.OwnerID != current.OwnerID || !bytes.Equal(record.PublicKey, current.PublicKey) || record.Status != "active" {
-			return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone identity binding does not match server metadata"))
+		if err != nil || record.OwnerID != current.OwnerID || !equalPublicKeys(record.PublicKey, current.PublicKey) || record.Status != "active" {
+			return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone identity binding does not match server metadata"))
 		}
-		credential, secretErr := secrets.Get(ctx, standaloneCredentialRef)
-		if secretErr == nil && validStandaloneCredential(credential) {
-			return current, credential, nil
-		}
-		clear(credential)
-		credential, err = newStandaloneCredential(random)
-		if err != nil {
-			return identity.Identity{}, nil, err
-		}
-		if err := secrets.Put(ctx, standaloneCredentialRef, credential); err != nil {
-			clear(credential)
-			return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone credential storage failed"))
-		}
-		digest := sha256.Sum256(credential)
-		if err := database.RotateNodeCredential(ctx, current.OwnerID, current.NodeID, digest[:], clock().UTC()); err != nil {
-			_ = secrets.Delete(ctx, standaloneCredentialRef)
-			clear(credential)
-			return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone credential reconciliation failed"))
-		}
-		return current, credential, nil
+		return current, nil
 	}
 	service, err := server.NewBootstrapService(database, server.BootstrapOptions{Random: random, Clock: clock})
 	if err != nil {
-		return identity.Identity{}, nil, ErrUnavailable
+		return identity.Identity{}, ErrUnavailable
 	}
 	secret, issued, err := service.Rotate(ctx)
 	if err != nil || !issued {
-		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone server is already claimed"))
-	}
-	credential, err := newStandaloneCredential(random)
-	if err != nil {
-		return identity.Identity{}, nil, err
+		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone server is already claimed"))
 	}
 	requestID := make([]byte, 16)
 	if _, err := io.ReadFull(random, requestID); err != nil {
-		clear(credential)
-		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
+		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
 	}
-	if err := secrets.Put(ctx, standaloneCredentialRef, credential); err != nil {
-		clear(credential)
-		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone credential storage failed"))
-	}
-	digest := sha256.Sum256(credential)
 	response, _, err := service.Claim(ctx, secret, server.ClaimRequest{
 		RequestID: "req_" + base64.RawURLEncoding.EncodeToString(requestID), Name: name, OS: string(family), Version: "dev",
-		PublicKey: base64.RawURLEncoding.EncodeToString(current.PublicKey), CredentialHash: base64.RawURLEncoding.EncodeToString(digest[:]),
+		PublicKey: base64.RawURLEncoding.EncodeToString(current.PublicKey),
 	})
 	if err != nil {
-		_ = secrets.Delete(ctx, standaloneCredentialRef)
-		clear(credential)
-		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
+		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
 	}
 	bound, err := manager.Bind(ctx, response.OwnerID, response.NodeID)
 	if err != nil {
-		clear(credential)
-		return identity.Identity{}, nil, errors.Join(ErrUnavailable, errors.New("standalone identity binding failed"))
+		return identity.Identity{}, errors.Join(ErrUnavailable, errors.New("standalone identity binding failed"))
 	}
-	return bound, credential, nil
+	return bound, nil
 }
 
-func newStandaloneCredential(random io.Reader) ([]byte, error) {
-	raw := make([]byte, 32)
-	if _, err := io.ReadFull(random, raw); err != nil {
-		clear(raw)
-		return nil, errors.Join(ErrUnavailable, errors.New("standalone enrollment failed"))
+func equalPublicKeys(left, right []byte) bool {
+	if len(left) != len(right) {
+		return false
 	}
-	credential := []byte(base64.RawURLEncoding.EncodeToString(raw))
-	clear(raw)
-	return credential, nil
-}
-
-func validStandaloneCredential(credential []byte) bool {
-	decoded, err := base64.RawURLEncoding.DecodeString(string(credential))
-	valid := err == nil && len(decoded) == 32 && base64.RawURLEncoding.EncodeToString(decoded) == string(credential)
-	clear(decoded)
-	return valid
+	var different byte
+	for index := range left {
+		different |= left[index] ^ right[index]
+	}
+	return different == 0
 }
 
 func prepareDirectory(path string) error {

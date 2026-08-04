@@ -43,18 +43,21 @@ type SessionAuthentication struct {
 }
 
 type SessionReady struct {
-	Version string `json:"version"`
-	Type    string `json:"type"`
+	Version          string `json:"version"`
+	Type             string `json:"type"`
+	SessionToken     string `json:"sessionToken,omitempty"`
+	SessionExpiresAt string `json:"sessionExpiresAt,omitempty"`
 }
 
 type RelayDialOptions struct {
-	HTTPClient *http.Client
-	Header     http.Header
-	Role       SessionRole
-	SubjectID  string
-	Sign       func(context.Context, []byte) ([]byte, error)
-	Relay      RelayOptions
-	Clock      func() time.Time
+	HTTPClient      *http.Client
+	Header          http.Header
+	Role            SessionRole
+	SubjectID       string
+	Sign            func(context.Context, []byte) ([]byte, error)
+	Relay           RelayOptions
+	Clock           func() time.Time
+	OnAuthenticated func(SessionReady) error
 }
 
 // DialRelay establishes and authenticates one WSS connection. Reconnection is
@@ -111,6 +114,20 @@ func DialRelay(ctx context.Context, url string, options RelayDialOptions) (Trans
 	}
 	var ready SessionReady
 	if err := readStrictSessionJSON(ctx, conn, &ready); err != nil || ready.Version != "1" || ready.Type != "authenticated" {
+		return fail(errors.New("relay authentication failed"))
+	}
+	if options.Role == SessionRoleNode {
+		expiresAt, parseErr := time.Parse(time.RFC3339Nano, ready.SessionExpiresAt)
+		token, tokenErr := base64.RawURLEncoding.DecodeString(ready.SessionToken)
+		if parseErr != nil || tokenErr != nil || len(token) != 32 || base64.RawURLEncoding.EncodeToString(token) != ready.SessionToken || !clock().UTC().Before(expiresAt) {
+			clear(token)
+			return fail(errors.New("relay authentication failed"))
+		}
+		clear(token)
+	} else if ready.SessionToken != "" || ready.SessionExpiresAt != "" {
+		return fail(errors.New("relay authentication failed"))
+	}
+	if options.OnAuthenticated != nil && options.OnAuthenticated(ready) != nil {
 		return fail(errors.New("relay authentication failed"))
 	}
 	relay, err := NewRelay(conn, options.Relay)

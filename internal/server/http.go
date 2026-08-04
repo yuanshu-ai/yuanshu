@@ -149,6 +149,7 @@ func newHandler(service *BootstrapService, ready readiness, local *serverstore.S
 	})
 	if hub != nil {
 		mux.HandleFunc("GET /node/connect", hub.NodeHandler)
+		mux.HandleFunc("POST /v1/node-sessions/refresh", hub.RefreshNodeSession)
 		mux.HandleFunc("GET /web/connect", hub.ControlHandler)
 		if local != nil {
 			pairing, err := NewPairingService(local, hub, PairingOptions{Clock: service.clock})
@@ -179,12 +180,13 @@ func newHandler(service *BootstrapService, ready readiness, local *serverstore.S
 
 func methodBoundary(next http.Handler) http.Handler {
 	methods := map[string]string{
-		"/healthz":             http.MethodGet,
-		"/readyz":              http.MethodGet,
-		"/v1/bootstrap/status": http.MethodGet,
-		"/v1/bootstrap/claim":  http.MethodPost,
-		"/node/connect":        http.MethodGet,
-		"/web/connect":         http.MethodGet,
+		"/healthz":                  http.MethodGet,
+		"/readyz":                   http.MethodGet,
+		"/v1/bootstrap/status":      http.MethodGet,
+		"/v1/bootstrap/claim":       http.MethodPost,
+		"/node/connect":             http.MethodGet,
+		"/v1/node-sessions/refresh": http.MethodPost,
+		"/web/connect":              http.MethodGet,
 	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if method, known := methods[request.URL.Path]; known && request.Method != method {

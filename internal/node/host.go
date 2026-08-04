@@ -223,35 +223,17 @@ func (h *host) reload(ctx context.Context) error {
 		}
 	}
 	if bound && loaded.Config.Transport.Mode == config.TransportRelay {
-		credential, secretErr := h.options.platform.SecureStore().Get(ctx, loaded.Config.Relay.CredentialRef)
-		if secretErr == nil {
-			httpClient, clientErr := relayHTTPClient(loaded.Config.Relay.ProxyURL, time.Duration(loaded.Config.Relay.ConnectTimeoutSeconds)*time.Second, loaded.Config.Relay.CABundleFile)
-			manager, managerErr := newPairingManager(pairingManagerOptions{
-				RelayURL: loaded.Config.Relay.URL, Timeout: time.Duration(loaded.Config.Relay.ConnectTimeoutSeconds) * time.Second,
-				HTTPClient: httpClient,
-				Identity:   nodeIdentity, Signer: identityManager, Local: local, Secrets: h.options.platform.SecureStore(),
-				CredentialRef: loaded.Config.Relay.CredentialRef, Credential: credential,
-			})
-			clear(credential)
-			if clientErr == nil && managerErr == nil {
-				h.pairing = manager
-				_ = manager.SyncTrust(ctx)
-				h.status.update(func(value *Status) { value.RemoteControl = "connecting" })
-				trustCtx, trustCancel := context.WithCancel(h.runCtx)
-				h.trustCancel = trustCancel
-				go func(value *pairingManager) {
-					ticker := time.NewTicker(30 * time.Second)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-trustCtx.Done():
-							return
-						case <-ticker.C:
-							_ = value.SyncTrust(trustCtx)
-						}
-					}
-				}(manager)
-			}
+		httpClient, clientErr := relayHTTPClient(loaded.Config.Relay.ProxyURL, time.Duration(loaded.Config.Relay.ConnectTimeoutSeconds)*time.Second, loaded.Config.Relay.CABundleFile)
+		legacyRef := loaded.Config.Relay.CredentialRef
+		manager, managerErr := newPairingManager(pairingManagerOptions{
+			RelayURL: loaded.Config.Relay.URL, Timeout: time.Duration(loaded.Config.Relay.ConnectTimeoutSeconds) * time.Second,
+			HTTPClient: httpClient, Identity: nodeIdentity, Signer: identityManager, Local: local,
+			MigrateLegacy: func(migrateCtx context.Context) error { return h.migrateLegacyCredential(migrateCtx, legacyRef) },
+		})
+		if clientErr == nil && managerErr == nil {
+			h.pairing = manager
+			h.status.update(func(value *Status) { value.RemoteControl = "connecting" })
+			h.startTrustSyncLocked(manager)
 		}
 	}
 	adapterInstance, err := codex.New(codex.Options{
@@ -712,7 +694,7 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 		} else {
 			response.Error = "client_failed"
 		}
-	case "credential_rotate":
+	case "session_refresh":
 		if err := h.pairing.RotateCredential(ctx); err == nil {
 			if h.relaySupervisor != nil {
 				h.status.update(func(value *Status) { value.RemoteControl = "reconnecting" })
@@ -811,7 +793,7 @@ func (h *host) newRelaySupervisorLocked(manager *pairingManager) (*relaySupervis
 				status.RemoteControl = value
 				status.RelayLastSeen = time.Now().UTC().Format(time.RFC3339Nano)
 				if value == relayStateRevoked {
-					status.RelayLastError = "credential_revoked"
+					status.RelayLastError = "node_identity_revoked"
 				}
 			})
 			h.options.trayUpdate(h.status.snapshot())
@@ -823,25 +805,19 @@ func (h *host) replaceRelayLocked(ctx context.Context, configuration config.Conf
 	if h.identityManager == nil || h.local == nil || h.controlSession == nil || h.nodeIdentity.OwnerID == "" || h.nodeIdentity.NodeID == "" {
 		return errors.New("node relay identity is unavailable")
 	}
-	credential, err := h.options.platform.SecureStore().Get(ctx, configuration.Relay.CredentialRef)
-	if err != nil {
-		return err
-	}
 	httpClient, err := relayHTTPClient(configuration.Relay.ProxyURL, time.Duration(configuration.Relay.ConnectTimeoutSeconds)*time.Second, configuration.Relay.CABundleFile)
 	if err != nil {
-		clear(credential)
 		return err
 	}
+	legacyRef := configuration.Relay.CredentialRef
 	manager, err := newPairingManager(pairingManagerOptions{
 		RelayURL: configuration.Relay.URL, Timeout: time.Duration(configuration.Relay.ConnectTimeoutSeconds) * time.Second,
 		HTTPClient: httpClient, Identity: h.nodeIdentity, Signer: h.identityManager, Local: h.local,
-		Secrets: h.options.platform.SecureStore(), CredentialRef: configuration.Relay.CredentialRef, Credential: credential,
+		MigrateLegacy: func(migrateCtx context.Context) error { return h.migrateLegacyCredential(migrateCtx, legacyRef) },
 	})
-	clear(credential)
 	if err != nil {
 		return err
 	}
-	_ = manager.SyncTrust(ctx)
 	h.controlSession.Reconfigure(configuration.Host.Name, manager.SyncTrust, h.configController)
 	supervisor, err := h.newRelaySupervisorLocked(manager)
 	if err != nil {
@@ -861,6 +837,34 @@ func (h *host) replaceRelayLocked(ctx context.Context, configuration config.Conf
 	h.relaySupervisor = supervisor
 	h.startTrustSyncLocked(manager)
 	supervisor.Start()
+	return nil
+}
+
+func (h *host) migrateLegacyCredential(ctx context.Context, ref platform.SecretRef) error {
+	if ref == "" {
+		return nil
+	}
+	configurationStore, err := config.NewFileStore(h.options.configPath)
+	if err != nil {
+		return err
+	}
+	loaded, err := configurationStore.Load(ctx)
+	if err != nil {
+		return err
+	}
+	if loaded.Config.Relay.CredentialRef != ref {
+		return nil
+	}
+	loaded.Config.Relay.CredentialRef = ""
+	if err := configurationStore.Save(ctx, loaded.Config); err != nil {
+		return err
+	}
+	_ = h.options.platform.SecureStore().Delete(ctx, ref)
+	h.mu.Lock()
+	if h.activeConfig.Relay.CredentialRef == ref {
+		h.activeConfig.Relay.CredentialRef = ""
+	}
+	h.mu.Unlock()
 	return nil
 }
 

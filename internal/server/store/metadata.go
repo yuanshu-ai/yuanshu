@@ -238,7 +238,7 @@ func (s *Store) ClaimBootstrap(ctx context.Context, claim BootstrapClaim) (Claim
 		return ClaimResult{}, mapInsertError(ctx, err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO node_credentials(node_id, credential_hash, status, created_at)
-		VALUES (?, ?, 'active', ?)`, claim.NodeID, append([]byte(nil), claim.CredentialHash...), now); err != nil {
+		VALUES (?, NULL, 'active', ?)`, claim.NodeID, now); err != nil {
 		return ClaimResult{}, mapInsertError(ctx, err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE bootstrap SET status='completed', claim_digest=?, owner_id=?, node_id=?,
@@ -252,7 +252,7 @@ func (s *Store) ClaimBootstrap(ctx context.Context, claim BootstrapClaim) (Claim
 }
 
 func validateClaim(claim BootstrapClaim) error {
-	if len(claim.SecretHash) != 32 || len(claim.ClaimDigest) != 32 || len(claim.PublicKey) != 32 || len(claim.CredentialHash) != 32 ||
+	if len(claim.SecretHash) != 32 || len(claim.ClaimDigest) != 32 || len(claim.PublicKey) != 32 || (len(claim.CredentialHash) != 0 && len(claim.CredentialHash) != 32) ||
 		claim.OwnerID == "" || claim.NodeID == "" || claim.RequestID == "" || claim.Name == "" || claim.OS == "" || claim.Version == "" ||
 		claim.Now.IsZero() || !claim.RetryUntil.After(claim.Now) {
 		return ErrInvalid

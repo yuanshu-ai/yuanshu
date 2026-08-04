@@ -4,7 +4,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -50,11 +49,6 @@ type revokeClientRequest struct {
 	IssuedAt  string `json:"issuedAt"`
 	Signature string `json:"signature"`
 }
-type rotateCredentialRequest struct {
-	NewCredentialHash string `json:"newCredentialHash"`
-	IssuedAt          string `json:"issuedAt"`
-	Signature         string `json:"signature"`
-}
 
 func NewPairingService(local *serverstore.Store, hub *Hub, options PairingOptions) (*PairingService, error) {
 	if local == nil {
@@ -79,7 +73,6 @@ func (s *PairingService) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/control-client-pairings/{id}/status", s.status)
 	mux.HandleFunc("POST /v1/control-client-pairings/{id}/decision", s.decide)
 	mux.HandleFunc("DELETE /v1/control-clients/{id}", s.revokeClient)
-	mux.HandleFunc("POST /v1/nodes/{id}/credential/rotate", s.rotateCredential)
 	mux.HandleFunc("POST /v1/node-enrollments", s.createNodeEnrollment)
 	mux.HandleFunc("GET /v1/node-enrollments", s.pendingNodeEnrollments)
 	mux.HandleFunc("POST /v1/node-enrollments/{id}/claim", s.claimNodeEnrollment)
@@ -285,46 +278,12 @@ func (s *PairingService) revokeClient(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *PairingService) rotateCredential(w http.ResponseWriter, r *http.Request) {
-	node, ok := s.authenticateNode(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	var request rotateCredentialRequest
-	if !decodeStrict(w, r, &request) {
-		return
-	}
-	hash, valid := canonicalBytes(request.NewCredentialHash, sha256.Size)
-	binding := enrollment.CredentialRotation{Version: "1", OwnerID: node.OwnerID, NodeID: node.NodeID, NewCredentialHash: request.NewCredentialHash, IssuedAt: request.IssuedAt}
-	input, err := enrollment.CredentialRotationSigningInput(binding)
-	signature, sigOK := canonicalBytes(request.Signature, ed25519.SignatureSize)
-	if err != nil || r.PathValue("id") != node.NodeID || !valid || !sigOK || !fresh(request.IssuedAt, s.clock().UTC()) || !ed25519.Verify(node.PublicKey, input, signature) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	if err := s.store.RotateNodeCredential(r.Context(), node.OwnerID, node.NodeID, hash, s.clock().UTC()); err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	if s.hub != nil {
-		s.hub.DisconnectNode(node.OwnerID, node.NodeID)
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func (s *PairingService) authenticateNode(r *http.Request) (serverstore.NodeSession, bool) {
-	nodeID := r.Header.Get("X-Yuanshu-Node-ID")
-	credential, ok := bearerToken(r.Header.Get("Authorization"))
-	if !ok || !validOpaque(nodeID, 128) {
+	if s.hub == nil {
 		return serverstore.NodeSession{}, false
 	}
-	record, err := s.store.NodeSession(r.Context(), nodeID)
-	if err != nil || record.Status != "active" {
-		return serverstore.NodeSession{}, false
-	}
-	digest := sha256.Sum256([]byte(credential))
-	return record, len(record.CredentialHash) == sha256.Size && subtle.ConstantTimeCompare(digest[:], record.CredentialHash) == 1
+	session, ok := s.hub.AuthenticateNodeRequest(r)
+	return session.NodeSession, ok
 }
 
 func (s *PairingService) randomID(prefix string, size int) (string, error) {

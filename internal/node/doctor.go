@@ -51,15 +51,11 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 		return status, false
 	}
 	identityState := report[config.SecretIdentityPrivateKey]
-	switch report[config.SecretRelayCredential] {
-	case config.SecretAvailable:
-		status.Credential = "available"
-	case config.SecretMissing:
-		status.Credential = "missing"
-	case config.SecretUnset:
-		status.Credential = "not_configured"
-	default:
-		status.Credential = "unavailable"
+	status.NodeAuthentication = "device_signature"
+	if report[config.SecretRelayCredential] == config.SecretAvailable {
+		status.Credential = "legacy_pending_cleanup"
+	} else {
+		status.Credential = "not_required"
 	}
 	switch identityState {
 	case config.SecretAvailable:
