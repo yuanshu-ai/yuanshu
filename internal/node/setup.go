@@ -38,6 +38,18 @@ type SetupView struct {
 	Platform             string `json:"platform"`
 	DefaultName          string `json:"defaultName"`
 	DefaultCodex         string `json:"defaultCodex"`
+	Locale               string `json:"locale,omitempty"`
+}
+
+type discoveredServer struct {
+	Product                string `json:"product"`
+	APIVersion             string `json:"apiVersion"`
+	DeploymentMode         string `json:"deploymentMode"`
+	PublicURL              string `json:"publicUrl"`
+	NodeRelayURL           string `json:"nodeRelayUrl"`
+	PairingURL             string `json:"pairingUrl"`
+	NodeInvitationsAllowed bool   `json:"nodeInvitationsAllowed"`
+	CAFingerprint          string `json:"caFingerprint,omitempty"`
 }
 
 type setupSelection struct {
@@ -142,6 +154,13 @@ func (s *nodeSetupController) handle(ctx context.Context, request localRequest) 
 		s.mu.Unlock()
 	}
 	switch request.Command {
+	case "setup_discover":
+		server, err := s.discoverLocalServer(ctx)
+		if err != nil {
+			response.Error = "server_not_discovered"
+			return response
+		}
+		response.OK, response.Config = true, map[string]any{"server": server}
 	case "setup_pick":
 		selection, err := s.pickWorkspace(ctx, request.localSession)
 		if err != nil {
@@ -154,10 +173,15 @@ func (s *nodeSetupController) handle(ctx context.Context, request localRequest) 
 		if request.RelayCABundle == "" && s.httpClient != nil {
 			client = s.httpClient
 		}
-		if err != nil || testRelay(ctx, client, request.RelayURL) != nil {
+		server, discoverErr := discoverServer(ctx, client, request.ServerURL)
+		if request.ServerURL == "" {
+			server = discoveredServer{NodeRelayURL: request.RelayURL}
+			discoverErr = testRelay(ctx, client, request.RelayURL)
+		}
+		if err != nil || discoverErr != nil {
 			response.Error = "relay_test_failed"
 		} else {
-			response.OK, response.Config = true, map[string]any{"relay": "ready"}
+			response.OK, response.Config = true, map[string]any{"relay": "ready", "server": server}
 		}
 	case "setup_complete":
 		joinURL, err := s.complete(ctx, request)
@@ -175,6 +199,70 @@ func (s *nodeSetupController) handle(ctx context.Context, request localRequest) 
 		response.Error = "unsupported_command"
 	}
 	return response
+}
+
+func (s *nodeSetupController) discoverLocalServer(ctx context.Context) (discoveredServer, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	type result struct {
+		value discoveredServer
+		err   error
+	}
+	results := make(chan result, 2)
+	for _, target := range []string{"http://127.0.0.1:9527", "http://[::1]:9527"} {
+		go func(raw string) {
+			value, err := discoverServer(ctx, s.httpClient, raw)
+			results <- result{value: value, err: err}
+		}(target)
+	}
+	for range 2 {
+		select {
+		case item := <-results:
+			if item.err == nil && item.value.DeploymentMode == "local" {
+				return item.value, nil
+			}
+		case <-ctx.Done():
+			return discoveredServer{}, ctx.Err()
+		}
+	}
+	return discoveredServer{}, errors.New("local server was not found")
+}
+
+func discoverServer(ctx context.Context, client *http.Client, raw string) (discoveredServer, error) {
+	parsed, err := url.Parse(strings.TrimSuffix(strings.TrimSpace(raw), "/"))
+	if err != nil || parsed.User != nil || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" {
+		return discoveredServer{}, errors.New("server URL is invalid")
+	}
+	loopback := parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1"
+	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && loopback) {
+		return discoveredServer{}, errors.New("server URL must use HTTPS")
+	}
+	if client == nil {
+		client, _ = relayHTTPClient("", time.Second)
+	}
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String()+"/.well-known/yuanshu", nil)
+	response, err := client.Do(request)
+	if err != nil {
+		return discoveredServer{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return discoveredServer{}, errors.New("server discovery failed")
+	}
+	var value discoveredServer
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 16<<10))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&value) != nil || value.Product != "yuanshu" || value.APIVersion != "1" || value.NodeRelayURL == "" || value.PublicURL == "" {
+		return discoveredServer{}, errors.New("server identity is invalid")
+	}
+	relay, relayErr := url.Parse(value.NodeRelayURL)
+	if relayErr != nil || !validNodeRelayEndpoint(relay) || relay.Host != parsed.Host {
+		return discoveredServer{}, errors.New("server relay endpoint is invalid")
+	}
+	if loopback && (value.DeploymentMode != "local" || value.PublicURL != parsed.String()) {
+		return discoveredServer{}, errors.New("local server identity is invalid")
+	}
+	return value, nil
 }
 
 type pickedWorkspace struct{ Token, Name string }
@@ -287,7 +375,7 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 	workspaceID := setupWorkspaceID(facts.FileIdentity)
 	value := config.Config{
 		ConfigVersion: config.CurrentVersion,
-		Host:          config.HostConfig{Name: name},
+		Host:          config.HostConfig{Name: name, Locale: setupLocale(request.Locale)},
 		Transport:     config.TransportConfig{Mode: config.TransportRelay},
 		Relay:         config.RelayConfig{URL: request.RelayURL, ConnectTimeoutSeconds: 15, CredentialRef: credentialRef},
 		Identity:      config.IdentityConfig{PrivateKeyRef: identityRef},
@@ -384,6 +472,13 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 	setupSaved = true
 	selectionSucceeded = true
 	return request.JoinURL, nil
+}
+
+func setupLocale(value string) string {
+	if value == "en-US" {
+		return value
+	}
+	return "zh-CN"
 }
 
 func ensureSetupCredential(ctx context.Context, secrets platform.SecureStore, ref platform.SecretRef) ([]byte, error) {

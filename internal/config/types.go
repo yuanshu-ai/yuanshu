@@ -34,7 +34,8 @@ type Config struct {
 }
 
 type HostConfig struct {
-	Name string `toml:"name" json:"name"`
+	Name   string `toml:"name" json:"name"`
+	Locale string `toml:"locale,omitempty" json:"locale,omitempty"`
 }
 
 type TransportConfig struct {

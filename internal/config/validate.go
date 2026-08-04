@@ -29,6 +29,9 @@ func Validate(value Config) error {
 	if !validText(value.Host.Name, true, maxHostNameBytes) {
 		return configError("validation", ErrInvalid)
 	}
+	if value.Host.Locale != "" && value.Host.Locale != "zh-CN" && value.Host.Locale != "en-US" {
+		return configError("validation", ErrInvalid)
+	}
 	switch value.Transport.Mode {
 	case TransportRelay, TransportStandalone:
 	default:

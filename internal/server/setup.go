@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -20,7 +21,11 @@ import (
 	"time"
 
 	"github.com/skip2/go-qrcode"
+	producti18n "github.com/yuanshu-ai/yuanshu/internal/i18n"
 )
+
+//go:embed setup_web.html
+var serverSetupWizardHTML string
 
 const serverSetupHTML = `<!doctype html>
 <html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -46,6 +51,7 @@ type serverSetupService struct {
 }
 
 type serverSetupPayload struct {
+	Locale          string `json:"locale"`
 	Mode            string `json:"mode"`
 	DataDir         string `json:"dataDir"`
 	Listen          string `json:"listen"`
@@ -117,7 +123,13 @@ func (s *serverSetupService) ServeHTTP(writer http.ResponseWriter, request *http
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.Header().Set("Content-Security-Policy", "default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
-		_, _ = io.WriteString(writer, serverSetupHTML)
+		_, _ = io.WriteString(writer, serverSetupWizardHTML)
+	case "/api/locales":
+		if request.Method != http.MethodGet {
+			writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed")
+			return
+		}
+		writeJSON(writer, http.StatusOK, producti18n.Catalogs)
 	case "/api/session":
 		s.exchange(writer, request)
 	case "/api/state":
@@ -175,9 +187,9 @@ func (s *serverSetupService) authorized(request *http.Request) bool {
 }
 
 func (s *serverSetupService) state(writer http.ResponseWriter) {
-	result := map[string]any{"readOnly": s.readOnly, "interfaces": localInterfaceAddresses(), "config": map[string]any{"mode": "local", "dataDir": filepath.Join(filepath.Dir(s.configPath), "server-data"), "listen": DefaultListenAddress, "acmeEnvironment": "production"}}
+	result := map[string]any{"readOnly": s.readOnly, "interfaces": localInterfaceAddresses(), "config": map[string]any{"locale": "", "mode": "local", "dataDir": filepath.Join(filepath.Dir(s.configPath), "server-data"), "listen": DefaultListenAddress, "acmeEnvironment": "production"}}
 	if value, err := LoadConfigFile(s.configPath); err == nil {
-		result["config"] = map[string]any{"mode": string(value.DeploymentMode), "dataDir": value.DataDir, "listen": value.Listen, "publicURL": value.PublicURL, "tlsTermination": value.TLS.Termination, "certFile": value.TLS.CertFile, "keyFile": value.TLS.KeyFile, "acmeEnvironment": value.ACME.Environment, "acmeEmail": value.ACME.Email, "acceptTerms": value.ACME.AcceptTerms}
+		result["config"] = map[string]any{"locale": value.DefaultLocale, "mode": string(value.DeploymentMode), "dataDir": value.DataDir, "listen": value.Listen, "publicURL": value.PublicURL, "tlsTermination": value.TLS.Termination, "certFile": value.TLS.CertFile, "keyFile": value.TLS.KeyFile, "acmeEnvironment": value.ACME.Environment, "acmeEmail": value.ACME.Email, "acceptTerms": value.ACME.AcceptTerms}
 	}
 	writeJSON(writer, http.StatusOK, result)
 }
@@ -226,7 +238,7 @@ func (s *serverSetupService) apply(writer http.ResponseWriter, request *http.Req
 		writeError(writer, http.StatusBadRequest, "configuration_rejected")
 		return
 	}
-	arguments := []string{"--config", s.configPath, "--mode", body.Mode, "--data-dir", body.DataDir, "--listen", body.Listen, "--non-interactive"}
+	arguments := []string{"--config", s.configPath, "--mode", body.Mode, "--data-dir", body.DataDir, "--listen", body.Listen, "--locale", setupServerLocale(body.Locale), "--non-interactive"}
 	if body.PublicURL != "" {
 		arguments = append(arguments, "--public-url", body.PublicURL)
 	}
@@ -291,7 +303,7 @@ func validateServerSetupPayload(body serverSetupPayload) (ConfigFile, error) {
 		return ConfigFile{}, ErrInvalid
 	}
 	value := ConfigFile{
-		ConfigVersion: CurrentConfigVersion, DeploymentMode: DeploymentMode(body.Mode), DataDir: filepath.Clean(body.DataDir),
+		ConfigVersion: CurrentConfigVersion, DefaultLocale: setupServerLocale(body.Locale), DeploymentMode: DeploymentMode(body.Mode), DataDir: filepath.Clean(body.DataDir),
 		Listen: body.Listen, PublicURL: strings.TrimSuffix(body.PublicURL, "/"),
 	}
 	switch value.DeploymentMode {
@@ -312,6 +324,13 @@ func validateServerSetupPayload(body serverSetupPayload) (ConfigFile, error) {
 		}
 	}
 	return value, nil
+}
+
+func setupServerLocale(value string) string {
+	if value == "en-US" {
+		return value
+	}
+	return "zh-CN"
 }
 
 func localInterfaceAddresses() []string {

@@ -15,7 +15,7 @@ import (
 
 type serverInitOptions struct {
 	configPath, mode, dataDir, listen, publicURL, certFile, keyFile string
-	tlsTermination, acmeEnvironment, acmeEmail                      string
+	tlsTermination, acmeEnvironment, acmeEmail, locale              string
 	origins                                                         []string
 	nonInteractive, replace, acceptTerms                            bool
 }
@@ -64,7 +64,10 @@ func initializeServer(ctx context.Context, args []string, input io.Reader, outpu
 	if len(options.origins) == 0 && options.publicURL != "" {
 		options.origins = []string{controlOrigin(options.publicURL)}
 	}
-	value := ConfigFile{ConfigVersion: CurrentConfigVersion, DataDir: filepath.Clean(options.dataDir), Listen: options.listen, PublicURL: options.publicURL, AllowedControlOrigins: append([]string(nil), options.origins...)}
+	if options.locale == "" {
+		options.locale = "zh-CN"
+	}
+	value := ConfigFile{ConfigVersion: CurrentConfigVersion, DefaultLocale: options.locale, DataDir: filepath.Clean(options.dataDir), Listen: options.listen, PublicURL: options.publicURL, AllowedControlOrigins: append([]string(nil), options.origins...)}
 	switch options.mode {
 	case "local":
 		value.DeploymentMode = DeploymentLocal
@@ -213,7 +216,7 @@ func parseServerInitOptions(args []string) (serverInitOptions, error) {
 			case "--tls-key":
 				result.keyFile = value
 			}
-		case "--mode", "--listen", "--public-url", "--allowed-control-origin", "--tls-termination", "--acme-environment", "--acme-email":
+		case "--mode", "--listen", "--public-url", "--allowed-control-origin", "--tls-termination", "--acme-environment", "--acme-email", "--locale":
 			value, err := next()
 			if err != nil {
 				return result, ErrUsage
@@ -233,6 +236,11 @@ func parseServerInitOptions(args []string) (serverInitOptions, error) {
 				result.acmeEnvironment = value
 			case "--acme-email":
 				result.acmeEmail = value
+			case "--locale":
+				if value != "zh-CN" && value != "en-US" {
+					return result, ErrUsage
+				}
+				result.locale = value
 			}
 		case "--acme-accept-terms":
 			result.acceptTerms = true

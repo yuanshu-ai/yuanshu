@@ -20,7 +20,7 @@ export type NodeStatus = {
 
 export type NodeConfig = {
   revision?: string;
-  host?: { name?: string };
+  host?: { name?: string; locale?: string };
   transport?: { mode?: string };
   relay?: { url?: string; proxyUrl?: string; connectTimeoutSeconds?: number; credentialConfigured?: boolean; customCAConfigured?: boolean; customCAFingerprint?: string };
   adapter?: { codexEnabled?: boolean; binaryConfigured?: boolean; homeConfigured?: boolean; runtimeMode?: string };
@@ -52,7 +52,7 @@ export type Overview = {
   clients?: Array<{ ClientID: string; KeyID: string; Fingerprint: string; Status: string }>;
   enrollments?: Array<{ EnrollmentID: string; Name: string; OS: string; Fingerprint: string; ExpiresAt: string }>;
   devices?: Array<{ NodeID: string; Name: string; OS: string; Version: string; Status: string; Fingerprint: string; Online: boolean }>;
-  setup?: { required: boolean; pickerAvailable: boolean; workspacePreselected?: boolean; relayCaPreselected?: boolean; platform: string; defaultName: string; defaultCodex: string };
+  setup?: { required: boolean; pickerAvailable: boolean; workspacePreselected?: boolean; relayCaPreselected?: boolean; platform: string; defaultName: string; defaultCodex: string; locale?: string };
 };
 
 type SessionResponse = { session: string };

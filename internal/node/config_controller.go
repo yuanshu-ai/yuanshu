@@ -304,7 +304,7 @@ func configView(value config.Config, revision string, pending int) map[string]an
 	}
 	return map[string]any{
 		"revision":  revision,
-		"host":      map[string]any{"name": value.Host.Name},
+		"host":      map[string]any{"name": value.Host.Name, "locale": setupLocale(value.Host.Locale)},
 		"transport": map[string]any{"mode": string(value.Transport.Mode)},
 		"relay": map[string]any{
 			"url": value.Relay.URL, "proxyUrl": value.Relay.ProxyURL,

@@ -171,6 +171,12 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return err
 	}
+	handler = withWellKnownDiscovery(handler, wellKnownDiscovery{
+		DeploymentMode: string(effectiveDeploymentMode(options)),
+		PublicURL:      webAccessURL(options.PublicURL, listener.Addr()),
+		CAFingerprint:  shortCertificateFingerprint(tlsFingerprint),
+		Invitations:    adminEnabled(options.AdminEnabled),
+	})
 	handler, err = newWebDeliveryHandler(handler, webDeliveryOptions{
 		Enabled:      embeddedWebEnabled(options.WebEnabled),
 		PublicURL:    options.PublicURL,

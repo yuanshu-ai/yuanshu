@@ -27,7 +27,7 @@ const Usage = `Usage:
     [--tls-key <absolute-path>] [--tls-termination server|proxy]
     [--acme-environment production|staging] [--acme-email <email>] [--acme-accept-terms]
     [--allowed-control-origin https://web-host[:port]]
-    [--non-interactive] [--replace]
+    [--locale zh-CN|en-US] [--non-interactive] [--replace]
   yuanshu server setup --config <absolute-path>
   yuanshu server cert status --config <absolute-path> [--json]
   yuanshu server cert renew --config <absolute-path>

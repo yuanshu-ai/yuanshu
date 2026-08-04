@@ -54,6 +54,7 @@ type ACMEConfig struct {
 // transport purposes.
 type ConfigFile struct {
 	ConfigVersion  int            `toml:"config_version" json:"config_version"`
+	DefaultLocale  string         `toml:"default_locale,omitempty" json:"default_locale,omitempty"`
 	DeploymentMode DeploymentMode `toml:"deployment_mode,omitempty" json:"deployment_mode,omitempty"`
 	DataDir        string         `toml:"data_dir" json:"data_dir"`
 	Listen         string         `toml:"listen" json:"listen"`
@@ -165,6 +166,9 @@ func ValidateConfigFile(value ConfigFile) error {
 		value.Listen = DefaultListenAddress
 	}
 	if !validListen(value.Listen) || !validDeploymentConfig(value) {
+		return ErrInvalid
+	}
+	if value.DefaultLocale != "" && value.DefaultLocale != "zh-CN" && value.DefaultLocale != "en-US" {
 		return ErrInvalid
 	}
 	if !validControlOriginsForMode(value.AllowedControlOrigins, value.DeploymentMode == DeploymentLocal) {

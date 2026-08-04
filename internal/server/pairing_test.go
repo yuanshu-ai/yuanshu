@@ -143,7 +143,7 @@ func TestPairingPageUsesStrictBrowserBoundary(t *testing.T) {
 	}
 	storage := httptest.NewRecorder()
 	handler.ServeHTTP(storage, httptest.NewRequest(http.MethodGet, "/pair/storage.js", nil))
-	for _, required := range []string{"CONTROL_DATABASE_VERSION = 4", "runtime-settings", "node-bindings"} {
+	for _, required := range []string{"CONTROL_DATABASE_VERSION = 5", "runtime-settings", "node-bindings", "preferences"} {
 		if storage.Code != http.StatusOK || !strings.Contains(storage.Body.String(), required) {
 			t.Fatalf("pairing storage module missing %q", required)
 		}

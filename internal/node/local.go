@@ -36,6 +36,8 @@ type localRequest struct {
 	BaseRevision      string         `json:"baseRevision,omitempty"`
 	Changes           map[string]any `json:"changes,omitempty"`
 	Name              string         `json:"name,omitempty"`
+	Locale            string         `json:"locale,omitempty"`
+	ServerURL         string         `json:"serverUrl,omitempty"`
 	RelayURL          string         `json:"relayUrl,omitempty"`
 	RelayCABundle     string         `json:"relayCaBundle,omitempty"`
 	BootstrapSecret   string         `json:"bootstrapSecret,omitempty"`

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 
 import { BrandMark } from "./BrandMark";
 import { ConfigChange, LocalNodeAPI, NodeConfig, Overview } from "./api";
+import { useI18n } from "./i18n";
 import { machineStatus } from "./status/catalog.generated";
 
 type Section = "overview" | "connection" | "codex" | "workspaces" | "access" | "diagnostics";
@@ -16,6 +17,7 @@ const sections: Array<{ id: Section; label: string }> = [
 ];
 
 export function App() {
+  const { setLocale } = useI18n();
   const api = useMemo(() => new LocalNodeAPI(), []);
   const [section, setSection] = useState<Section>("overview");
   const [overview, setOverview] = useState<Overview>();
@@ -45,6 +47,11 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [overview, refresh]);
 
+  useEffect(() => {
+    const saved = overview?.config?.host?.locale;
+    if (saved === "zh-CN" || saved === "en-US") setLocale(saved);
+  }, [overview?.config?.host?.locale]);
+
   const run = async (command: string, fields: Record<string, unknown> = {}) => {
     setBusy(true);
     setMessage("");
@@ -69,7 +76,7 @@ export function App() {
   };
 
   if (!overview) return <Gate error={error} />;
-  if (overview.setup?.required) return <SetupWizard value={overview} run={run} busy={busy} error={error} message={message} />;
+  if (overview.setup?.required) return <GuidedSetupWizard value={overview} run={run} busy={busy} error={error} message={message} />;
   const status = overview.status;
   return (
     <main className="shell">
@@ -93,6 +100,96 @@ export function App() {
       </section>
     </main>
   );
+}
+
+type SetupServer = { publicUrl?: string; nodeRelayUrl?: string; deploymentMode?: string; nodeInvitationsAllowed?: boolean; caFingerprint?: string };
+
+function GuidedSetupWizard({ value, run, busy, error, message }: { value: Overview; run: (command: string, fields?: Record<string, unknown>) => Promise<Record<string, unknown>>; busy: boolean; error: string; message: string }) {
+  const setup = value.setup!;
+  const { locale, setLocale, t } = useI18n();
+  const [step, setStep] = useState(0);
+  const [name, setName] = useState(setup.defaultName);
+  const [serverMode, setServerMode] = useState<"local" | "remote">("local");
+  const [serverUrl, setServerUrl] = useState("");
+  const [relayUrl, setRelayUrl] = useState("");
+  const [server, setServer] = useState<SetupServer>();
+  const [connectionReady, setConnectionReady] = useState(false);
+  const [enrollmentMode, setEnrollmentMode] = useState<"bootstrap" | "join">("bootstrap");
+  const [enrollmentSecret, setEnrollmentSecret] = useState("");
+  const [codexBinary, setCodexBinary] = useState(setup.defaultCodex || "codex");
+  const [workspaceToken, setWorkspaceToken] = useState("");
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [permission, setPermission] = useState("read-only");
+  const [allowNetwork, setAllowNetwork] = useState(false);
+  const [relayCaBundle, setRelayCaBundle] = useState("");
+  const [relayCaError, setRelayCaError] = useState("");
+
+  useEffect(() => {
+    void run("setup_discover").then((result) => {
+      const found = (result.config as { server?: SetupServer } | undefined)?.server;
+      if (found?.publicUrl && found.nodeRelayUrl) {
+        setServer(found);
+        setServerUrl(found.publicUrl);
+        setRelayUrl(found.nodeRelayUrl);
+        setServerMode("local");
+      } else {
+        setServerMode("remote");
+      }
+    });
+  }, []);
+
+  const testConnection = async () => {
+    setConnectionReady(false);
+    const result = await run("setup_test", { serverUrl, relayCaBundle: relayCaBundle || undefined });
+    const found = (result.config as { server?: SetupServer } | undefined)?.server;
+    if (found?.nodeRelayUrl) {
+      setServer(found);
+      setRelayUrl(found.nodeRelayUrl);
+      setConnectionReady(true);
+    }
+  };
+  const pick = async () => {
+    const result = await run("setup_pick");
+    if (typeof result.workspaceToken === "string") setWorkspaceToken(result.workspaceToken);
+    if (typeof result.workspaceName === "string") setWorkspaceName(result.workspaceName);
+  };
+  const loadCA = async (file?: File) => {
+    setRelayCaError("");
+    setRelayCaBundle("");
+    setConnectionReady(false);
+    if (!file) return;
+    if (file.size > 64 * 1024) { setRelayCaError("CA file is too large"); return; }
+    const raw = await file.text();
+    if (!raw.includes("BEGIN CERTIFICATE") || raw.includes("PRIVATE KEY")) { setRelayCaError("CA file is invalid"); return; }
+    setRelayCaBundle(raw);
+  };
+  const complete = async () => {
+    await run("setup_complete", {
+      locale, name, serverUrl, relayUrl, relayCaBundle: relayCaBundle || undefined,
+      bootstrapSecret: enrollmentMode === "bootstrap" ? enrollmentSecret : undefined,
+      joinUrl: enrollmentMode === "join" ? enrollmentSecret : undefined,
+      codexBinary, workspaceToken, workspaceName, permissionProfile: permission, allowNetwork,
+    });
+    setStep(8);
+  };
+  const steps = ["language", "server", "verify", "enroll", "codex", "workspace", "permission", "review", "complete"] as const;
+  const canNext = step === 0 || step === 1 && Boolean(serverUrl) || step === 2 && connectionReady || step === 3 && Boolean(enrollmentSecret) || step === 4 && Boolean(codexBinary.trim()) || step === 5 && Boolean(workspaceToken) || step === 6 || step === 7;
+
+  return <main className="guided-setup">
+    <aside className="setup-rail"><div className="brand"><BrandMark /><div><strong>Yuanshu Node</strong><small>{setup.platform}</small></div></div><nav>{steps.map((item, index) => <span key={item} className={index === step ? "active" : index < step ? "done" : ""}>{String(index + 1).padStart(2, "0")} · {t(`setup.node.step.${item}`)}</span>)}</nav></aside>
+    <section className="setup-main"><header><span>{t("setup.node.title")}</span><small>{t("setup.node.subtitle")}</small></header><div className="setup-stage">
+      {step === 0 && <><p className="step-label">01</p><h1>{t("language.choose.title")}</h1><p className="helper">{t("language.choose.description")}</p><div className="setup-choice-grid"><button type="button" className={locale === "zh-CN" ? "active" : ""} onClick={() => void setLocale("zh-CN")}><strong>中文</strong><small>简体中文</small></button><button type="button" className={locale === "en-US" ? "active" : ""} onClick={() => void setLocale("en-US")}><strong>English</strong><small>English (US)</small></button></div></>}
+      {step === 1 && <><p className="step-label">02</p><h1>{t("setup.node.step.server")}</h1><div className="setup-choice-grid"><button type="button" className={serverMode === "local" ? "active" : ""} disabled={!server?.publicUrl} onClick={() => { setServerMode("local"); if (server?.publicUrl) setServerUrl(server.publicUrl); }}><strong>{t("setup.node.localServer")}</strong><small>{server?.publicUrl ? t("setup.node.discovered") : t("setup.node.notDiscovered")}</small></button><button type="button" className={serverMode === "remote" ? "active" : ""} onClick={() => { setServerMode("remote"); setServerUrl(""); setConnectionReady(false); }}><strong>{t("setup.node.remoteServer")}</strong><small>HTTPS</small></button></div><label><span>{t("setup.node.serverURL")}</span><input className="mono" type="url" value={serverUrl} placeholder="https://192.168.1.20:9527" onChange={(event) => { setServerUrl(event.target.value); setConnectionReady(false); }} /></label><p className="helper">{t("setup.node.serverURL.help")}</p></>}
+      {step === 2 && <><p className="step-label">03</p><h1>{t("setup.node.step.verify")}</h1><p className="helper">{serverUrl}</p><label><span>Private CA · {t("common.optional")}</span><input type="file" accept=".pem,.crt,application/x-pem-file,application/x-x509-ca-cert" onChange={(event) => void loadCA(event.target.files?.[0])} /></label>{relayCaError && <Notice tone="danger">{relayCaError}</Notice>}<button type="button" className="primary standalone-action" disabled={busy || !serverUrl} onClick={() => void testConnection()}>{busy ? t("common.testing") : t("common.test")}</button>{connectionReady && <div className="selection-summary"><strong>{t("setup.node.connectionReady")}</strong><small>{server?.deploymentMode} · {server?.caFingerprint || "system trust"}</small></div>}</>}
+      {step === 3 && <><p className="step-label">04</p><h1>{t("setup.node.step.enroll")}</h1><div className="segmented"><button type="button" className={enrollmentMode === "bootstrap" ? "active" : ""} onClick={() => { setEnrollmentMode("bootstrap"); setEnrollmentSecret(""); }}>Bootstrap</button><button type="button" className={enrollmentMode === "join" ? "active" : ""} onClick={() => { setEnrollmentMode("join"); setEnrollmentSecret(""); }}>Join URL</button></div><label><span>{enrollmentMode === "bootstrap" ? "Bootstrap secret" : "Enrollment join URL"}</span><input className="mono" type="password" autoComplete="off" value={enrollmentSecret} onChange={(event) => setEnrollmentSecret(event.target.value)} /></label><p className="helper">{t("setup.node.invitation.help")}</p></>}
+      {step === 4 && <><p className="step-label">05</p><h1>{t("setup.node.step.codex")}</h1><label><span>{t("setup.node.codexBinary")}</span><input className="mono" value={codexBinary} onChange={(event) => setCodexBinary(event.target.value)} /></label><div className="selection-summary"><strong>{t("setup.node.codexUnverified")}</strong><small>Compatibility is advisory, never a version allowlist.</small></div></>}
+      {step === 5 && <><p className="step-label">06</p><h1>{t("setup.node.step.workspace")}</h1><p className="helper">Browser input cannot select an absolute path. The operating system picker returns an opaque, one-time token.</p><button type="button" className="primary standalone-action" disabled={busy || !setup.pickerAvailable} onClick={() => void pick()}>{t("setup.node.pickWorkspace")}</button>{workspaceToken && <div className="selection-summary"><strong>{workspaceName || t("setup.node.workspaceSelected")}</strong><small>Path stays on this Node</small></div>}</>}
+      {step === 6 && <><p className="step-label">07</p><h1>{t("setup.node.step.permission")}</h1><label><span>{t("setup.node.workspaceName")}</span><input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} /></label><label><span>Permission</span><select value={permission} onChange={(event) => setPermission(event.target.value)}><option value="read-only">{t("setup.node.permission.readOnly")}</option><option value="workspace-write">{t("setup.node.permission.write")}</option></select></label><label className="check"><input type="checkbox" checked={allowNetwork} onChange={(event) => setAllowNetwork(event.target.checked)} /><span>{t("setup.node.allowNetwork")}</span></label></>}
+      {step === 7 && <><p className="step-label">08</p><h1>{t("setup.node.step.review")}</h1><p className="helper">{t("setup.node.review.help")}</p><div className="setup-review"><dl><Info label={t("setup.node.name")} value={name} /><Info label="Server" value={serverUrl} /><Info label="Relay" value={relayUrl} /><Info label="Workspace" value={workspaceName} /><Info label="Permission" value={`${permission} · network ${allowNetwork ? "on" : "off"}`} /></dl></div><label><span>{t("setup.node.name")}</span><input value={name} maxLength={128} onChange={(event) => setName(event.target.value)} /></label></>}
+      {step === 8 && <><p className="step-label">09</p><h1>{t("setup.node.complete.title")}</h1><p className="helper">{t("setup.node.complete.description")}</p></>}
+      {error && <Notice tone="danger">{error}</Notice>}{message && <Notice>{message}</Notice>}
+    </div><footer><button type="button" className="secondary" disabled={busy || step === 0 || step === 8} onClick={() => setStep((current) => Math.max(0, current - 1))}>{t("common.back")}</button><button type="button" className="primary" disabled={busy || !canNext} onClick={() => step === 7 ? void complete() : setStep((current) => Math.min(8, current + 1))}>{step === 7 ? t("common.confirm") : t("common.next")}</button></footer></section>
+  </main>;
 }
 
 function SetupWizard({ value, run, busy, error, message }: { value: Overview; run: (command: string, fields?: Record<string, unknown>) => Promise<Record<string, unknown>>; busy: boolean; error: string; message: string }) {
