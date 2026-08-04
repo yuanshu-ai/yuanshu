@@ -729,16 +729,19 @@ func (s *adminService) requireSession(w http.ResponseWriter, r *http.Request) (*
 	hash := tokenDigest(cookie.Value)
 	now := s.clock().UTC()
 	s.mu.Lock()
-	session := s.sessions[hash]
-	if session != nil && (now.After(session.expiresAt) || now.Sub(session.lastSeen) > s.options.SessionIdle) {
+	stored := s.sessions[hash]
+	if stored != nil && (now.After(stored.expiresAt) || now.Sub(stored.lastSeen) > s.options.SessionIdle) {
 		delete(s.sessions, hash)
-		session = nil
+		stored = nil
 	}
-	if session != nil {
-		session.lastSeen = now
+	var session adminSession
+	found := stored != nil
+	if found {
+		stored.lastSeen = now
+		session = *stored
 	}
 	s.mu.Unlock()
-	if session == nil {
+	if !found {
 		s.clearCookie(w, r)
 		writeError(w, http.StatusUnauthorized, "admin_auth_required")
 		return nil, false
@@ -750,8 +753,7 @@ func (s *adminService) requireSession(w http.ResponseWriter, r *http.Request) (*
 		writeError(w, http.StatusUnauthorized, "admin_auth_required")
 		return nil, false
 	}
-	copy := *session
-	return &copy, true
+	return &session, true
 }
 func (s *adminService) requireMutation(w http.ResponseWriter, r *http.Request) (*adminSession, bool) {
 	session, ok := s.requireSession(w, r)

@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ControlClient, ControlClientOptions, ControlRequestHandle, ControlTarget, LeaseScope, LeaseState, NodeBinding } from "../relay/control-client";
 import { MemoryControlStorage } from "../relay/storage";
@@ -9,6 +9,11 @@ import { fileChangeKey, threadKey, turnKey } from "../state/projection";
 import { WorkbenchSession, resourceKey } from "./session";
 
 describe("WorkbenchSession", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
   it("synchronizes every Node and limits Thread list reads to two at a time", async () => {
     let fake!: FakeClient;
     const session = new WorkbenchSession({
@@ -19,7 +24,7 @@ describe("WorkbenchSession", () => {
     });
     await session.initialize();
     session.connect();
-    await waitFor(() => session.getSnapshot().resources[resourceKey.notifications]?.state === "ready");
+    await waitFor(() => Object.values(session.projection.state.threads).length === 3);
 
     expect(fake.maxThreadReads).toBe(2);
     expect(Object.values(session.projection.state.threads)).toHaveLength(3);
@@ -45,12 +50,44 @@ describe("WorkbenchSession", () => {
     expect(session.projection.state.files[fileChangeKey("node-a", "workspace-1", "thread-1", "turn-1", "app.go")].diff).toBe("+detail");
     session.close();
   });
+
+  it("refreshes presence every 30 seconds only while the page is visible", async () => {
+    vi.useFakeTimers();
+    const fakeDocument = new EventTarget() as EventTarget & { visibilityState: "visible" | "hidden" };
+    fakeDocument.visibilityState = "visible";
+    vi.stubGlobal("document", fakeDocument);
+    let fake!: FakeClient;
+    const session = new WorkbenchSession({
+      identity: { ownerId: "owner", clientId: "client", keyId: "key", privateKey: {} as CryptoKey },
+      settings: { relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" },
+      storage: new MemoryControlStorage(),
+      clientFactory: (options) => (fake = new FakeClient(options)) as unknown as ControlClient,
+    });
+    await session.initialize();
+    session.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    const initial = fake.notificationReads;
+    expect(initial).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fake.notificationReads).toBeGreaterThan(initial);
+    const visibleReads = fake.notificationReads;
+    fakeDocument.visibilityState = "hidden";
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fake.notificationReads).toBe(visibleReads);
+    fakeDocument.visibilityState = "visible";
+    fakeDocument.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fake.notificationReads).toBe(visibleReads + 1);
+    session.close();
+  });
 });
 
 class FakeClient {
   readonly ready = Promise.resolve();
   state = "idle" as const as ControlClient["state"];
   maxThreadReads = 0;
+  notificationReads = 0;
   private activeThreadReads = 0;
   private message = 0;
   private readonly nodes: NodeBinding[] = [{ ownerId: "owner", nodeId: "node-a", name: "Office", online: true }];
@@ -85,6 +122,7 @@ class FakeClient {
     }
     const result = controlResult(target.nodeId ?? "node-a", correlationId);
     if (type === "notifications.list") {
+      this.notificationReads += 1;
       result.payload.notifications = [{ id: "notice", nodeId: "node-a", type: "task.completed", summary: "任务已完成", sourceSequence: 1, createdAt: "2026-08-03T00:00:00Z", read: false }];
       this.options.onControlResult?.(result);
     }

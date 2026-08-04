@@ -175,6 +175,36 @@ describe("ControlClient recovery", () => {
     expect(actions).toEqual(["offline:offline"]);
   });
 
+  it("applies an Owner-scoped presence snapshot to registered Node bindings", async () => {
+    const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+    const storage = new MemoryControlStorage();
+    const socket = new FakeSocket();
+    const client = new ControlClient({
+      url: "wss://relay.test/web/connect",
+      identity: { ownerId: "owner", clientId: "client", keyId: "key", privateKey: keyPair.privateKey },
+      nodes: [{ ownerId: "owner", nodeId: "node-a", online: true }, { ownerId: "owner", nodeId: "node-b", online: true }],
+      storage,
+      websocketFactory: () => socket,
+    });
+    client.connect();
+    socket.open();
+    socket.receive(challenge());
+    await tick();
+    socket.receive({ version: "1", type: "authenticated" });
+    await tick();
+
+    socket.receive({
+      protocolVersion: "1.0", messageId: "presence", type: "control.result", ownerId: "owner", nodeId: "node-a",
+      streamId: "server-control-v1-client", sequence: 1, correlationId: "notifications", sentAt: "2026-08-03T00:00:00Z",
+      payload: { status: "confirmed", onlineNodeIds: ["node-a", "unknown-node"], notifications: [] },
+    });
+    await tick();
+
+    expect(client.listNodes().map((node) => [node.nodeId, node.online])).toEqual([["node-a", true], ["node-b", false]]);
+    expect((await storage.listNodeBindings("owner")).map((node) => [node.nodeId, node.online])).toEqual([["node-a", true], ["node-b", false]]);
+    client.close();
+  });
+
   it("exposes a request message ID before the correlated result resolves", async () => {
     const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
     const socket = new FakeSocket();

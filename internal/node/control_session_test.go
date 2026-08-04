@@ -20,7 +20,7 @@ import (
 var controlSessionNow = time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 
 func TestControlSessionValidatesDispatchesAndReturnsDurableEvents(t *testing.T) {
-	serverSide, session, runtime, private := newControlSessionHarness(t)
+	serverSide, session, runtime, private, _ := newControlSessionHarness(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -48,7 +48,7 @@ func TestControlSessionValidatesDispatchesAndReturnsDurableEvents(t *testing.T) 
 }
 
 func TestControlSessionThreadStartUsesAdapterBoundary(t *testing.T) {
-	serverSide, session, runtime, private := newControlSessionHarness(t)
+	serverSide, session, runtime, private, _ := newControlSessionHarness(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -74,7 +74,7 @@ func TestControlSessionThreadStartUsesAdapterBoundary(t *testing.T) {
 }
 
 func TestControlSessionRejectsTamperedControlBeforeDispatch(t *testing.T) {
-	serverSide, session, runtime, private := newControlSessionHarness(t)
+	serverSide, session, runtime, private, _ := newControlSessionHarness(t)
 	raw := signedSessionControl(t, private, protocol.ControlDeviceSync, 1, map[string]any{}, nil, nil, nil, nil)
 	var document map[string]any
 	if err := json.Unmarshal(raw, &document); err != nil {
@@ -97,14 +97,90 @@ func TestControlSessionRejectsTamperedControlBeforeDispatch(t *testing.T) {
 	}
 }
 
-func TestControlSessionRefreshesOwnerTrustOnceForUnknownSigner(t *testing.T){
-	local,err:=store.Open(context.Background(),filepath.Join(t.TempDir(),"node.db"),store.Options{Clock:func()time.Time{return controlSessionNow}});if err!=nil{t.Fatal(err)};defer local.Close()
-	public,private,_:=ed25519.GenerateKey(nil);manager,err:=eventlog.NewManager(local,eventlog.Options{OwnerID:"owner",NodeID:"node",MaxAge:time.Hour,MaxBytes:16<<20,Clock:func()time.Time{return controlSessionNow}});if err!=nil{t.Fatal(err)};validator,err:=protocol.NewValidator(protocol.Options{TrustStore:local,ReplayStore:local,Now:func()time.Time{return controlSessionNow}});if err!=nil{t.Fatal(err)};serverSide,nodeSide,_:=transport.NewStandalonePair(transport.StandaloneOptions{QueueCapacity:8});defer serverSide.Close();runtime:=&controlRuntime{events:make(chan adapter.AgentEvent,4)};refreshes:=0
-	session,err:=NewControlSession(ControlSessionOptions{Transport:nodeSide,Validator:validator,Target:protocol.Target{OwnerID:"owner",NodeID:"node"},Events:manager,Store:local,Runtime:runtime,DeviceName:"Node",RefreshTrust:func(ctx context.Context)error{refreshes++;return local.PutTrustedKey(ctx,protocol.KeyRef{OwnerID:"owner",NodeID:"node",ClientID:"client",KeyID:"key"},protocol.TrustedKey{PublicKey:public,Status:protocol.TrustStatusActive})}});if err!=nil{t.Fatal(err)}
-	ctx,cancel:=context.WithCancel(context.Background());done:=make(chan error,1);go func(){done<-session.Run(ctx)}();raw:=signedSessionControl(t,private,protocol.ControlDeviceSync,1,map[string]any{},nil,nil,nil,nil);if err:=serverSide.Send(ctx,transport.NewFrame(raw));err!=nil{t.Fatal(err)};_ = receiveSessionEvent(t,serverSide);_ = receiveSessionEvent(t,serverSide);if refreshes!=1{t.Fatalf("refreshes=%d",refreshes)};cancel();if err:=<-done;err!=nil{t.Fatal(err)}
+func TestControlSessionRefreshesOwnerTrustOnceForUnknownSigner(t *testing.T) {
+	local, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "node.db"), store.Options{Clock: func() time.Time { return controlSessionNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	public, private, _ := ed25519.GenerateKey(nil)
+	manager, err := eventlog.NewManager(local, eventlog.Options{OwnerID: "owner", NodeID: "node", MaxAge: time.Hour, MaxBytes: 16 << 20, Clock: func() time.Time { return controlSessionNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator, err := protocol.NewValidator(protocol.Options{TrustStore: local, ReplayStore: local, Now: func() time.Time { return controlSessionNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverSide, nodeSide, _ := transport.NewStandalonePair(transport.StandaloneOptions{QueueCapacity: 8})
+	defer serverSide.Close()
+	runtime := &controlRuntime{events: make(chan adapter.AgentEvent, 4)}
+	refreshes := 0
+	session, err := NewControlSession(ControlSessionOptions{Transport: nodeSide, Validator: validator, Target: protocol.Target{OwnerID: "owner", NodeID: "node"}, Events: manager, Store: local, Runtime: runtime, DeviceName: "Node", RefreshTrust: func(ctx context.Context) error {
+		refreshes++
+		return local.PutTrustedKey(ctx, protocol.KeyRef{OwnerID: "owner", NodeID: "node", ClientID: "client", KeyID: "key"}, protocol.TrustedKey{PublicKey: public, Status: protocol.TrustStatusActive})
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- session.Run(ctx) }()
+	raw := signedSessionControl(t, private, protocol.ControlDeviceSync, 1, map[string]any{}, nil, nil, nil, nil)
+	if err := serverSide.Send(ctx, transport.NewFrame(raw)); err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveSessionEvent(t, serverSide)
+	_ = receiveSessionEvent(t, serverSide)
+	if refreshes != 1 {
+		t.Fatalf("refreshes=%d", refreshes)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
-func newControlSessionHarness(t *testing.T) (transport.Transport, *ControlSession, *controlRuntime, ed25519.PrivateKey) {
+func TestControlSessionWorkspaceListIncludesSafeExecutionPolicy(t *testing.T) {
+	serverSide, session, _, private, local := newControlSessionHarness(t)
+	if err := local.ReplaceWorkspaces(context.Background(), []store.WorkspaceRecord{{
+		ID: "workspace", DisplayName: "Workspace", CanonicalPath: "/private/synthetic/workspace", FilesystemRoot: "/", FileIdentity: "device:file", Adapter: "codex", PermissionProfile: "workspace-write", AllowNetwork: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- session.Run(ctx) }()
+	if err := serverSide.Send(ctx, transport.NewFrame(signedSessionControl(t, private, protocol.ControlWorkspaceList, 1, map[string]any{}, nil, nil, nil, nil))); err != nil {
+		t.Fatal(err)
+	}
+	event := receiveSessionEvent(t, serverSide)
+	if event.Type != string(protocol.EventDeviceStatus) {
+		t.Fatalf("event type = %q", event.Type)
+	}
+	items, ok := event.Payload["workspaces"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("workspaces = %#v", event.Payload["workspaces"])
+	}
+	workspace, ok := items[0].(map[string]any)
+	if !ok || workspace["allowNetwork"] != true || workspace["permissionProfile"] != "workspace-write" {
+		t.Fatalf("workspace = %#v", items[0])
+	}
+	if _, exposed := workspace["canonicalPath"]; exposed {
+		t.Fatalf("workspace exposed canonical path: %#v", workspace)
+	}
+	if _, exposed := workspace["path"]; exposed {
+		t.Fatalf("workspace exposed path: %#v", workspace)
+	}
+	_ = receiveSessionEvent(t, serverSide)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func newControlSessionHarness(t *testing.T) (transport.Transport, *ControlSession, *controlRuntime, ed25519.PrivateKey, *store.Store) {
 	t.Helper()
 	local, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "node.db"), store.Options{Clock: func() time.Time { return controlSessionNow }})
 	if err != nil {
@@ -139,7 +215,7 @@ func newControlSessionHarness(t *testing.T) (transport.Transport, *ControlSessio
 	if err != nil {
 		t.Fatal(err)
 	}
-	return serverSide, session, runtime, private
+	return serverSide, session, runtime, private, local
 }
 
 func signedSessionControl(t *testing.T, private ed25519.PrivateKey, kind protocol.ControlType, sequence int64, payload map[string]any, workspace, thread, turn, item *string) []byte {

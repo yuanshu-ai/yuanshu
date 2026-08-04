@@ -21,13 +21,12 @@ describe("new task flow", () => {
 
   it("retains the draft and does not retry an ambiguous start", async () => {
     const startThread = vi.fn(() => Promise.resolve({ messageId: "start", result: Promise.resolve({ payload: { status: "ambiguous", errorCode: "ambiguous" } }) }));
-    renderFlow({ startThread, initialTarget: { nodeId: "office", workspaceId: "repo" } });
+    const onDraftChange = vi.fn();
+    renderFlow({ startThread, onDraftChange, initialTarget: { nodeId: "office", workspaceId: "repo" } });
 
     const input = screen.getByLabelText("你希望 Codex 完成什么？");
     fireEvent.change(input, { target: { value: "Keep this draft" } });
-    const leaving = new Event("beforeunload", { cancelable: true });
-    window.dispatchEvent(leaving);
-    expect(leaving.defaultPrevented).toBe(true);
+    await waitFor(() => expect(onDraftChange).toHaveBeenCalledWith(true));
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(screen.getByRole("button", { name: "确认并启动" }));
 
@@ -37,17 +36,32 @@ describe("new task flow", () => {
     expect(screen.getByLabelText("你希望 Codex 完成什么？")).toHaveValue("Keep this draft");
   });
 
-  it("asks before discarding an unsent new task", async () => {
+  it("reports an unsent draft and delegates closing to the workbench guard", async () => {
     const onClose = vi.fn();
-    renderFlow({ onClose, initialTarget: { nodeId: "office", workspaceId: "repo" } });
+    const onDraftChange = vi.fn();
+    renderFlow({ onClose, onDraftChange, initialTarget: { nodeId: "office", workspaceId: "repo" } });
     fireEvent.change(screen.getByLabelText("你希望 Codex 完成什么？"), { target: { value: "Unsaved" } });
+    await waitFor(() => expect(onDraftChange).toHaveBeenCalledWith(true));
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    expect(screen.getByRole("dialog", { name: "放弃未发送的任务？" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
-    expect(screen.getByLabelText("你希望 Codex 完成什么？")).toHaveValue("Unsaved");
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    fireEvent.click(screen.getByRole("button", { name: "放弃草稿" }));
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("disables review immediately when the selected Node becomes unavailable", () => {
+    const props = {
+      session: { startThread: vi.fn() } as unknown as WorkbenchSession,
+      connectionState: "connected",
+      workspaces: [workspace("office", "repo")],
+      initialTarget: { nodeId: "office", workspaceId: "repo" },
+      onClose: vi.fn(),
+      onConfirmed: vi.fn(),
+    };
+    const view = render(<NewTaskFlow {...props} nodes={[node("office", true, "ready")]} />);
+    fireEvent.change(screen.getByLabelText("你希望 Codex 完成什么？"), { target: { value: "Run checks" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("button", { name: "确认并启动" })).toBeEnabled();
+    view.rerender(<NewTaskFlow {...props} nodes={[node("office", false, "ready")]} />);
+    expect(screen.getByRole("button", { name: "确认并启动" })).toBeDisabled();
+    expect(screen.getByText("设备当前离线")).toBeInTheDocument();
   });
 
   it("advances only after a confirmed result", async () => {
@@ -68,12 +82,13 @@ function renderFlow(options: {
   initialTarget?: { nodeId: string; workspaceId: string };
   onClose?: () => void;
   onConfirmed?: (messageId: string) => void;
+  onDraftChange?: (dirty: boolean) => void;
 } = {}) {
   const nodes = options.nodes ?? [node("office", true, "ready")];
   const workspaces = options.workspaces ?? [workspace("office", "repo")];
   const startThread = options.startThread ?? vi.fn();
   const session = { startThread } as unknown as WorkbenchSession;
-  return render(<NewTaskFlow session={session} connectionState="connected" nodes={nodes} workspaces={workspaces} initialTarget={options.initialTarget} onClose={options.onClose ?? vi.fn()} onConfirmed={options.onConfirmed ?? vi.fn()} />);
+  return render(<NewTaskFlow session={session} connectionState="connected" nodes={nodes} workspaces={workspaces} initialTarget={options.initialTarget} onClose={options.onClose ?? vi.fn()} onConfirmed={options.onConfirmed ?? vi.fn()} onDraftChange={options.onDraftChange} />);
 }
 
 function node(nodeId: string, online: boolean, runtimeStatus = "ready"): NodeProjection {

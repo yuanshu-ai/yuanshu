@@ -382,7 +382,13 @@ func (s *ControlSession) dispatch(ctx context.Context, message protocol.YuanshuM
 		}
 		workspaces := make([]any, 0, len(items))
 		for _, item := range items {
-			workspaces = append(workspaces, map[string]any{"id": item.ID, "name": item.DisplayName, "adapter": item.Adapter, "permissionProfile": item.PermissionProfile})
+			workspaces = append(workspaces, map[string]any{
+				"id":                item.ID,
+				"name":              item.DisplayName,
+				"adapter":           item.Adapter,
+				"permissionProfile": item.PermissionProfile,
+				"allowNetwork":      item.AllowNetwork,
+			})
 		}
 		return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventDeviceStatus, CorrelationID: message.MessageID, Payload: map[string]any{"status": "online", "workspaces": workspaces}})
 	case protocol.ControlThreadList:

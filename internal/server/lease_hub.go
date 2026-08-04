@@ -179,7 +179,10 @@ func (h *Hub) handleNotificationControl(ctx context.Context, source *hubConnecti
 			}
 			payload = append(payload, entry)
 		}
-		return h.sendServerResult(ctx, source, message, protocolv1.ControlResultConfirmed, "", map[string]any{"notifications": payload})
+		return h.sendServerResult(ctx, source, message, protocolv1.ControlResultConfirmed, "", map[string]any{
+			"notifications": payload,
+			"onlineNodeIds": h.ownerOnlineNodeIDs(source.ownerID),
+		})
 	case protocolv1.ControlNotificationsRead:
 		notificationID, ok := message.Payload["notificationId"].(string)
 		if !ok || notificationID == "" {

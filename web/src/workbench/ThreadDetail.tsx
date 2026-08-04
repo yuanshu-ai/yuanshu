@@ -179,7 +179,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
       {message && <div className="operation-message" role="status">{message}</div>}
       <form className="composer" onSubmit={(event) => void submit(event)}>
         <label className="sr-only" htmlFor="task-input">任务指令</label>
-        <textarea ref={textarea} id="task-input" value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={onComposerKeyDown} placeholder={placeholder} disabled={busy || connectionState !== "connected" || !selectedWorkspaceId} rows={3} />
+        <textarea ref={textarea} id="task-input" value={input} onChange={(event) => { setInput(event.target.value); onDraftChange?.(event.target.value.trim().length > 0); }} onKeyDown={onComposerKeyDown} placeholder={placeholder} disabled={busy || connectionState !== "connected" || !selectedWorkspaceId} rows={3} />
         <div className="composer-actions"><span>{activeTurn ? "纠偏当前执行" : "追加本轮执行"}<small>Cmd/Ctrl + Enter</small></span><div>{activeTurn && <button className="button danger" type="button" disabled={busy || !leaseHeld} onClick={() => void run("turn.interrupt", {}, { threadId: selectedThreadId, turnId: activeTurn.turnId })}><Icon name="stop" />停止</button>}<button className="button primary" type="submit" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId || !leaseHeld}>{busy ? "发送中" : !leaseHeld ? "需要控制权" : "发送"}<Icon name="send" /></button></div></div>
       </form>
     </div>

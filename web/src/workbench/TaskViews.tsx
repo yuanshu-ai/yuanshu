@@ -1,5 +1,5 @@
 import { Icon } from "./Icon";
-import type { TaskFilter, TaskSummary } from "./selectors";
+import { canStartTask, type TaskFilter, type TaskSummary } from "./selectors";
 import { formatTime, ResourceMessage, SkeletonRows, statusLabel, StatusPill } from "./WorkbenchPrimitives";
 import type { ResourceState } from "./session";
 
@@ -16,7 +16,7 @@ export function ContextRail({ nodes, workspaces, selectedNodeId, selectedWorkspa
 }
 
 export function HomeView({ groups, nodes, unreadNotifications, onOpen, onNew, onNotifications }: { groups: { continuation?: TaskSummary; approvals: TaskSummary[]; issues: TaskSummary[]; active: TaskSummary[]; recent: TaskSummary[] }; nodes: DeviceSummary[]; unreadNotifications: number; onOpen: (task: TaskSummary) => void; onNew: () => void; onNotifications: () => void }) {
-  const warnings = nodes.filter((node) => !node.online || ["unavailable", "not_available"].includes(node.runtimeStatus ?? ""));
+  const warnings = nodes.filter((node) => !canStartTask(node));
   return <div className="task-view home-view">
     <div className="task-heading"><div><p>任务接力</p><h1>继续你的 Codex 工作</h1></div><div className="heading-actions"><button className="attention-button" type="button" onClick={onNotifications} aria-label={`待办通知 ${unreadNotifications}`}><Icon name="bell" />{unreadNotifications > 0 && <span>{unreadNotifications}</span>}</button><button className="button primary" type="button" onClick={onNew}><Icon name="plus" />新任务</button></div></div>
     {groups.continuation ? <ContinueTaskCard task={groups.continuation} onOpen={() => onOpen(groups.continuation!)} /> : <div className="continue-empty"><Icon name="check" /><div><b>当前没有需要接续的任务</b><p>设备上的任务开始运行或等待审批时，会优先出现在这里。</p></div></div>}
@@ -52,7 +52,7 @@ export function TasksView({ tasks, allTasks, nodes, workspaces, filter, query, s
 export function DevicesView({ nodes, workspaces, selectedNodeId, selectedWorkspaceId, onNode, onWorkspace, onNewTask, onShowTasks }: { nodes: DeviceSummary[]; workspaces: WorkspaceSummary[]; selectedNodeId: string; selectedWorkspaceId: string; onNode: (value: string) => void; onWorkspace: (nodeId: string, workspaceId: string) => void; onNewTask: (nodeId: string, workspaceId: string) => void; onShowTasks: () => void }) {
   return <section className="utility-view devices-view"><div className="utility-heading"><div><p>执行位置</p><h1>设备与工作区</h1></div></div><p className="utility-intro">选择设备和工作区后查看对应任务。工作区权限仍由设备本地配置决定。</p><div className="device-card-list">{nodes.map((node) => {
     const nodeWorkspaces = workspaces.filter((workspace) => workspace.nodeId === node.nodeId);
-    const available = node.online && !["unavailable", "not_available", "offline"].includes(node.runtimeStatus ?? "");
+    const available = canStartTask(node);
     return <article className={`device-card ${node.nodeId === selectedNodeId ? "selected" : ""}`} key={node.nodeId}><button className="device-card-heading" type="button" onClick={() => onNode(node.nodeId)}><span className={`node-monogram ${available ? "online" : "offline"}`}>{(node.name ?? node.nodeId).slice(0, 1).toUpperCase()}</span><span><b>{node.name ?? "未命名设备"}</b><small>{node.online ? statusLabel(node.runtimeStatus) : "离线"}</small></span><StatusPill tone={available ? "accent" : "quiet"}>{available ? "可用" : "不可用"}</StatusPill></button><div className="device-workspaces">{nodeWorkspaces.map((workspace) => <div className={`device-workspace-row ${workspace.nodeId === selectedNodeId && workspace.workspaceId === selectedWorkspaceId ? "selected" : ""}`} key={workspace.key}><button type="button" className="workspace-select" onClick={() => onWorkspace(node.nodeId, workspace.workspaceId)}><Icon name="folder" /><span><b>{workspace.name ?? "未命名工作区"}</b><small>{permissionLabel(workspace.permissionProfile)} · {networkLabel(workspace.allowNetwork)}</small></span><Icon name="chevron" /></button><button type="button" className="workspace-new-task" disabled={!available} onClick={() => onNewTask(node.nodeId, workspace.workspaceId)} aria-label={`在 ${workspace.name ?? "未命名工作区"} 新建任务`}><Icon name="plus" />新建</button></div>)}{!nodeWorkspaces.length && <p>该设备尚未同步工作区。</p>}</div></article>;
   })}</div><button className="button primary devices-task-action" type="button" disabled={!selectedNodeId || !selectedWorkspaceId} onClick={onShowTasks}>查看所选工作区任务</button></section>;
 }

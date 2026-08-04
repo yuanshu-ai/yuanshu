@@ -125,6 +125,14 @@ describe("personal workbench", () => {
     fireEvent.click(screen.getByRole("button", { name: "查看 1 条新内容" }));
     expect(screen.queryByRole("button", { name: "查看 1 条新内容" })).not.toBeInTheDocument();
   });
+
+  it("seeds initial history as read and reports a newly observed Thread", async () => {
+    const fake = new FakeSession();
+    render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
+    await waitFor(() => expect(screen.queryByText("1 条新进展")).not.toBeInTheDocument());
+    act(() => fake.push(event(5, "thread.started", { status: "running", title: "External task" }, "workspace-a", "thread-external")));
+    expect(await screen.findByText("1 条新进展")).toBeInTheDocument();
+  });
 });
 
 class FakeSession {
@@ -139,7 +147,7 @@ class FakeSession {
     this.projection.apply(event(2, "thread.snapshot", { threads: [{ id: "thread-a", title: "Office task", preview: "Continue release", status: "running", updatedAt: "2026-08-03T02:00:00Z" }] }, "workspace-a"));
     this.projection.apply(event(3, "turn.started", { status: "running" }, "workspace-a", "thread-a", "turn-a"));
     this.projection.applyServerControlResult({ ...event(4, "control.result", { status: "confirmed", notifications: [{ id: "notice", nodeId: "node-a", workspaceId: "workspace-a", threadId: "thread-a", type: "task.completed", summary: "任务已完成", sourceSequence: 3, createdAt: "2026-08-03T02:10:00Z", read: false }] }), streamId: "server-control-v1-client" });
-    this.snapshot = { revision: 1, connectionState, projection: this.projection.state, resources: {} };
+    this.snapshot = { revision: 1, connectionState, projection: this.projection.state, resources: { "threads:node-a:workspace-a": { state: "ready", updatedAt: "2026-08-03T02:00:00Z" } } };
   }
 
   subscribe = (listener: () => void) => { this.listener = listener; return () => { this.listener = undefined; }; };

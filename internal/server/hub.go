@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -443,6 +444,19 @@ func (h *Hub) OwnerConnections(ownerID string) []HubConnectionSnapshot {
 			result = append(result, HubConnectionSnapshot{SubjectID: connection.subjectID, Role: string(connection.role), ConnectedAt: connection.connectedAt})
 		}
 	}
+	return result
+}
+
+func (h *Hub) ownerOnlineNodeIDs(ownerID string) []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	result := make([]string, 0)
+	for _, connection := range h.nodes {
+		if connection.ownerID == ownerID {
+			result = append(result, connection.subjectID)
+		}
+	}
+	sort.Strings(result)
 	return result
 }
 

@@ -129,6 +129,49 @@ test("protects an unsent task draft before leaving the detail", async ({ page })
   await expect(page.getByLabel("任务指令")).toHaveValue("Keep this unsent draft");
 });
 
+test("keeps browser Back aligned with an unsent Thread draft", async ({ page }) => {
+  await page.getByRole("button", { name: /Office release/ }).first().click();
+  await page.getByLabel("任务指令").fill("Keep this browser-back draft");
+  await page.goBack();
+  await expect(page.getByRole("dialog", { name: "放弃未发送的内容？" })).toBeVisible();
+  await page.getByRole("button", { name: "继续编辑" }).click();
+  await expect(page.getByLabel("任务指令")).toHaveValue("Keep this browser-back draft");
+  await page.goBack();
+  await page.getByRole("button", { name: "放弃草稿" }).click();
+  await expect.poll(() => page.evaluate(() => history.state?.yuanshuWorkbench ?? null)).not.toBe("thread");
+});
+
+test("protects a new-task draft from browser Back", async ({ page }) => {
+  await page.getByRole("button", { name: "新任务" }).click();
+  const flow = page.getByRole("dialog", { name: "开始新任务" });
+  await flow.getByRole("button", { name: /Office Mac.*Codex 可用/ }).click();
+  await flow.getByRole("button", { name: /Release repo.*可修改工作区文件/ }).click();
+  await flow.getByRole("button", { name: "下一步" }).click();
+  await flow.getByLabel("你希望 Codex 完成什么？").fill("Keep this new-task draft");
+  await page.goBack();
+  await expect(page.getByRole("dialog", { name: "放弃未发送的内容？" })).toBeVisible();
+  await page.getByRole("button", { name: "继续编辑" }).click();
+  await expect(flow.getByLabel("你希望 Codex 完成什么？")).toHaveValue("Keep this new-task draft");
+});
+
+test("disables new work when presence or Runtime becomes unavailable", async ({ page }) => {
+  await page.evaluate(() => (window as unknown as { __yuanshuEmitRuntime: (nodeId: string, state: string) => void }).__yuanshuEmitRuntime("node-office", "unavailable"));
+  await page.locator(".desktop-nav:visible, .mobile-nav:visible").getByRole("button", { name: "设备" }).click();
+  await expect(page.getByRole("button", { name: "在 Release repo 新建任务" })).toBeDisabled();
+
+  await page.evaluate(() => {
+    (window as unknown as { __yuanshuSetNodeOnline: (nodeId: string, online: boolean) => void }).__yuanshuSetNodeOnline("node-office", false);
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByText("离线", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "在 Release repo 新建任务" })).toBeDisabled();
+});
+
+test("marks a Thread first observed after hydration as new progress", async ({ page }) => {
+  await page.evaluate(() => (window as unknown as { __yuanshuEmitThread: (nodeId: string, workspaceId: string, threadId: string) => void }).__yuanshuEmitThread("node-office", "workspace-office", "thread-external"));
+  await expect(page.getByText("1 条新进展")).toBeVisible();
+});
+
 test("guides a revoked browser back to pairing", async ({ page }) => {
   await page.evaluate(() => localStorage.setItem("yuanshu-e2e-reauth", "1"));
   await page.reload();
@@ -194,6 +237,10 @@ async function installFakeRelay(page: Page): Promise<void> {
   await page.addInitScript(({ ownerId, clientId }) => {
     const sequences: Record<string, number> = {};
     let serverSequence = 0;
+    const onlineNodes = new Set(["node-office", "node-home"]);
+    (window as unknown as { __yuanshuSetNodeOnline: (nodeId: string, online: boolean) => void }).__yuanshuSetNodeOnline = (nodeId, online) => {
+      if (online) onlineNodes.add(nodeId); else onlineNodes.delete(nodeId);
+    };
     Object.defineProperty(crypto.subtle, "sign", {
       configurable: true,
       value: async () => new Uint8Array([1, 2, 3, 4]).buffer,
@@ -215,6 +262,16 @@ async function installFakeRelay(page: Page): Promise<void> {
           const rejected = localStorage.getItem("yuanshu-e2e-reauth") === "1";
           this.emit({ version: "1", type: "challenge", role: "control", connectionId: "connection-e2e", subjectId: rejected ? "revoked-client" : clientId, nonce: "nonce-e2e", expiresAt: new Date(Date.now() + 120_000).toISOString() });
         });
+        (window as unknown as { __yuanshuEmitRuntime: (nodeId: string, state: string) => void }).__yuanshuEmitRuntime = (nodeId, state) => {
+          const sequence = (sequences[nodeId] ?? 0) + 1;
+          sequences[nodeId] = sequence;
+          this.emit({ protocolVersion: "1.0", messageId: `event-${nodeId}-${sequence}`, type: "runtime.status", ownerId, nodeId, streamId: "node-events-v1", sequence, correlationId: "runtime-e2e", sentAt: new Date().toISOString(), payload: { state } });
+        };
+        (window as unknown as { __yuanshuEmitThread: (nodeId: string, workspaceId: string, threadId: string) => void }).__yuanshuEmitThread = (nodeId, workspaceId, threadId) => {
+          const sequence = (sequences[nodeId] ?? 0) + 1;
+          sequences[nodeId] = sequence;
+          this.emit({ protocolVersion: "1.0", messageId: `event-${nodeId}-${sequence}`, type: "thread.started", ownerId, nodeId, workspaceId, threadId, streamId: "node-events-v1", sequence, correlationId: "external-thread-e2e", sentAt: new Date().toISOString(), payload: { status: "running", title: "External task" } });
+        };
       }
 
       send(data: string): void {
@@ -243,6 +300,7 @@ async function installFakeRelay(page: Page): Promise<void> {
         const threadId = typeof control.threadId === "string" ? control.threadId : undefined;
         const turnId = typeof control.turnId === "string" ? control.turnId : undefined;
         const payload = control.payload as Record<string, unknown>;
+        if (!onlineNodes.has(nodeId) && !new Set(["lease.acquire", "lease.renew", "lease.release", "lease.status", "notifications.list", "notifications.read"]).has(type)) return;
 
         if (type === "events.replay") {
           this.nodeEvent(control, "control.result", { status: "confirmed" });
@@ -288,7 +346,7 @@ async function installFakeRelay(page: Page): Promise<void> {
           return;
         }
         if (type === "notifications.list") {
-          this.serverResult(control, { status: "confirmed", notifications: [{ id: "notification-1", nodeId: "node-office", workspaceId: "workspace-office", threadId: "thread-release", type: "approval.required", summary: "Office release is waiting for approval", sourceSequence: 5, createdAt: "2026-08-03T08:05:00Z", read: false }] });
+          this.serverResult(control, { status: "confirmed", onlineNodeIds: [...onlineNodes], notifications: [{ id: "notification-1", nodeId: "node-office", workspaceId: "workspace-office", threadId: "thread-release", type: "approval.required", summary: "Office release is waiting for approval", sourceSequence: 5, createdAt: "2026-08-03T08:05:00Z", read: false }] });
           return;
         }
         if (type === "notifications.read") {

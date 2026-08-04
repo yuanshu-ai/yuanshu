@@ -23,6 +23,18 @@ const ACTIVE = new Set(["running", "active", "inProgress", "waiting_approval", "
 const RUNNING = new Set(["running", "active", "inProgress"]);
 const WAITING = new Set(["idle", "waiting"]);
 
+export function canStartTask(node?: Pick<NodeProjection, "online" | "runtimeStatus">): boolean {
+  return node?.online === true && node.runtimeStatus === "ready";
+}
+
+export function taskStartUnavailableReason(node?: Pick<NodeProjection, "online" | "runtimeStatus">): string {
+  if (!node) return "请选择设备";
+  if (!node.online) return "设备当前离线";
+  if (!node.runtimeStatus) return "正在确认设备上的 Codex 状态";
+  if (node.runtimeStatus !== "ready") return "设备在线，但 Codex 当前不可用";
+  return "";
+}
+
 export function selectTasks(state: ProjectionState, readSequences: Readonly<Record<string, number>> = {}): TaskSummary[] {
   return Object.values(state.threads)
     .map((thread) => {

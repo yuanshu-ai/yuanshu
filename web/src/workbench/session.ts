@@ -65,6 +65,8 @@ export class WorkbenchSession {
   private synchronizationGeneration = 0;
   private disposed = false;
   private createdThread?: CreatedThreadSignal;
+  private presenceTimer?: ReturnType<typeof setInterval>;
+  private visibilityListener?: () => void;
 
   constructor(options: WorkbenchSessionOptions) {
     this.settings = options.settings;
@@ -102,6 +104,7 @@ export class WorkbenchSession {
 
   connect(): void {
     this.client.connect();
+    this.startPresenceMonitoring();
   }
 
   close(): void {
@@ -109,6 +112,10 @@ export class WorkbenchSession {
     this.disposed = true;
     this.synchronizationGeneration += 1;
     this.client.close();
+    if (this.presenceTimer) clearInterval(this.presenceTimer);
+    if (this.visibilityListener && typeof document !== "undefined") document.removeEventListener("visibilitychange", this.visibilityListener);
+    this.presenceTimer = undefined;
+    this.visibilityListener = undefined;
     this.listeners.clear();
   }
 
@@ -248,6 +255,8 @@ export class WorkbenchSession {
 
   private async synchronize(generation: number): Promise<void> {
     const nodes = this.client.listNodes();
+    await this.refreshNotifications().catch(() => undefined);
+    if (generation !== this.synchronizationGeneration || this.disposed) return;
     await Promise.all(nodes.map((node) => this.synchronizeNode(node.nodeId, generation)));
     if (generation !== this.synchronizationGeneration || this.disposed) return;
 
@@ -262,9 +271,18 @@ export class WorkbenchSession {
         false,
       );
     });
-    if (generation === this.synchronizationGeneration && !this.disposed) {
-      await this.refreshNotifications().catch(() => undefined);
-    }
+  }
+
+  private startPresenceMonitoring(): void {
+    if (this.presenceTimer || typeof document === "undefined") return;
+    const refresh = () => {
+      if (!this.disposed && this.client.state === "connected" && document.visibilityState === "visible") {
+        void this.refreshNotifications().catch(() => undefined);
+      }
+    };
+    this.visibilityListener = refresh;
+    document.addEventListener("visibilitychange", refresh);
+    this.presenceTimer = setInterval(refresh, 30_000);
   }
 
   private async synchronizeNode(nodeId: string, generation: number): Promise<void> {

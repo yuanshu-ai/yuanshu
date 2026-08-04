@@ -565,6 +565,7 @@ export class ControlClient {
 
   private async handleEvent(event: YuanshuMessage): Promise<void> {
     if (this.isServerControlResult(event)) {
+      this.applyPresenceSnapshot(event);
       this.options.onControlResult?.(event);
       this.applyLeaseResult(event);
       this.resolveControl(event);
@@ -826,18 +827,26 @@ export class ControlClient {
     const node = this.nodes.get(event.nodeId);
     if (!node) return;
     const payload = event.payload;
-    const status = typeof payload.status === "string" ? payload.status : undefined;
     const patch: NodeBinding = {
       ...node,
-      online: status ? !new Set(["offline", "unavailable", "not_available"]).has(status) : true,
+      online: true,
       lastSeen: event.sentAt,
     };
-    if (event.type === "device.status" || event.type === "runtime.status") {
+    if (event.type === "device.status") {
       if (typeof payload.status === "string") patch.status = payload.status;
       if (typeof payload.name === "string") patch.name = payload.name;
       if (typeof payload.version === "string") patch.version = payload.version;
     }
     this.registerNode(patch);
+  }
+
+  private applyPresenceSnapshot(event: YuanshuMessage): void {
+    if (!Array.isArray(event.payload.onlineNodeIds)) return;
+    const online = new Set(event.payload.onlineNodeIds.filter((value): value is string => typeof value === "string"));
+    for (const node of this.nodes.values()) {
+      const isOnline = online.has(node.nodeId);
+      this.registerNode({ ...node, online: isOnline, status: isOnline ? "online" : "offline" });
+    }
   }
 
   private resolveNodeId(target: ControlTarget): string {

@@ -14,6 +14,7 @@ import { connectionLabel, EmptyState, formatTime, ResourceMessage, SkeletonRows 
 
 type Screen = "home" | "tasks" | "devices" | "notifications" | "settings";
 type Selection = { nodeId: string; workspaceId: string; threadId: string };
+type HistorySurface = "thread" | "new-task";
 
 export function Workbench({ session, storage, settings, onSettingsSaved }: { session: WorkbenchSession; storage: ControlStorage; settings: RuntimeSettings; onSettingsSaved: () => void }) {
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
@@ -31,10 +32,21 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
   const [newTask, setNewTask] = useState<{ initialTarget?: NewTaskTarget }>();
   const [confirmedThreadStart, setConfirmedThreadStart] = useState("");
   const [detailDraftDirty, setDetailDraftDirty] = useState(false);
+  const [newTaskDraftDirty, setNewTaskDraftDirty] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const pendingNavigation = useRef<(() => void) | undefined>(undefined);
+  const draftDirtyRef = useRef(false);
   const detailDraftDirtyRef = useRef(false);
+  const newTaskDraftDirtyRef = useRef(false);
+  const activeSurfaceRef = useRef<HistorySurface | undefined>(undefined);
+  const suppressNextPop = useRef(false);
+  const hydratedWorkspaces = useRef(new Set<string>());
   const state = snapshot.projection;
+  const activeSurface: HistorySurface | undefined = newTask ? "new-task" : mobileThreadOpen ? "thread" : undefined;
+  activeSurfaceRef.current = activeSurface;
+  detailDraftDirtyRef.current = detailDraftDirty;
+  newTaskDraftDirtyRef.current = newTaskDraftDirty;
+  draftDirtyRef.current = detailDraftDirty || newTaskDraftDirty;
 
   const nodes = useMemo(() => Object.values(state.nodes).sort((left, right) => (left.name ?? left.nodeId).localeCompare(right.name ?? right.nodeId)), [state, snapshot.revision]);
   const allWorkspaces = useMemo(() => Object.values(state.workspaces), [state, snapshot.revision]);
@@ -47,7 +59,7 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
   const taskResource = useMemo(() => summarizeTaskResources(snapshot.resources), [snapshot.resources]);
 
   const navigate = useCallback((action: () => void) => {
-    if (!detailDraftDirtyRef.current) {
+    if (!draftDirtyRef.current) {
       action();
       return;
     }
@@ -57,18 +69,49 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
 
   const handleDetailDraftChange = useCallback((dirty: boolean) => {
     detailDraftDirtyRef.current = dirty;
+    draftDirtyRef.current = dirty || newTaskDraftDirtyRef.current;
     setDetailDraftDirty(dirty);
   }, []);
 
+  const handleNewTaskDraftChange = useCallback((dirty: boolean) => {
+    newTaskDraftDirtyRef.current = dirty;
+    draftDirtyRef.current = dirty || detailDraftDirtyRef.current;
+    setNewTaskDraftDirty(dirty);
+  }, []);
+
+  const closeSurface = useCallback((surface: HistorySurface) => {
+    if (surface === "new-task") {
+      setNewTask(undefined);
+      setNewTaskDraftDirty(false);
+      return;
+    }
+    setMobileThreadOpen(false);
+    setDetailDraftDirty(false);
+  }, []);
+
+  const leaveSurface = useCallback((surface: HistorySurface, next?: () => void) => {
+    const finish = () => {
+      closeSurface(surface);
+      next?.();
+    };
+    if (window.history.state?.yuanshuWorkbench === surface) {
+      suppressNextPop.current = true;
+      window.history.back();
+      finish();
+      return;
+    }
+    finish();
+  }, [closeSurface]);
+
   useEffect(() => {
-    if (!detailDraftDirty) return;
+    if (!detailDraftDirty && !newTaskDraftDirty) return;
     const protect = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", protect);
     return () => window.removeEventListener("beforeunload", protect);
-  }, [detailDraftDirty]);
+  }, [detailDraftDirty, newTaskDraftDirty]);
 
   const markTaskRead = useCallback((key: string, sequence: number) => {
     setReadSequences((current) => {
@@ -92,15 +135,26 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
   }, [allWorkspaces, selectedNodeId, selectedWorkspaceId]);
 
   useEffect(() => {
-    const missing = Object.values(state.threads).filter((thread) => readSequences[thread.key] === undefined);
-    if (!missing.length) return;
+    const additions: Record<string, number> = {};
+    for (const workspace of allWorkspaces) {
+      const workspaceKey = `${workspace.nodeId}\u001f${workspace.workspaceId}`;
+      const resource = snapshot.resources[resourceKey.threads(workspace.nodeId, workspace.workspaceId)];
+      if (resource?.state !== "ready" && resource?.state !== "empty") continue;
+      const baseline = !hydratedWorkspaces.current.has(workspaceKey);
+      for (const thread of Object.values(state.threads)) {
+        if (thread.nodeId !== workspace.nodeId || thread.workspaceId !== workspace.workspaceId || readSequences[thread.key] !== undefined) continue;
+        additions[thread.key] = baseline ? thread.latestSequence : Math.max(0, (thread.firstObservedSequence ?? thread.latestSequence) - 1);
+      }
+      hydratedWorkspaces.current.add(workspaceKey);
+    }
+    if (!Object.keys(additions).length) return;
     setReadSequences((current) => {
       const next = { ...current };
-      for (const thread of missing) if (next[thread.key] === undefined) next[thread.key] = thread.latestSequence;
+      for (const [key, sequence] of Object.entries(additions)) if (next[key] === undefined) next[key] = sequence;
       writeTaskProgress(next);
       return next;
     });
-  }, [readSequences, snapshot.revision, state.threads]);
+  }, [allWorkspaces, readSequences, snapshot.resources, snapshot.revision, state.threads]);
 
   useEffect(() => {
     if (!selectedNodeId || !selectedWorkspaceId) return;
@@ -114,16 +168,33 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
     setSelectedWorkspaceId(created.workspaceId);
     setSelectedThreadId(created.threadId);
     setMobileThreadOpen(true);
+    if (window.history.state?.yuanshuWorkbench !== "thread") window.history.pushState({ yuanshuWorkbench: "thread" }, "");
+    const createdKey = `${created.nodeId}\u001f${created.workspaceId}\u001f${created.threadId}`;
+    markTaskRead(createdKey, state.threads[createdKey]?.latestSequence ?? 0);
     setConfirmedThreadStart("");
     void session.loadThread(created.nodeId, created.workspaceId, created.threadId, true).catch(() => undefined);
     session.clearCreatedThread(created.messageId);
-  }, [confirmedThreadStart, snapshot.createdThread, session]);
+  }, [confirmedThreadStart, markTaskRead, snapshot.createdThread, session, state.threads]);
 
   useEffect(() => {
-    const onPopState = () => navigate(() => setMobileThreadOpen(false));
+    const onPopState = () => {
+      const surface = activeSurfaceRef.current;
+      if (!surface) return;
+      if (suppressNextPop.current) {
+        suppressNextPop.current = false;
+        return;
+      }
+      if (draftDirtyRef.current) {
+        window.history.pushState({ yuanshuWorkbench: surface }, "");
+        pendingNavigation.current = () => leaveSurface(surface);
+        setConfirmDiscard(true);
+        return;
+      }
+      closeSurface(surface);
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [navigate]);
+  }, [closeSurface, leaveSurface]);
 
   const openThread = (task: TaskSummary, pushHistory = true, afterOpen?: () => void) => {
     navigate(() => {
@@ -133,12 +204,16 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
       setSelectedThreadId(thread.threadId);
       setMobileThreadOpen(true);
       markTaskRead(thread.key, thread.latestSequence);
-      if (pushHistory && !mobileThreadOpen) window.history.pushState({ yuanshuWorkbench: "thread" }, "");
+      if (pushHistory && activeSurfaceRef.current !== "thread") window.history.pushState({ yuanshuWorkbench: "thread" }, "");
       void session.loadThread(thread.nodeId, thread.workspaceId, thread.threadId).then(afterOpen).catch(() => undefined);
     });
   };
 
-  const openNewTask = (initialTarget?: NewTaskTarget) => navigate(() => setNewTask({ initialTarget }));
+  const openNewTask = (initialTarget?: NewTaskTarget) => navigate(() => {
+    setNewTask({ initialTarget });
+    setNewTaskDraftDirty(false);
+    if (window.history.state?.yuanshuWorkbench !== "new-task") window.history.pushState({ yuanshuWorkbench: "new-task" }, "");
+  });
 
   const openNotification = async (notification: (typeof notifications)[number]) => {
     const task = notification.threadId ? tasks.find((candidate) => candidate.thread.nodeId === notification.nodeId && candidate.thread.workspaceId === notification.workspaceId && candidate.thread.threadId === notification.threadId) : undefined;
@@ -161,16 +236,24 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
   };
 
   const selectScreen = (next: Screen) => navigate(() => {
-    setScreen(next);
-    setMobileThreadOpen(false);
+    const apply = () => {
+      setScreen(next);
+      setMobileThreadOpen(false);
+    };
+    const surface = activeSurfaceRef.current;
+    if (surface) leaveSurface(surface, apply); else apply();
   });
 
   const selectDeviceWorkspace = (nodeId: string, workspaceId: string) => navigate(() => {
-    setSelectedNodeId(nodeId);
-    setSelectedWorkspaceId(workspaceId);
-    setSelectedThreadId("");
-    setTaskNodeFilter(nodeId);
-    setTaskWorkspaceFilter(workspaceId);
+    const apply = () => {
+      setSelectedNodeId(nodeId);
+      setSelectedWorkspaceId(workspaceId);
+      setSelectedThreadId("");
+      setTaskNodeFilter(nodeId);
+      setTaskWorkspaceFilter(workspaceId);
+    };
+    const surface = activeSurfaceRef.current;
+    if (surface) leaveSurface(surface, apply); else apply();
   });
 
   return <main className={`workbench-shell ${mobileThreadOpen ? "thread-open" : ""}`}>
@@ -192,11 +275,11 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
           <TaskDataState resource={taskResource} hasTasks={tasks.length > 0} onRetry={() => void session.refreshAll()} />
           {screen === "home" ? <HomeView groups={groups} nodes={nodes} unreadNotifications={unread} onOpen={openThread} onNew={() => openNewTask()} onNotifications={() => selectScreen("notifications")} /> : <TasksView tasks={filteredTasks} allTasks={tasks} nodes={nodes} workspaces={allWorkspaces} filter={filter} query={query} selectedNodeId={taskNodeFilter} selectedWorkspaceId={taskWorkspaceFilter} onFilter={setFilter} onQuery={setQuery} onNode={(nodeId) => { setTaskNodeFilter(nodeId); setTaskWorkspaceFilter(""); }} onWorkspace={setTaskWorkspaceFilter} onOpen={openThread} onNew={() => openNewTask()} />}
         </section>
-        <ThreadDetail session={session} snapshotRevision={snapshot.revision} connectionState={snapshot.connectionState} state={state} resource={selectedThreadId ? snapshot.resources[resourceKey.thread(selectedNodeId, selectedWorkspaceId, selectedThreadId)] : undefined} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} selectedThreadId={selectedThreadId} onRead={markTaskRead} onDraftChange={handleDetailDraftChange} onBack={() => navigate(() => { if (window.history.state?.yuanshuWorkbench === "thread") window.history.back(); else setMobileThreadOpen(false); })} />
+        <ThreadDetail session={session} snapshotRevision={snapshot.revision} connectionState={snapshot.connectionState} state={state} resource={selectedThreadId ? snapshot.resources[resourceKey.thread(selectedNodeId, selectedWorkspaceId, selectedThreadId)] : undefined} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} selectedThreadId={selectedThreadId} onRead={markTaskRead} onDraftChange={handleDetailDraftChange} onBack={() => navigate(() => leaveSurface("thread"))} />
       </div>}
 
-    {newTask && <NewTaskFlow session={session} connectionState={snapshot.connectionState} nodes={nodes} workspaces={allWorkspaces} initialTarget={newTask.initialTarget} onClose={() => setNewTask(undefined)} onConfirmed={(messageId) => { setConfirmedThreadStart(messageId); setNewTask(undefined); }} />}
-    {confirmDiscard && <Dialog title="放弃未发送的内容？" destructive onClose={() => setConfirmDiscard(false)} actions={<><button className="button secondary" type="button" onClick={() => setConfirmDiscard(false)}>继续编辑</button><button className="button danger solid" type="button" onClick={() => { setConfirmDiscard(false); detailDraftDirtyRef.current = false; setDetailDraftDirty(false); const action = pendingNavigation.current; pendingNavigation.current = undefined; action?.(); }}>放弃草稿</button></>}><p>当前任务中的内容尚未发送。离开后这份草稿不会保存在浏览器中。</p></Dialog>}
+    {newTask && <NewTaskFlow session={session} connectionState={snapshot.connectionState} nodes={nodes} workspaces={allWorkspaces} initialTarget={newTask.initialTarget} onClose={() => navigate(() => leaveSurface("new-task"))} onConfirmed={(messageId) => { draftDirtyRef.current = false; setNewTaskDraftDirty(false); leaveSurface("new-task", () => setConfirmedThreadStart(messageId)); }} onDraftChange={handleNewTaskDraftChange} />}
+    {confirmDiscard && <Dialog title="放弃未发送的内容？" destructive onClose={() => setConfirmDiscard(false)} actions={<><button className="button secondary" type="button" onClick={() => setConfirmDiscard(false)}>继续编辑</button><button className="button danger solid" type="button" onClick={() => { setConfirmDiscard(false); draftDirtyRef.current = false; detailDraftDirtyRef.current = false; newTaskDraftDirtyRef.current = false; setDetailDraftDirty(false); setNewTaskDraftDirty(false); const action = pendingNavigation.current; pendingNavigation.current = undefined; action?.(); }}>放弃草稿</button></>}><p>当前内容尚未发送。离开后这份草稿不会保存在浏览器中。</p></Dialog>}
 
     <nav className="mobile-nav" aria-label="工作台导航">
       <NavButton icon="home" label="首页" active={screen === "home"} onClick={() => selectScreen("home")} />

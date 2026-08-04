@@ -233,8 +233,13 @@ func TestHubLeaseGuardsTurnControlsAndAllowsCurrentHolder(t *testing.T) {
 
 func TestHubNotificationsStayOwnerScopedAndCanBeMarkedRead(t *testing.T) {
 	fixture := newHubFixture(t)
+	node := fixture.dialNode(t)
 	control := fixture.dialControl(t)
 	defer control.Close()
+	waitHubSnapshot(t, fixture.hub, 1, 1)
+	fixture.hub.mu.Lock()
+	fixture.hub.nodes["other-owner\x00other-node"] = &hubConnection{ownerID: "other-owner", subjectID: "other-node", role: transport.SessionRoleNode}
+	fixture.hub.mu.Unlock()
 	if err := fixture.hub.notifications.SaveNotification(context.Background(), serverstore.Notification{ID: "notice", OwnerID: "own_test", NodeID: "nod_test", Type: "task.completed", Summary: "任务已完成", SourceSequence: 7, DedupKey: "turn:7", CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +259,34 @@ func TestHubNotificationsStayOwnerScopedAndCanBeMarkedRead(t *testing.T) {
 	if !ok || len(items) != 1 {
 		t.Fatalf("notification list=%v", payload)
 	}
-	read := signedControl(t, fixture, protocolv1.ControlNotificationsRead, 2, map[string]any{"notificationId": "notice"}, "", "", "", "")
+	online, ok := payload["onlineNodeIds"].([]any)
+	if !ok || len(online) != 1 || online[0] != "nod_test" {
+		t.Fatalf("online nodes=%v", payload["onlineNodeIds"])
+	}
+	fixture.hub.mu.Lock()
+	delete(fixture.hub.nodes, "other-owner\x00other-node")
+	fixture.hub.mu.Unlock()
+	if err := node.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitHubSnapshot(t, fixture.hub, 0, 1)
+	offlineList := signedControl(t, fixture, protocolv1.ControlNotificationsList, 2, map[string]any{"limit": 20}, "", "", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(offlineList)); err != nil {
+		t.Fatal(err)
+	}
+	offlineResult, err := receiveJSONType(control, string(protocolv1.EventControlResult))
+	if err != nil {
+		t.Fatal(err)
+	}
+	offlinePayload, ok := offlineResult["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("offline list result=%v", offlineResult)
+	}
+	offlineNodes, ok := offlinePayload["onlineNodeIds"].([]any)
+	if !ok || len(offlineNodes) != 0 {
+		t.Fatalf("offline nodes=%v", offlinePayload["onlineNodeIds"])
+	}
+	read := signedControl(t, fixture, protocolv1.ControlNotificationsRead, 3, map[string]any{"notificationId": "notice"}, "", "", "", "")
 	if err := control.Send(context.Background(), transport.NewFrame(read)); err != nil {
 		t.Fatal(err)
 	}
