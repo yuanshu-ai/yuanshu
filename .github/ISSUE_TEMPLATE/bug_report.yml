@@ -1,0 +1,89 @@
+name: Bug report
+description: Report a reproducible Yuanshu problem without sensitive data
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Yuanshu. Do not include credentials, keys, private task content, full command output, Diffs, absolute local paths, or private Relay addresses. Report security vulnerabilities through GitHub Private Vulnerability Reporting instead.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Server / Relay
+        - Yuanshu Node
+        - Web workbench
+        - Server Admin
+        - Pairing
+        - Standalone
+        - Protocol / SDK
+        - Build / CI
+        - Documentation
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Yuanshu commit
+      description: Commit hash or branch. There is no supported release version yet.
+      placeholder: abcdef0 or main
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Platform and architecture
+      placeholder: macOS arm64, Windows x64, Linux amd64, iPhone Safari, Android Chrome
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment mode
+      options:
+        - local
+        - lan-managed
+        - public-ip-acme
+        - external/server
+        - external/proxy
+        - standalone
+        - Not applicable / unknown
+    validations:
+      required: true
+  - type: input
+    id: codex
+    attributes:
+      label: Codex compatibility result
+      description: Optional detected version and known/unverified/partial/unavailable result. Do not include authentication data.
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Use a disposable workspace and the minimum redacted steps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include safe error codes or correlation IDs only.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data-safety confirmation
+      options:
+        - label: I removed credentials, keys, cookies, private task content, full command output, Diffs, absolute paths, and private Relay addresses.
+          required: true
+        - label: This is not an undisclosed security vulnerability.
+          required: true

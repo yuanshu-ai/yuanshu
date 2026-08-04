@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Self-hosting and configuration documentation
+    url: https://github.com/yuanshu-ai/yuanshu/tree/main/guides
+    about: Review deployment, TLS, configuration, Node UI, and Server Admin documentation first.
+  - name: Private security report
+    url: https://github.com/yuanshu-ai/yuanshu/security/advisories/new
+    about: Report suspected vulnerabilities privately. Never disclose them in a public Issue.

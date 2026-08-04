@@ -72,6 +72,7 @@ jobs:
           corepack enable
           corepack install --global pnpm@11.18.0
       - run: pnpm install --frozen-lockfile
+      - run: pnpm readme:check
       - run: pnpm protocol:check
       - run: pnpm protocol:test
       - run: pnpm --dir web test

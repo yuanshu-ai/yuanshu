@@ -1,6 +1,6 @@
 # Yuanshu · 远枢
 
-> Open-source remote workspace for local AI coding agents.
+> An open-source remote workbench for AI coding agents running on your own computers.
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
@@ -8,382 +8,214 @@
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](#project-status)
 [![CI](https://github.com/yuanshu-ai/yuanshu/actions/workflows/ci.yml/badge.svg)](https://github.com/yuanshu-ai/yuanshu/actions/workflows/ci.yml)
 
-Yuanshu is being built for developers who want to control AI coding agents running on their own computers from a phone, tablet, or browser. It focuses on structured agent activity—threads, streaming output, commands, diffs, approvals, and task state—instead of forwarding an entire desktop.
+Yuanshu lets you follow and control Codex work running on your personal computers from a phone, tablet, or browser. It presents agent-native state—threads, streaming output, commands, diffs, approvals, and recovery—instead of mirroring an entire desktop.
 
-The name **远枢** combines “remote” (远) and “hub/pivot” (枢): a remote control hub for the machines and agents you already use.
+![Yuanshu desktop workbench](./.github/assets/readme/desktop-workbench.png)
 
-> [!IMPORTANT]
-> Yuanshu is currently in pre-alpha design and technical validation. There is no installable release yet. Do not use the project to expose a development machine to the public internet.
+| Mobile task home | Mobile task detail |
+| --- | --- |
+| <img src="./.github/assets/readme/mobile-home.png" alt="Yuanshu mobile task home" width="360"> | <img src="./.github/assets/readme/mobile-task-detail.png" alt="Yuanshu mobile task detail" width="360"> |
 
-## Why Yuanshu?
+<!-- readme-section: status -->
+## Project status
 
-- **One controller, many nodes** — Follow work across a personal PC, work machine, always-on computer, or development server from one interface.
-- **Authentication-neutral** — Reuse the Codex setup already working on each node machine, whether it uses ChatGPT sign-in, an API key, or a supported custom provider.
-- **Local execution and credentials** — Model requests, source code, shell access, Git/SSH credentials, and agent authentication stay on the node machine.
-- **Agent-native remote experience** — Display task state, streamed events, approvals, commands, and diffs instead of mirroring a desktop.
-- **Open and self-hostable** — Yuanshu Node, Server, Web, protocol, and adapters are intended to remain auditable and self-hostable.
-- **Designed to grow beyond one agent** — The first adapter targets Codex app-server; additional local coding agents can be added through explicit capability adapters.
+> [!WARNING]
+> Yuanshu is **pre-alpha and source-build only**. There is no signed installer or supported production release. PF-052 real-device acceptance for macOS, Windows, iPhone, Android, iPad, and network switching is still in progress. Do not use the current build to expose a development machine directly to the public internet.
 
-## Planned personal MVP
+The implementation is usable for development and self-hosting evaluation. Automated Protocol, Web, Go, cross-build, replay, TLS, and certificate-provider tests are in place, but they do not replace real-device release acceptance.
 
-The first usable version is intentionally focused:
+<!-- readme-section: capabilities -->
+## What works today
 
-- One owner controlling 1–5 Yuanshu Nodes;
-- Windows 11 x64 Node first;
-- Linux amd64 Server and Standalone as the initial self-hosting target;
-- Codex app-server integration;
-- Local workspace allowlist;
-- Create, list, read, and resume threads;
-- Stream agent messages, commands, tool activity, file changes, and diffs;
-- Steer or interrupt an active turn;
-- Review and resolve approvals from a mobile-friendly PWA;
-- Signed control messages verified by the Node;
-- Node-side event journal, reconnect, replay, and snapshot recovery;
-- Standard Server + Node and single-deployment Standalone modes;
-- Outbound-only HTTPS/WSS connections for ordinary Node machines.
+- One personal Owner can bind and switch between multiple Yuanshu Nodes.
+- Windows and macOS Nodes run Codex app-server locally and keep Agent credentials on that machine.
+- The mobile-first Web workbench can list workspaces and Threads, read history, stream events, start or steer Turns, and stop active work.
+- Thread-scoped leases prevent two browsers from changing the same task at once.
+- Signed approvals, command/tool activity, file changes, bounded Diff views, notifications, and reconnect recovery are implemented.
+- Node event journals provide cursor replay, snapshots, history-gap recovery, and conservative handling of ambiguous operations.
+- The Server embeds the workbench, pairing page, Relay, and same-origin administration console in one process.
+- Four self-hosting modes cover loopback, managed LAN certificates, public-IP ACME, and existing certificates or a same-host reverse proxy.
 
-Team roles, hosted compute, remote desktop, a general-purpose web terminal, and permanent cloud storage of task content are deliberately outside the first MVP.
+Yuanshu currently integrates Codex first. It does not provide hosted compute, remote desktop, a general-purpose browser terminal, permanent Server-side task-content storage, team ACLs, or additional Agent adapters.
 
-## Platform roadmap
+<!-- readme-section: quick-start -->
+## Quick start from source
 
-Windows, macOS, and Linux are all first-class product targets. The order is phased to keep the first release achievable:
+### Prerequisites
 
-1. Windows 11 x64 Yuanshu Node;
-2. Linux amd64 Yuanshu Server and Standalone;
-3. Linux amd64 Yuanshu Node;
-4. macOS arm64 Yuanshu Node;
-5. macOS amd64 and Linux arm64 builds based on actual usage.
+- Go and Node.js versions capable of building the repository; the checked-in `.go-version` and `.node-version` record the currently verified toolchains.
+- pnpm through Corepack.
+- A working local Codex installation and authentication on every Node machine.
+- A current-user session on Windows or macOS; do not run the Node as root, LocalSystem, or a system daemon.
 
-The protocol, transports, adapters, configuration model, and event journal will share one Go implementation. Platform-specific code is limited to secure storage, IPC, process lifecycle, autostart, path validation, and release signing. The project prefers pure-Go dependencies; introducing CGO requires an explicit cross-platform build and supply-chain review.
+Yuanshu does not reject Codex, Node.js, or browser versions merely because they are absent from a compatibility table. Unknown Codex versions are probed at runtime and reported as `unverified`, `partial`, or `unavailable` when capabilities differ.
 
-The shared Platform contract is established for all three target families. Windows provides current-user DPAPI, Named Pipe, Job Object process ownership, native tray, workspace inspection, and user-level autostart. macOS provides Security.framework Keychain storage, Unix socket IPC, process-group cleanup, LaunchAgent autostart, workspace inspection, and a native AppKit menu bar item. Linux Node secure storage and service integration remain later work. Workspace inspection reports operating-system facts only; the Node policy layer makes every allow or deny decision.
+### Build
 
-## Architecture direction
-
-```mermaid
-flowchart TB
-    Client["Phone / Tablet / Browser"]
-    Server["Yuanshu Server<br/>Web + Pairing + Routing + Relay"]
-
-    subgraph Machine["Your computer or server"]
-        Node["Yuanshu Node<br/>Local bridge & security boundary"]
-        Adapter["CodexAdapter"]
-        Codex["Codex app-server"]
-        Workspace["Allowed Workspaces"]
-        Credentials["Local Auth & Provider Credentials"]
-    end
-
-    Client -->|"HTTPS / WSS"| Server
-    Node -->|"Outbound WSS / RelayTransport"| Server
-    Server -->|"Signed control messages"| Node
-    Node --> Adapter
-    Adapter --> Codex
-    Codex --> Workspace
-    Codex --> Credentials
+```shell
+git clone https://github.com/yuanshu-ai/yuanshu.git
+cd yuanshu
+corepack enable
+pnpm install --frozen-lockfile
+pnpm build
+mkdir -p bin .local
+go build -o ./bin/yuanshu ./cmd/yuanshu
 ```
 
-Yuanshu has four logical components: the Agent Runtime (Codex first, Claude Code later), Yuanshu Node, Yuanshu Server, and the browser/PWA Control Client. The Server provides Web, pairing, registry, routing, and relay capabilities. The Node remains the final enforcement point for trusted controllers, workspace boundaries, sandbox policy, and approvals.
+On Windows, build `bin\yuanshu.exe` and use absolute Windows paths in the commands below.
 
-The planned runtime modes are:
+### Try it on one computer
+
+Run the local Server setup wizard and select `local`:
+
+```shell
+./bin/yuanshu server setup --config "$PWD/.local/server.toml"
+./bin/yuanshu server --config "$PWD/.local/server.toml"
+```
+
+In another terminal, configure and start the Node:
+
+```shell
+./bin/yuanshu node setup
+./bin/yuanshu node
+```
+
+The Server prints the local workbench, administration, pairing, and bootstrap addresses. Open `/pair`, approve the pairing from the trusted Node, select an allowed workspace, and create the first task.
+
+Only literal `127.0.0.1` and `::1` may use HTTP/WS. Host and peer checks prevent this exception from being used by LAN or public clients.
+
+### Use it from a phone on your LAN
+
+Run `server setup`, select `lan-managed`, and choose the Server computer's stable private IP. Yuanshu creates a per-Server CA and an IP-SAN leaf certificate. Verify the displayed fingerprint, open `/trust` on each device, install the public root certificate, and then configure the Node with the same CA during `node setup`.
+
+The CA private key never leaves the Server's private data directory. Read the [self-hosting and LAN TLS guide](./guides/self-hosting.md) before connecting another device.
+
+<!-- readme-section: deployment -->
+## Deployment modes
+
+| Mode | Browser and Relay access | Certificate source | Intended use |
+| --- | --- | --- | --- |
+| `local` | Literal loopback HTTP/WS | None | One-computer evaluation and local settings |
+| `lan-managed` | Private IP HTTPS/WSS | Per-Server managed CA | Home and office LAN; recommended for personal use |
+| `public-ip-acme` | Public IP HTTPS/WSS | Automated short-lived ACME certificate | Fixed globally routable IP; staging acceptance still required |
+| `external` | HTTPS/WSS | User certificate or same-host loopback reverse proxy | Domains, enterprise PKI, Caddy, or Nginx |
+
+Remote access is TLS-only. Yuanshu never provides a switch to disable certificate or hostname validation, and Codex app-server is never exposed as a public endpoint.
+
+<!-- readme-section: platforms -->
+## Platform and acceptance matrix
+
+| Target | Implementation | Automated evidence | Real-device/release evidence |
+| --- | --- | --- | --- |
+| Windows x64 Node | Implemented: DPAPI, Named Pipe, Job Object, native tray, user autostart | Native CI and cross-build coverage | PF-052 Windows daily-use acceptance pending |
+| macOS arm64 Node | Implemented: Keychain, Unix IPC, process groups, AppKit menu, LaunchAgent | Native build and test coverage | PF-052 full Node/menu/LaunchAgent acceptance pending |
+| Linux amd64 Server/Standalone | Implemented and buildable | Linux tests, race suite, container and cross-build coverage | Real self-hosted phone deployment pending |
+| Linux Node | Platform boundaries exist | Contract coverage | Not a supported general Node yet |
+| Mobile Web workbench | Implemented for responsive browsers | Chromium/WebKit viewport and workflow tests | Real Safari, Android Chrome, and iPad acceptance pending |
+| Public-IP ACME | Implemented with TLS-ALPN-01 and renewal | Controlled ACME/provider tests | Real staging and production issuance pending |
+
+This matrix deliberately distinguishes implementation and automated tests from real-device acceptance. See the [Codex compatibility matrix](./guides/codex-compatibility.md) for tested combinations; it is guidance, not a runtime allowlist.
+
+<!-- readme-section: architecture -->
+## How it works
+
+```mermaid
+flowchart LR
+    Client["Phone / Tablet / Browser"] -->|"HTTPS / WSS"| Server["Yuanshu Server<br/>Web + Pairing + Relay + Admin"]
+    Node["Yuanshu Node<br/>Local security boundary"] -->|"Outbound WSS"| Server
+    Server -->|"Signed controls"| Node
+    Node --> Adapter["CodexAdapter"]
+    Adapter --> Codex["Codex app-server"]
+    Codex --> Workspace["Allowed workspaces"]
+    Codex --> Credentials["Local Agent credentials"]
+```
+
+The Server authenticates identities, manages personal routing and leases, and relays immutable Protocol v1 frames. It never bypasses the Node to control an Agent Runtime. The Node remains the final enforcement point for controller signatures, replay protection, workspace IDs, local paths, permissions, approvals, and Codex process ownership.
+
+Yuanshu ships one binary with three entry points:
 
 ```text
-yuanshu server       Web, control plane, and relay
-yuanshu node         Local bridge connecting an Agent Runtime to a Server
+yuanshu server       Web, pairing, administration, control plane, and Relay
+yuanshu node         Local bridge and Agent security boundary
 yuanshu standalone   Server + Web + local Node in one deployment
 ```
 
-`yuanshu node` is the formal Windows and macOS user-session Alpha entry. It loads the versioned local configuration, owns Codex child processes, exposes current-user-only IPC, provides a native tray or menu bar item, and starts its loopback control center only when the user opens it. `yuanshu server` starts the formal metadata, embedded Web workbench, pairing, and realtime routing service. `yuanshu standalone` composes that Server with a local Node over the in-process `StandaloneTransport`; the Server never imports or calls an Agent Runtime. Codex app-server and other agent internals must never be exposed directly to the public internet.
+<!-- readme-section: data-boundaries -->
+## Security and data boundaries
 
-## Project status
+| Data | Node machine | Server | Browser |
+| --- | --- | --- | --- |
+| Codex login, API keys, Git/SSH credentials | Remain in local Agent or OS secure storage | Never stored | Never stored |
+| Node and Relay secrets | OS secure storage; configuration contains only secret references | Stores only required credential hashes/metadata | Never stored |
+| Thread content, command output, and Diffs | Runtime and bounded local recovery state | Not permanently stored | In-memory projection only |
+| Control-client private key | Not stored | Public key only | Non-exportable IndexedDB CryptoKey |
+| Workspace paths | Canonical local configuration and policy store | Opaque workspace IDs only | Opaque IDs and display names only |
+| Notifications and audit | Local task source | Redacted references and summaries only | Authenticated views |
 
-- [x] Product scope and architecture baseline
-- [x] Personal-first, one-to-many-Node direction
-- [x] Authentication-neutral Codex positioning
-- [x] Buildable workspace, placeholder CLI, Web scaffold, and base CI
-- [x] M0 Codex app-server and minimal vertical proof of concept
-- [x] Protocol v1 Schema, generated Go/TypeScript types, and compatibility fixtures
-- [x] JCS + Ed25519 control encoding and cross-language test vectors
-- [x] Node-side signed control validation and atomic replay protection
-- [x] Transport contract and shared Relay/Standalone behavior tests
-- [x] Formal Standalone composition through the same signed Node control session
-- [x] Windows/macOS/Linux Platform contract, safe skeletons, and stateful fakes
-- [x] Windows DPAPI identity storage and local workspace policy boundary
-- [x] Node-managed Codex stdio Runtime, formal Adapter contract, and Thread/Turn ownership
-- [x] Bounded Node event journal, cursor replay, snapshots, and ambiguous recovery
-- [x] Windows Yuanshu Node alpha
-- [x] macOS arm64 Node platform and native menu bar alpha
-- [x] On-demand loopback Node control center with native confirmation boundary
-- [x] Native three-platform CI, containerized Linux race, dependency/secret scanning, and SBOM
-- [x] Formal loopback Server bootstrap and SQLite metadata baseline
-- [x] TLS-only WSS Hub, authenticated RelayTransport, and Owner/Node routing
-- [x] Short-lived control-client pairing, local Node confirmation, credential rotation, and immediate revocation
-- [x] One Owner with up to five Nodes, signed Node enrollment, global controller trust, and cross-stream isolation
-- [ ] Linux Server and Standalone self-hosting preview
-- [ ] Linux Server and real-phone self-hosted deployment
-- [ ] Linux Yuanshu Node
-- [ ] macOS arm64 real-device Alpha acceptance
-- [x] Personal mobile Web task loop, multi-Node projection, leases, approvals, Diff, notifications, and settings
-- [ ] Safari/Android real-device Personal Alpha acceptance
-- [ ] Security hardening and first public preview
+Controls and approvals are signed end to end and revalidated by the Node. Remote callers cannot submit arbitrary local paths. Reconnect never automatically repeats side-effecting Turn or approval operations. Ambiguous results remain visible instead of being reported as success.
 
-The roadmap establishes a reliable daily-use loop for one developer first, then completes the committed Linux and macOS integrations before expanding into more agent adapters or team features.
+Report security vulnerabilities privately through [GitHub Private Vulnerability Reporting](https://github.com/yuanshu-ai/yuanshu/security/advisories/new), never through a public Issue. Read [SECURITY.md](./SECURITY.md) before testing or reporting a vulnerability.
 
+<!-- readme-section: limitations -->
+## Current limitations and roadmap
+
+- No signed installers, package repositories, stable migration promise, or production support yet.
+- PF-052 real-device and network-switching acceptance must pass before a `v0.1.0-alpha` release decision.
+- LAN-managed devices still require explicit operating-system trust of the Server's public root CA.
+- Public-IP ACME requires a globally routable fixed IP and public TCP 443.
+- Linux Node, installable PWA, Web Push, team roles, multi-tenant hosting, and additional Agent adapters are later work.
+- The Server remains a personal single-Owner control plane and does not permanently store task bodies.
+
+The project will finish the personal remote Codex loop before expanding to small-team permissions, commercial multi-tenancy, or additional Agents.
+
+<!-- readme-section: documentation -->
+## Documentation
+
+- [Public guide index](./guides/README.md)
+- [IP-first self-hosting and LAN TLS](./guides/self-hosting.md)
+- [Configuration reference](./guides/configuration.md)
+- [Node local control center](./guides/node-control-center.md)
+- [Personal Web workbench](./guides/web-workbench.md)
+- [Server administration console](./guides/server-admin.md)
+- [Codex compatibility matrix](./guides/codex-compatibility.md)
+- [Protocol and configuration schemas](./schemas/README.md)
+- [Test layout and M0 PoC notes](./tests/README.md)
+
+<!-- readme-section: development -->
 ## Development
 
-The repository contains both the isolated `m0-poc-1` Gate G0 implementation and the formal internal CodexAdapter foundation. The formal Adapter uses a Node-managed stdio app-server, local workspace IDs, bounded events, one-shot approvals, and persisted Thread ownership. Node SQLite now also provides monotonic event sequences, bounded retention, replay, snapshots, and conservative reconciliation of uncertain Turns. The TLS-only Hub supports one personal Owner with up to five isolated Nodes; an existing Node signs five-minute enrollment decisions, and Owner-wide Control Client trust is revalidated independently by every Node. The embedded personal Web workbench now provides task-first mobile navigation, multi-Node Thread summaries, lazy history and Diff reads, streaming events, lease-protected control, approvals, notifications, and connection/Node settings. Real-device PF-052 acceptance remains required before a public Alpha tag.
-
-Reference development toolchain (recommendation only; not enforced by the repository):
-
-- Go 1.26.5;
-- Node.js 24.18.1;
-- pnpm 11.18.0 through Corepack.
-
-Other versions may be used when they can run the Go and Web toolchains. The
-Codex compatibility matrix is a record of tested combinations and public
-guidance, not a runtime version allowlist. Yuanshu detects the installed
-Codex version and attempts app-server initialization; unsupported methods or
-payloads are reported as runtime capability errors.
-
-Install the Web dependencies from the repository root:
+Install dependencies and run the standard checks:
 
 ```shell
 corepack enable
-corepack install --global pnpm@11.18.0 # optional: use the tested pnpm version
 pnpm install --frozen-lockfile
-```
-
-Run the local verification suite:
-
-```shell
+pnpm readme:check
+pnpm protocol:test
+pnpm protocol:check
+pnpm --dir web test --run
+pnpm --dir web build
+pnpm --dir node-web test --run
+pnpm --dir node-web build
 go test ./...
-go test ./internal/platform/... ./tests/contract/platform/...
-go test ./internal/config/... ./tests/contract/config/...
-go test ./internal/node/... ./tests/contract/node/...
-go test ./internal/adapter/... ./tests/integration/codex/...
+go test -race ./...
 go vet ./...
 go build ./...
-pnpm --dir web test
-pnpm --dir web build
-pnpm --dir web test:e2e
-pnpm --dir node-web test
-pnpm --dir node-web build
 ```
 
-The remote Web build writes to `internal/server/webassets/dist`. The local
-Node control center writes to `internal/node/webassets/dist`. Both deterministic
-bundles are embedded by ordinary Go builds. Use `pnpm --dir web dev` or
-`pnpm --dir node-web dev` for separate development servers.
+Protocol v1 Schema is the wire source of truth. Platform-specific security storage, IPC, process ownership, autostart, and path inspection remain isolated behind the Platform abstraction. Read [CONTRIBUTING.md](./CONTRIBUTING.md) before changing Protocol, persistence, trust boundaries, or generated assets.
 
-The formal Protocol v1 Schema is the sole wire-type source. Regenerate and verify the committed Go/TypeScript types with:
+<!-- readme-section: community -->
+## Community
 
-```shell
-pnpm protocol:generate
-pnpm protocol:check
-pnpm protocol:test
-```
+- Use [GitHub Issues](https://github.com/yuanshu-ai/yuanshu/issues) for reproducible bugs and scoped feature proposals.
+- Read [SUPPORT.md](./SUPPORT.md) for support boundaries and diagnostic guidance.
+- Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request.
+- Participation is governed by [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
+- Report vulnerabilities only through the private process in [SECURITY.md](./SECURITY.md).
 
-Protocol generation requires both Node.js and Go (`gofmt`) and is deterministic on Windows, macOS, and Linux. The temporary `m0-poc-1` frames are intentionally separate from Protocol v1.
-
-### Formal Node configuration
-
-The versioned Node configuration contract uses strict TOML and is defined by `schemas/config/v1/node-config.schema.json`. It currently accepts `relay` and `standalone` transport modes and Codex `stdio` only. Device, Relay, and proxy credentials are represented solely by opaque SecretRef values; configuration files never contain credential bytes, and an unavailable secure store never triggers a plaintext fallback.
-
-The configuration package supports atomic replacement, a last-known-good `.bak` file, explicit recovery status, and sanitized SecretRef health checks. On Windows, configured workspaces are reconciled into the Node's local SQLite policy store. Remote callers use only opaque workspace IDs; canonical paths, stable file identities, reparse-point checks, and read/write/network ceilings remain local. The formal CodexAdapter consumes that boundary, while mapped Protocol v1 events, cursor replay, snapshots, and conservative ambiguous recovery survive Node restarts.
-
-The Windows Alpha uses `%LOCALAPPDATA%\Yuanshu\config.toml`; macOS uses `~/Library/Application Support/Yuanshu/config.toml`. Both run in the current user session with native tray or menu bar controls and user-level autostart. Run `yuanshu node ui` to open the on-demand local control center. It listens only on an ephemeral `127.0.0.1` port, exchanges a one-time fragment token for a memory-only session, and shuts down after idle expiry. It can display redacted status and manage safe settings. Relay targets and workspace permission changes become pending records and require the native review dialog or local CLI before application. Credentials, private keys, absolute workspace paths, Prompt content, and raw TOML are never exposed to this UI.
-
-```powershell
-yuanshu node
-yuanshu node ui
-yuanshu node status --json
-yuanshu node doctor
-yuanshu node pairing create
-yuanshu node pairing list
-yuanshu node pairing approve <pairing-id>
-yuanshu node pairing reject <pairing-id>
-yuanshu node clients list
-yuanshu node clients revoke <client-id> <key-id>
-yuanshu node credential rotate
-yuanshu node enrollment create
-yuanshu node enrollment list
-yuanshu node enrollment approve <enrollment-id>
-yuanshu node enrollment reject <enrollment-id>
-yuanshu node enrollment join <join-url>
-yuanshu node devices list
-yuanshu node devices revoke <node-id>
-yuanshu node autostart enable
-yuanshu node autostart disable
-yuanshu node stop
-```
-
-Inspect the CLI without starting any service:
-
-```shell
-go run ./cmd/yuanshu --help
-go run ./cmd/yuanshu server --help
-go run ./cmd/yuanshu node --help
-go run ./cmd/yuanshu standalone --help
-```
-
-### Formal Server bootstrap
-
-Without a Server configuration file, the Server requires an explicit absolute data directory and listens only on the literal loopback addresses `127.0.0.1` or `::1`:
-
-```powershell
-yuanshu server --data-dir C:\path\to\yuanshu-server --listen 127.0.0.1:7444
-```
-
-On an uninitialized data directory, the Server prints a 32-byte bootstrap secret once to local stdout. The enrolling Node generates its own Ed25519 key and connection credential, retains the credential locally, and sends only the public key and SHA-256 credential hash to `POST /v1/bootstrap/claim`. The Server persists `server.db`, creates the first Owner and Node atomically, and supports exact claim retries for five minutes. HTTP initialization uses `/healthz`, `/readyz`, `/v1/bootstrap/status`, and `/v1/bootstrap/claim`; authenticated realtime connections use `/node/connect` and `/web/connect`.
-
-The formal realtime handlers require TLS for every remote connection (with a literal-loopback HTTP/WS exception), authenticate Node credentials plus Ed25519 challenges, and route immutable Protocol v1 frames without re-encoding them. Server Schema v3 adds hashed, five-minute additional-Node enrollment and Owner trust revisions; connection credentials remain local to each Node. A configured non-loopback Server uses the IP-first HTTPS/WSS path described below; the `/pair` page and WebSocket endpoints must not be exposed remotely without trusted TLS. Do not expose Codex app-server ports.
-
-### Formal Standalone composition
-
-Standalone requires a versioned Node configuration with `transport.mode = "standalone"` and explicit absolute paths. It keeps `server/server.db` and `node/node.db` separate beneath the selected data directory, enrolls the local Node into an uninitialized local Server, and routes raw signed Protocol v1 frames through the same Node validator and dispatcher used by Relay mode:
-
-```powershell
-yuanshu standalone --data-dir C:\path\to\yuanshu-standalone --config C:\path\to\config.toml --listen 127.0.0.1:7444
-```
-
-Standalone remains loopback by default. A separate `--server-config` can provide the same IP-first HTTPS/WSS listener and TLS material as the Server command; Linux process/security-store packaging and product containers are later milestones.
-
-### Four self-hosting modes
-
-Yuanshu supports four explicit deployment modes: `local` (literal loopback
-HTTP/WS), `lan-managed` (private IP with a per-Server managed CA),
-`public-ip-acme` (public IP with automated short-lived ACME certificates), and
-`external` (user-provided certificates or a same-host loopback reverse proxy).
-Only literal `127.0.0.1` and `::1` may use plaintext; every remote connection
-remains HTTPS/WSS. Codex app-server ports are never exposed.
-
-Create a separate Server configuration file and start it with:
-
-```toml
-config_version = 2
-deployment_mode = "lan-managed"
-data_dir = "/absolute/path/yuanshu-server"
-listen = "0.0.0.0:7444"
-public_url = "https://192.168.1.20:7444"
-allowed_control_origins = ["https://192.168.1.20:7444"]
-
-[web]
-enabled = true
-
-[admin]
-enabled = true
-session_idle_minutes = 30
-session_max_hours = 8
-audit_retention_days = 90
-```
-
-```shell
-yuanshu server setup --config /absolute/path/server.toml
-yuanshu server --config /absolute/path/server.toml
-yuanshu server doctor --config /absolute/path/server.toml --json
-yuanshu server cert status --config /absolute/path/server.toml
-```
-
-In `lan-managed`, the Server creates an ECDSA root CA and a 90-day IP-SAN leaf
-certificate, renews the leaf automatically, and serves only the public root at
-`/trust` and `/v1/trust/ca.crt`. Node setup can copy that root into its private
-CA bundle without disabling hostname verification. The CA private key never
-enters HTTP, Admin, ordinary database backups, or diagnostics; use the separate
-password-encrypted `server cert backup-ca` command for disaster recovery.
-
-`public-ip-acme` requires a globally routable fixed IP and public TCP 443 routed
-to the configured listener. It uses the ACME `shortlived` profile and
-TLS-ALPN-01 with automated renewal. Test staging before production. `external`
-accepts either matching certificate files with hot reload or a reverse proxy on
-the same machine while Yuanshu listens only on loopback.
-
-The production Server serves the embedded personal workbench at `/`, the
-same-origin Server administration console at `/admin`, and pairing at `/pair`.
-It generates `/yuanshu.config.json` from `public_url`. Starting
-`yuanshu server` therefore gives one process, port, certificate, and container
-for the Server, pairing page, Relay, workbench, and administration UI. It prints
-the access URL but does not launch a browser automatically.
-
-The administration console authenticates with an active paired control-client
-identity held in browser IndexedDB. Short-lived HttpOnly sessions, strict
-same-origin checks, CSRF protection, idempotency keys, and one-time signatures
-for destructive actions protect its HTTP API. It can inspect redacted Server
-health, Nodes, control clients, access requests, leases, and audit records; it
-can revoke credentials, cancel pending requests, release a lease, and close new
-admission. It cannot approve pairing or enrollment, read task content, control
-Codex, edit TLS material, or revoke the final active Node/control client.
-
-The user may still override the generated addresses in the connection settings
-page:
-
-```json
-{
-  "relayUrl": "wss://192.168.1.20:7444/web/connect",
-  "pairingUrl": "https://192.168.1.20:7444/pair"
-}
-```
-
-Vite remains a separate development server. Advanced deployments may set
-`web.enabled = false` or pass `--no-web` and host the same static build on a CDN
-or another HTTPS origin; that origin must then be included in
-`allowed_control_origins`.
-
-The browser stores only connection settings and the control identity in
-IndexedDB. Node settings are redacted; Relay, proxy, workspace, and execution
-boundary changes require confirmation on the Node machine. Server listen/TLS
-settings and all credentials remain local file/CLI configuration. See the
-published [IP-first self-hosting runbook](https://github.com/yuanshu-ai/docs/blob/main/docs/ip-first-self-hosting.md).
-
-The repository uses LF source files and supports these commands on Windows, macOS, and Linux. CI runs native Go checks on Ubuntu 24.04 x64, Windows Server 2025 x64, and macOS 15 arm64; Web/Protocol checks, a pinned-container Linux race suite, dependency and Secret scanning, and an SPDX SBOM are release gates. Successful runs retain unsigned Windows amd64, Linux amd64, and Darwin arm64 build artifacts for seven days. These are engineering artifacts, not installable releases; signed releases and product container images remain later milestones.
-
-### M0 PoC (developers only)
-
-The isolated internal M0 PoC test harness uses explicit temporary configuration:
-
-```text
-YUANSHU_POC_LISTEN=127.0.0.1:7443
-YUANSHU_POC_TLS_CERT=<localhost certificate PEM>
-YUANSHU_POC_TLS_KEY=<localhost private key PEM>
-YUANSHU_POC_NODE_TOKEN=<at least 32 random bytes>
-YUANSHU_POC_SERVER_URL=wss://localhost:7443
-YUANSHU_POC_WORKSPACE=<existing non-root disposable directory>
-```
-
-`YUANSHU_POC_ARCHIVE_ON_CLOSE=1` is reserved for bounded test runs. These settings do not configure the formal `yuanshu server`, `yuanshu node`, or `yuanshu standalone` commands. Do not reuse the PoC token or development certificate, and do not expose the PoC outside loopback.
-
-## Security principles
-
-Yuanshu is designed around a high-trust local execution environment and a minimally trusted Server relay:
-
-- Node and control clients use independent device identities;
-- Control operations and approval decisions are signed end to end and revalidated by the Node;
-- Remote clients cannot choose arbitrary local paths;
-- The Server relay does not permanently store prompts, responses, command output, diffs, or source code;
-- ChatGPT tokens, API keys, provider keys, and Git/SSH credentials must never be uploaded to Yuanshu;
-- Ambiguous operations after a crash must not be silently replayed.
-
-These are design goals until the corresponding implementation and security tests land. A formal security policy and private reporting channel will be published before the first executable release.
-
-## Contributing
-
-Yuanshu is at an early stage, so focused feedback is especially useful. Good first contributions include:
-
-- Codex app-server compatibility findings;
-- Windows, Linux, and macOS Node lifecycle experiments;
-- Protocol and threat-model review;
-- Mobile task and approval UX proposals;
-- Self-hosting feedback;
-- Cross-platform integration findings or research on the next agent adapter.
-
-Please use GitHub Issues for reproducible bugs, scoped proposals, and design discussion. Avoid posting credentials, private source code, or security vulnerabilities in public issues.
-
-Contribution guidelines and a security reporting process will be added as the implementation begins.
-
-## License
+<!-- readme-section: license -->
+## License and acknowledgement
 
 Yuanshu is licensed under the [Apache License 2.0](./LICENSE).
 
-## Acknowledgements
-
-The initial integration is designed around the open-source [OpenAI Codex](https://github.com/openai/codex) app-server protocol.
-
-Yuanshu is an independent open-source project and is not affiliated with or endorsed by OpenAI. Product and company names are trademarks of their respective owners.
+The first integration is designed around the open-source [OpenAI Codex](https://github.com/openai/codex) app-server protocol. Yuanshu is an independent open-source project and is not affiliated with or endorsed by OpenAI. Product and company names are trademarks of their respective owners.
