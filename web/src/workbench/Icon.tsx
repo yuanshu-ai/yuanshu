@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-export type IconName = "home" | "tasks" | "bell" | "settings" | "node" | "folder" | "plus" | "back" | "send" | "stop" | "refresh" | "copy" | "terminal" | "tool" | "file" | "warning" | "check" | "chevron" | "search" | "lock";
+export type IconName = "home" | "tasks" | "bell" | "settings" | "node" | "folder" | "plus" | "back" | "send" | "stop" | "refresh" | "copy" | "terminal" | "tool" | "file" | "warning" | "check" | "chevron" | "search" | "lock" | "details" | "close";
 
 export function Icon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {
   const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
@@ -28,4 +28,6 @@ const paths: Record<IconName, React.ReactNode> = {
   chevron: <path d="m8 10 4 4 4-4" />,
   search: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5" /></>,
   lock: <><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>,
+  details: <><path d="M4 6h16M4 12h16M4 18h16" /><path d="M8 4v4M15 10v4M11 16v4" /></>,
+  close: <path d="m6 6 12 12M18 6 6 18" />,
 };

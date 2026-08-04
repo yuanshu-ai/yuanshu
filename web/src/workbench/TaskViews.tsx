@@ -1,10 +1,20 @@
 import { Icon } from "./Icon";
+import { useI18n } from "../i18n";
 import { canStartTask, type TaskFilter, type TaskSummary } from "./selectors";
 import { formatTime, ResourceMessage, SkeletonRows, statusLabel, StatusPill } from "./WorkbenchPrimitives";
 import type { ResourceState } from "./session";
 
 export type DeviceSummary = { nodeId: string; name?: string; online: boolean; runtimeStatus?: string };
 export type WorkspaceSummary = { key: string; nodeId: string; workspaceId: string; name?: string; permissionProfile?: string; allowNetwork?: boolean };
+
+export function TaskContextBar({ nodes, workspaces, selectedNodeId, selectedWorkspaceId, onNode, onWorkspace }: { nodes: DeviceSummary[]; workspaces: WorkspaceSummary[]; selectedNodeId: string; selectedWorkspaceId: string; onNode: (value: string) => void; onWorkspace: (value: string) => void }) {
+  const { t } = useI18n();
+  const node = nodes.find((item) => item.nodeId === selectedNodeId);
+  return <div className="task-context-bar">
+    <label><span className={`context-presence ${node?.online ? "online" : "offline"}`} aria-hidden="true" /><span className="sr-only">{t("workbench.context.node")}</span><select aria-label={t("workbench.context.node")} value={selectedNodeId} onChange={(event) => onNode(event.target.value)}>{nodes.map((item) => <option value={item.nodeId} key={item.nodeId}>{item.name ?? item.nodeId}</option>)}</select></label>
+    <label><Icon name="folder" /><span className="sr-only">{t("workbench.context.workspace")}</span><select aria-label={t("workbench.context.workspace")} value={selectedWorkspaceId} onChange={(event) => onWorkspace(event.target.value)}>{workspaces.map((item) => <option value={item.workspaceId} key={item.key}>{item.name ?? item.workspaceId}</option>)}</select></label>
+  </div>;
+}
 
 export function ContextRail({ nodes, workspaces, selectedNodeId, selectedWorkspaceId, resources, onNode, onWorkspace }: { nodes: DeviceSummary[]; workspaces: WorkspaceSummary[]; selectedNodeId: string; selectedWorkspaceId: string; resources: Readonly<Record<string, ResourceState>>; onNode: (value: string) => void; onWorkspace: (value: string) => void }) {
   const nodeResource = selectedNodeId ? resources[`node:${selectedNodeId}`] : undefined;
@@ -16,15 +26,16 @@ export function ContextRail({ nodes, workspaces, selectedNodeId, selectedWorkspa
 }
 
 export function HomeView({ groups, nodes, unreadNotifications, onOpen, onNew, onNotifications }: { groups: { continuation?: TaskSummary; approvals: TaskSummary[]; issues: TaskSummary[]; active: TaskSummary[]; recent: TaskSummary[] }; nodes: DeviceSummary[]; unreadNotifications: number; onOpen: (task: TaskSummary) => void; onNew: () => void; onNotifications: () => void }) {
+  const { t } = useI18n();
   const warnings = nodes.filter((node) => !canStartTask(node));
   return <div className="task-view home-view">
-    <div className="task-heading"><div><p>任务接力</p><h1>继续你的 Codex 工作</h1></div><div className="heading-actions"><button className="attention-button" type="button" onClick={onNotifications} aria-label={`待办通知 ${unreadNotifications}`}><Icon name="bell" />{unreadNotifications > 0 && <span>{unreadNotifications}</span>}</button><button className="button primary" type="button" onClick={onNew}><Icon name="plus" />新任务</button></div></div>
+    <div className="task-heading"><div><p>Codex</p><h1>{t("workbench.task.continue")}</h1></div><div className="heading-actions"><button className="attention-button" type="button" onClick={onNotifications} aria-label={`${t("workbench.nav.notifications")} ${unreadNotifications}`}><Icon name="bell" />{unreadNotifications > 0 && <span>{unreadNotifications}</span>}</button><button className="button primary" type="button" onClick={onNew}><Icon name="plus" />{t("workbench.nav.newTask")}</button></div></div>
     {groups.continuation ? <ContinueTaskCard task={groups.continuation} onOpen={() => onOpen(groups.continuation!)} /> : <div className="continue-empty"><Icon name="check" /><div><b>当前没有需要接续的任务</b><p>设备上的任务开始运行或等待审批时，会优先出现在这里。</p></div></div>}
     {warnings.length > 0 && <div className="health-banner"><Icon name="warning" /><div><b>{warnings.length} 台设备需要注意</b><p>离线或 Codex 不可用的任务仍可查看，恢复后会继续同步。</p></div></div>}
     {groups.approvals.length > 0 && <TaskGroup title="等待我审批" tasks={groups.approvals} onOpen={onOpen} tone="warning" />}
     {groups.issues.length > 0 && <TaskGroup title="需要确认" tasks={groups.issues} onOpen={onOpen} tone="warning" />}
     {groups.active.length > 0 && <TaskGroup title="其它运行中任务" tasks={groups.active} onOpen={onOpen} />}
-    <TaskGroup title="最近完成" tasks={groups.recent} empty="完成的任务会保留在这里，方便查看结果和文件变化。" onOpen={onOpen} />
+    <TaskGroup title={t("workbench.task.recent")} tasks={groups.recent} empty="完成的任务会保留在这里，方便查看结果和文件变化。" onOpen={onOpen} />
   </div>;
 }
 
@@ -41,10 +52,11 @@ function ContinueTaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => v
 }
 
 export function TasksView({ tasks, allTasks, nodes, workspaces, filter, query, selectedNodeId, selectedWorkspaceId, onFilter, onQuery, onNode, onWorkspace, onOpen, onNew }: { tasks: TaskSummary[]; allTasks: TaskSummary[]; nodes: Array<{ nodeId: string; name?: string }>; workspaces: Array<{ nodeId: string; workspaceId: string; name?: string }>; filter: TaskFilter; query: string; selectedNodeId: string; selectedWorkspaceId: string; onFilter: (value: TaskFilter) => void; onQuery: (value: string) => void; onNode: (value: string) => void; onWorkspace: (value: string) => void; onOpen: (task: TaskSummary) => void; onNew: () => void }) {
-  return <div className="task-view"><div className="task-heading"><div><p>任务</p><h1>全部任务</h1></div><button className="button primary" type="button" onClick={onNew}><Icon name="plus" />新任务</button></div>
-    <div className="task-controls"><label className="search-field"><span className="sr-only">搜索任务</span><Icon name="search" /><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="搜索已同步的标题和摘要" /></label><div className="context-selects"><select aria-label="筛选设备" value={selectedNodeId} onChange={(event) => { onNode(event.target.value); onWorkspace(""); }}><option value="">全部设备</option>{nodes.map((node) => <option value={node.nodeId} key={node.nodeId}>{node.name ?? node.nodeId}</option>)}</select><select aria-label="筛选工作区" value={selectedWorkspaceId} onChange={(event) => onWorkspace(event.target.value)}><option value="">全部工作区</option>{workspaces.filter((workspace) => !selectedNodeId || workspace.nodeId === selectedNodeId).map((workspace) => <option value={workspace.workspaceId} key={`${workspace.nodeId}:${workspace.workspaceId}`}>{workspace.name ?? workspace.workspaceId}</option>)}</select></div></div>
+  const { t } = useI18n();
+  return <div className="task-view"><div className="task-heading"><div><p>Codex</p><h1>{t("workbench.task.all")}</h1></div><button className="button primary" type="button" onClick={onNew}><Icon name="plus" />{t("workbench.nav.newTask")}</button></div>
+    <div className="task-controls"><label className="search-field"><span className="sr-only">{t("workbench.nav.search")}</span><Icon name="search" /><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder={t("workbench.task.searchHint")} /></label><div className="context-selects"><select aria-label="筛选设备" value={selectedNodeId} onChange={(event) => { onNode(event.target.value); onWorkspace(""); }}><option value="">全部设备</option>{nodes.map((node) => <option value={node.nodeId} key={node.nodeId}>{node.name ?? node.nodeId}</option>)}</select><select aria-label="筛选工作区" value={selectedWorkspaceId} onChange={(event) => onWorkspace(event.target.value)}><option value="">全部工作区</option>{workspaces.filter((workspace) => !selectedNodeId || workspace.nodeId === selectedNodeId).map((workspace) => <option value={workspace.workspaceId} key={`${workspace.nodeId}:${workspace.workspaceId}`}>{workspace.name ?? workspace.workspaceId}</option>)}</select></div></div>
     <div className="filter-tabs" role="tablist" aria-label="任务状态">{(["all", "active", "approval", "failed", "completed"] as const).map((value) => <button type="button" role="tab" aria-selected={filter === value} className={filter === value ? "active" : ""} onClick={() => onFilter(value)} key={value}>{filterLabel(value)}</button>)}</div>
-    <p className="local-search-note">仅搜索当前浏览器已同步的 {allTasks.length} 个任务摘要。</p>
+    <p className="local-search-note">{t("workbench.task.localSearch", { count: allTasks.length })}</p>
     <div className="task-list">{tasks.map((task) => <TaskRow task={task} onOpen={() => onOpen(task)} key={task.thread.key} />)}{!tasks.length && <EmptyTaskList />}</div>
   </div>;
 }

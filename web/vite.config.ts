@@ -23,6 +23,7 @@ function pairingPageDevPlugin(): Plugin {
     "/pair": { file: "index.html", contentType: "text/html; charset=utf-8" },
     "/pair/": { file: "index.html", contentType: "text/html; charset=utf-8" },
     "/pair/app.js": { file: "app.js", contentType: "text/javascript; charset=utf-8" },
+    "/pair/catalog.generated.js": { file: "catalog.generated.js", contentType: "text/javascript; charset=utf-8" },
     "/pair/session.js": { file: "session.js", contentType: "text/javascript; charset=utf-8" },
     "/pair/storage.js": { file: "storage.js", contentType: "text/javascript; charset=utf-8" },
     "/pair/style.css": { file: "style.css", contentType: "text/css; charset=utf-8" },

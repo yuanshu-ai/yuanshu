@@ -1,7 +1,8 @@
 import { forwardRef, lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import type { LeaseScope, LeaseState } from "../relay/control-client";
-import { threadKey, turnKey, type ApprovalProjection, type FileChangeProjection, type ThreadItemProjection, type TurnProjection } from "../state/projection";
+import { useI18n } from "../i18n";
+import { threadKey, turnKey, type ApprovalProjection, type ControlActionProjection, type FileChangeProjection, type ThreadItemProjection, type TurnProjection } from "../state/projection";
 import { Dialog } from "./Dialog";
 import { Icon } from "./Icon";
 import { selectThreadApprovals } from "./selectors";
@@ -15,6 +16,7 @@ type Confirmation =
   | { kind: "approval"; approval: ApprovalProjection; decision: "accept" | "decline"; step: 1 | 2 };
 
 export function ThreadDetail({ session, snapshotRevision, connectionState, state, resource, selectedNodeId, selectedWorkspaceId, selectedThreadId, onBack, onRead, onDraftChange }: { session: WorkbenchSession; snapshotRevision: number; connectionState: string; state: WorkbenchSession["projection"]["state"]; resource?: ResourceState; selectedNodeId: string; selectedWorkspaceId: string; selectedThreadId: string; onBack: () => void; onRead: (key: string, sequence: number) => void; onDraftChange?: (dirty: boolean) => void }) {
+  const { t } = useI18n();
   const thread = selectedThreadId ? state.threads[threadKey(selectedNodeId, selectedWorkspaceId, selectedThreadId)] : undefined;
   const node = state.nodes[selectedNodeId];
   const workspace = state.workspaces[`${selectedNodeId}\u001f${selectedWorkspaceId}`];
@@ -34,6 +36,8 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   const [visibleItems, setVisibleItems] = useState(100);
   const [atBottom, setAtBottom] = useState(true);
   const [newItems, setNewItems] = useState(0);
+  const [inspectorTab, setInspectorTab] = useState<"activity" | "files" | "approvals" | "details">("activity");
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const timeline = useRef<HTMLDivElement>(null);
   const approvalPanel = useRef<HTMLElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -159,6 +163,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
 
   const visible = limitedTurns(turns, visibleItems);
   const hiddenCount = Math.max(0, itemCount - visibleItems);
+  const inspectorLabels = { activity: t("workbench.inspector.activity"), files: t("workbench.inspector.files"), approvals: t("workbench.inspector.approvals"), details: t("workbench.inspector.details") };
   const placeholder = activeTurn ? "补充要求或纠偏当前执行" : "继续这个任务";
   const taskStatus = activeTurn?.status ?? thread?.status;
   const needsResume = !activeTurn && !resumeConfirmed && ["notLoaded", "unavailable"].includes(thread?.status ?? "");
@@ -168,33 +173,48 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   };
 
   if (!selectedThreadId) {
-    return <section className="thread-detail empty-detail" aria-label="任务详情"><EmptyState icon="tasks" title="选择一个任务查看详情" detail="新任务需要先明确选择设备、工作区并确认本地权限。" /></section>;
+    return <section className="thread-detail empty-detail" aria-label="任务详情"><EmptyState icon="tasks" title={t("workbench.empty.title")} detail={t("workbench.empty.description")} /></section>;
   }
 
   return <section className="thread-detail" aria-label="任务详情">
-    <div className="thread-detail-heading"><button className="mobile-back" type="button" onClick={onBack} aria-label="返回任务列表"><Icon name="back" /></button><div className="thread-heading-copy"><p>{node?.name ?? "未命名设备"} · {workspace?.name ?? "工作区"}</p><h1>{thread?.title || thread?.preview || (selectedThreadId ? `任务 ${selectedThreadId.slice(0, 10)}` : "开始新任务")}</h1><div className="thread-context-status"><StatusPill tone={connectionState === "connected" ? "accent" : "warning"}>{connectionLabel(connectionState)}</StatusPill>{thread && <StatusPill tone={taskStatus === "failed" ? "danger" : taskStatus === "running" ? "accent" : "quiet"}>{statusLabel(taskStatus)}</StatusPill>}<span>{leaseHeld ? "当前浏览器可操作" : "当前为只读查看"}</span></div></div>{thread && <div className="thread-heading-actions"><LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => scope && void session.releaseLease(scope).catch(() => undefined)} />{!activeTurn && <button className="button secondary" type="button" disabled={busy || connectionState !== "connected" || !leaseHeld} onClick={() => void resumeThread()}>{needsResume ? "恢复任务" : "继续执行"}</button>}</div>}</div>
+    <div className="thread-detail-heading"><button className="mobile-back" type="button" onClick={onBack} aria-label={t("workbench.thread.back")}><Icon name="back" /></button><div className="thread-heading-copy"><p>{node?.name ?? "未命名设备"} · {workspace?.name ?? "工作区"}</p><h1>{thread?.title || thread?.preview || (selectedThreadId ? `任务 ${selectedThreadId.slice(0, 10)}` : "开始新任务")}</h1><div className="thread-context-status"><StatusPill tone={connectionState === "connected" ? "accent" : "warning"}>{connectionLabel(connectionState)}</StatusPill>{thread && <StatusPill tone={taskStatus === "failed" ? "danger" : taskStatus === "running" ? "accent" : "quiet"}>{statusLabel(taskStatus)}</StatusPill>}<span>{leaseHeld ? t("workbench.thread.controllable") : t("workbench.thread.readOnly")}</span></div></div>{thread && <div className="thread-heading-actions"><LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => scope && void session.releaseLease(scope).catch(() => undefined)} />{!activeTurn && <button className="button secondary" type="button" disabled={busy || connectionState !== "connected" || !leaseHeld} onClick={() => void resumeThread()}>{needsResume ? "恢复任务" : "继续执行"}</button>}<button className="button quiet inspector-toggle" type="button" onClick={() => setInspectorOpen(true)} aria-label={t("workbench.thread.openInspector")}><Icon name="details" />{t("workbench.inspector.details")}</button></div>}</div>
     {thread && (thread.recovery !== "none" || thread.historyState === "partial" || thread.historyState === "unavailable") && <div className="inline-alert warning"><Icon name="warning" /><div><b>{thread.recovery === "history_gap" ? "部分历史不可用" : "历史内容不完整"}</b><p>当前视图可能只包含设备能够恢复的部分内容。</p></div></div>}
     {node && (!node.online || node.runtimeStatus === "unavailable") && <div className="inline-alert danger"><Icon name="warning" /><div><b>Codex 暂不可用</b><p>本地状态会继续保留，设备恢复连接后重新同步。</p></div></div>}
     {resource?.state === "error" && <ResourceMessage resource={resource} onRetry={() => void session.loadThread(selectedNodeId, selectedWorkspaceId, selectedThreadId, true)} />}
 
-    <div className="thread-scroll" ref={timeline} onScroll={(event) => { const element = event.currentTarget; const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 64; setAtBottom(bottom); if (bottom) setNewItems(0); }}>
-      {hiddenCount > 0 && <button className="older-button" type="button" onClick={() => setVisibleItems((value) => value + 100)}>显示更早的 {Math.min(100, hiddenCount)} 项</button>}
-      {resource?.state === "loading" && !turns.length ? <SkeletonTimeline /> : visible.length ? visible.map((turn) => <TurnCard turn={turn} key={turn.key} />) : <EmptyState icon="tasks" title="任务中还没有可展示内容" detail="消息、命令、工具活动和文件变化会按顺序显示。" />}
-      {approvals.length > 0 && <ApprovalPanel ref={approvalPanel} approvals={approvals} leaseHeld={leaseHeld} busy={busy} onResolve={(approval, decision) => setConfirmation({ kind: "approval", approval, decision, step: 1 })} />}
-      {files.length > 0 && <FileChanges files={files} session={session} />}
-      {newItems > 0 && <button className="new-items-button" type="button" onClick={revealLatest}>查看 {newItems} 条新内容</button>}
-    </div>
+    <div className="thread-content-grid">
+      <div className="conversation-pane">
+        <div className="thread-scroll" ref={timeline} onScroll={(event) => { const element = event.currentTarget; const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 64; setAtBottom(bottom); if (bottom) setNewItems(0); }}>
+          {hiddenCount > 0 && <button className="older-button" type="button" onClick={() => setVisibleItems((value) => value + 100)}>显示更早的 {Math.min(100, hiddenCount)} 项</button>}
+          {resource?.state === "loading" && !turns.length ? <SkeletonTimeline /> : visible.length ? visible.map((turn) => <TurnCard turn={turn} key={turn.key} />) : <EmptyState icon="tasks" title={t("workbench.thread.empty")} detail={t("workbench.thread.emptyHelp")} />}
+          {newItems > 0 && <button className="new-items-button" type="button" onClick={revealLatest}>查看 {newItems} 条新内容</button>}
+        </div>
 
-    <div className="thread-footer">
-      <div className="composer-context"><span><Icon name="node" />{node?.name ?? "未命名设备"}</span><span><Icon name="folder" />{workspace?.name ?? "工作区"}</span><em>{leaseHeld ? "可操作" : "只读"}</em></div>
-      {approvals.length > 0 && <button className="mobile-approval-action" type="button" onClick={() => approvalPanel.current?.scrollIntoView({ behavior: "smooth", block: "start" })}><Icon name="warning" />处理 {approvals.length} 项待审批</button>}
-      {actions[0] && <div className={`action-status ${actions[0].state}`} aria-live="polite"><span className="semantic-state" /><b>{actionLabel(actions[0].state)}</b><span>{controlTypeLabel(actions[0].type)}</span>{actions[0].errorCode && <code>{actions[0].errorCode}</code>}</div>}
-      {message && <div className="operation-message" role="status">{message}</div>}
-      <form className="composer" onSubmit={(event) => void submit(event)}>
-        <label className="sr-only" htmlFor="task-input">任务指令</label>
-        <textarea ref={textarea} id="task-input" value={input} onChange={(event) => { setInput(event.target.value); onDraftChange?.(event.target.value.trim().length > 0); }} onKeyDown={onComposerKeyDown} placeholder={placeholder} disabled={busy || connectionState !== "connected" || !selectedWorkspaceId} rows={3} />
-        <div className="composer-actions"><span>{activeTurn ? "纠偏当前执行" : needsResume ? "恢复后可继续" : "追加本轮执行"}<small>Cmd/Ctrl + Enter</small></span><div>{activeTurn && <button className="button danger" type="button" disabled={busy || !leaseHeld} onClick={() => void run("turn.interrupt", {}, { threadId: selectedThreadId, turnId: activeTurn.turnId })}><Icon name="stop" />停止</button>}<button className="button primary" type="submit" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId || !leaseHeld || needsResume}>{busy ? "发送中" : !leaseHeld ? "需要控制权" : needsResume ? "先恢复任务" : "发送"}<Icon name="send" /></button></div></div>
-      </form>
+        <div className="thread-footer">
+          <div className="composer-context"><span><Icon name="node" />{node?.name ?? "未命名设备"}</span><span><Icon name="folder" />{workspace?.name ?? "工作区"}</span><em>{leaseHeld ? "可操作" : "只读"}</em></div>
+          <div className="mobile-lease-control"><LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => scope && void session.releaseLease(scope).catch(() => undefined)} /></div>
+          {approvals.length > 0 && <button className="mobile-approval-action" type="button" onClick={() => { setInspectorTab("approvals"); setInspectorOpen(true); }}><Icon name="warning" />{t("workbench.approval.review", { count: approvals.length })}</button>}
+          {actions[0] && <div className={`action-status ${actions[0].state}`} aria-live="polite"><span className="semantic-state" /><b>{actionLabel(actions[0].state)}</b><span>{controlTypeLabel(actions[0].type)}</span>{actions[0].errorCode && <code>{actions[0].errorCode}</code>}</div>}
+          {message && <div className="operation-message" role="status">{message}</div>}
+          <form className="composer" onSubmit={(event) => void submit(event)}>
+            <label className="sr-only" htmlFor="task-input">任务指令</label>
+            <textarea ref={textarea} id="task-input" value={input} onChange={(event) => { setInput(event.target.value); onDraftChange?.(event.target.value.trim().length > 0); }} onKeyDown={onComposerKeyDown} placeholder={placeholder} disabled={busy || connectionState !== "connected" || !selectedWorkspaceId} rows={3} />
+            <div className="composer-actions"><span>{activeTurn ? "纠偏当前执行" : needsResume ? "恢复后可继续" : "追加执行"}<small>Cmd/Ctrl + Enter</small></span><div>{activeTurn && <button className="button danger" type="button" disabled={busy || !leaseHeld} onClick={() => void run("turn.interrupt", {}, { threadId: selectedThreadId, turnId: activeTurn.turnId })}><Icon name="stop" />{t("workbench.composer.stop")}</button>}<button className="button primary" type="submit" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId || !leaseHeld || needsResume}>{busy ? t("workbench.composer.sending") : !leaseHeld ? "需要控制权" : needsResume ? "先恢复任务" : t("workbench.composer.send")}<Icon name="send" /></button></div></div>
+          </form>
+        </div>
+      </div>
+
+      <aside className={`thread-inspector ${inspectorOpen ? "open" : ""}`} ref={approvalPanel} aria-label="任务 Inspector">
+        <div className="inspector-heading"><strong>{t("workbench.inspector.title")}</strong><button type="button" onClick={() => setInspectorOpen(false)} aria-label={t("common.close")}><Icon name="close" /></button></div>
+        <div className="inspector-tabs" role="tablist">{(["activity", "files", "approvals", "details"] as const).map((tab) => <button type="button" role="tab" aria-selected={inspectorTab === tab} className={inspectorTab === tab ? "active" : ""} onClick={() => setInspectorTab(tab)} key={tab}>{inspectorLabels[tab]}{tab === "files" && files.length > 0 ? ` ${files.length}` : tab === "approvals" && approvals.length > 0 ? ` ${approvals.length}` : ""}</button>)}</div>
+        <div className="inspector-content">
+          {inspectorTab === "activity" && <InspectorActivity turns={turns} actions={actions} />}
+          {inspectorTab === "files" && (files.length ? <FileChanges files={files} session={session} /> : <EmptyState icon="file" title={t("workbench.inspector.noFiles")} detail="Codex 产生的文件与 Diff 会显示在这里。" />)}
+          {inspectorTab === "approvals" && (approvals.length ? <ApprovalPanel approvals={approvals} leaseHeld={leaseHeld} busy={busy} onResolve={(approval, decision) => setConfirmation({ kind: "approval", approval, decision, step: 1 })} /> : <EmptyState icon="check" title={t("workbench.inspector.noApprovals")} detail="审批请求会固定显示在输入区上方。" />)}
+          {inspectorTab === "details" && <dl className="inspector-details"><dt>设备</dt><dd>{node?.name ?? "未命名设备"}</dd><dt>工作区</dt><dd>{workspace?.name ?? "工作区"}</dd><dt>任务状态</dt><dd>{statusLabel(taskStatus)}</dd><dt>历史状态</dt><dd>{thread?.historyState ?? "unknown"}</dd><dt>最新 sequence</dt><dd>{latestSequence}</dd><dt>控制状态</dt><dd>{leaseHeld ? "当前浏览器可操作" : lease.state === "occupied" ? "由其他控制端操作" : "只读"}</dd></dl>}
+        </div>
+      </aside>
+      {inspectorOpen && <button className="inspector-scrim" type="button" onClick={() => setInspectorOpen(false)} aria-label="关闭 Inspector" />}
     </div>
 
     {confirmation?.kind === "takeover" && <Dialog title="接管任务控制权" destructive onClose={() => setConfirmation(undefined)} actions={<><button className="button secondary" type="button" onClick={() => setConfirmation(undefined)}>取消</button><button className="button danger solid" type="button" onClick={() => void takeover()}>确认接管</button></>}><p>接管后，当前持有者会立即变为只读，旧控制消息将被拒绝。</p><dl><dt>持有者</dt><dd>{shortID(lease.holderClientId)}</dd><dt>剩余时间</dt><dd>{lease.expiresAt ? formatLeaseTime(lease.expiresAt) : "未知"}</dd></dl></Dialog>}
@@ -214,12 +234,23 @@ function ItemCard({ item }: { item: ThreadItemProjection }) {
   return <div className="activity-item compact error"><Icon name="warning" /><span><b>{item.errorCode || "未识别活动"}</b><small>{item.errorMessage || "Codex 返回了当前版本无法识别的历史项。"}</small></span></div>;
 }
 
+function InspectorActivity({ turns, actions }: { turns: TurnProjection[]; actions: ControlActionProjection[] }) {
+  const { t } = useI18n();
+  const items = turns.flatMap((turn) => turn.items).filter((item) => item.kind !== "agent_message" && item.kind !== "user_message").slice(-80).reverse();
+  return <div className="inspector-activity">
+    {actions.slice(0, 6).map((action) => <article className={`inspector-action ${action.state}`} key={action.messageId}><span className="semantic-state" /><div><b>{controlTypeLabel(action.type)}</b><small>{actionLabel(action.state)} · {formatTime(action.updatedAt)}</small>{action.errorCode && <code>{action.errorCode}</code>}</div></article>)}
+    {items.map((item) => <ItemCard item={item} key={item.id} />)}
+    {!actions.length && !items.length && <EmptyState icon="tool" title={t("workbench.inspector.noActivity")} detail="命令、工具与控制结果会显示在这里。" />}
+  </div>;
+}
+
 function FileChanges({ files, session }: { files: FileChangeProjection[]; session: WorkbenchSession }) {
   return <section className="file-changes"><div className="section-heading"><div><Icon name="file" /><h2>文件变化</h2></div><span>{files.length}</span></div><div>{files.map((file) => <details key={file.key} onToggle={(event) => { if (event.currentTarget.open && !file.diff) void session.loadDiff(file.nodeId, file.workspaceId, file.threadId, file.path).catch(() => undefined); }}><summary><span><b>{file.path}</b><small>{changeLabel(file.changeType)} / 版本 {file.revision}{file.truncated ? " / 已截断" : ""}</small></span><Icon name="chevron" /></summary>{file.diff ? <CodePanel value={file.diff} label="复制 Diff" /> : <p className="diff-loading">展开后从设备读取最多 64 KiB Diff</p>}{file.truncated && <p className="truncate-note">仅展示 {Math.min(file.totalBytes ?? 65_536, 65_536)} / {file.totalBytes ?? "未知"} bytes，摘要 {shortID(file.digest)}</p>}</details>)}</div></section>;
 }
 
 const ApprovalPanel = forwardRef<HTMLElement, { approvals: ApprovalProjection[]; leaseHeld: boolean; busy: boolean; onResolve: (approval: ApprovalProjection, decision: "accept" | "decline") => void }>(function ApprovalPanel({ approvals, leaseHeld, busy, onResolve }, ref) {
-  return <section className="approval-panel" ref={ref}><div className="section-heading"><div><Icon name="warning" /><h2>等待审批</h2></div><span>{approvals.length}</span></div>{approvals.map((approval) => <article key={approval.key}><div><b>{approval.kind ?? "未知风险操作"}</b><p>{approval.summary ?? "Codex 正在等待审批决定"}</p><small>到期 {formatTime(approval.expiresAt)} / 操作摘要 {shortID(approval.operationDigest)}</small></div><div><button className="button secondary" type="button" disabled={!leaseHeld || busy || !approval.operationDigest} onClick={() => onResolve(approval, "decline")}>拒绝</button><button className="button warning" type="button" disabled={!leaseHeld || busy || !approval.operationDigest} onClick={() => onResolve(approval, "accept")}>批准</button></div></article>)}</section>;
+  const { t } = useI18n();
+  return <section className="approval-panel" ref={ref}><div className="section-heading"><div><Icon name="warning" /><h2>{t("workbench.approval.pending")}</h2></div><span>{approvals.length}</span></div>{approvals.map((approval) => <article key={approval.key}><div><b>{approval.kind ?? "未知风险操作"}</b><p>{approval.summary ?? "Codex 正在等待审批决定"}</p><small>到期 {formatTime(approval.expiresAt)} / 操作摘要 {shortID(approval.operationDigest)}</small></div><div><button className="button secondary" type="button" disabled={!leaseHeld || busy || !approval.operationDigest} onClick={() => onResolve(approval, "decline")}>拒绝</button><button className="button warning" type="button" disabled={!leaseHeld || busy || !approval.operationDigest} onClick={() => onResolve(approval, "accept")}>批准</button></div></article>)}</section>;
 });
 
 function ApprovalDialog({ value, nodeName, workspaceName, onClose, onNext, onConfirm }: { value: Extract<Confirmation, { kind: "approval" }>; nodeName: string; workspaceName: string; onClose: () => void; onNext: () => void; onConfirm: () => void }) {
@@ -229,9 +260,10 @@ function ApprovalDialog({ value, nodeName, workspaceName, onClose, onNext, onCon
 }
 
 function LeaseControl({ lease, held, onAcquire, onTakeover, onRelease }: { lease: LeaseState; held: boolean; onAcquire: () => void; onTakeover: () => void; onRelease: () => void }) {
-  if (held) return <div className="lease-control"><span className="lease-badge held"><Icon name="check" />可操作</span><button type="button" onClick={onRelease}>释放</button></div>;
-  if (lease.state === "occupied") return <div className="lease-control"><span className="lease-badge occupied"><Icon name="lock" />占用中 {lease.expiresAt ? formatLeaseTime(lease.expiresAt) : ""}</span><button type="button" onClick={onTakeover}>接管</button></div>;
-  return <div className="lease-control"><span className="lease-badge"><Icon name="lock" />只读</span><button type="button" onClick={onAcquire}>获取控制权</button></div>;
+  const { t } = useI18n();
+  if (held) return <div className="lease-control"><span className="lease-badge held"><Icon name="check" />{t("workbench.thread.controllable")}</span><button type="button" onClick={onRelease}>{t("workbench.lease.release")}</button></div>;
+  if (lease.state === "occupied") return <div className="lease-control"><span className="lease-badge occupied"><Icon name="lock" />{t("workbench.thread.readOnly")} {lease.expiresAt ? formatLeaseTime(lease.expiresAt) : ""}</span><button type="button" onClick={onTakeover}>{t("workbench.lease.takeover")}</button></div>;
+  return <div className="lease-control"><span className="lease-badge"><Icon name="lock" />{t("workbench.lease.readOnly")}</span><button type="button" onClick={onAcquire}>{t("workbench.lease.control")}</button></div>;
 }
 
 function limitedTurns(turns: TurnProjection[], limit: number): TurnProjection[] {

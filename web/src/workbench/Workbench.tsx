@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { BrandMark } from "../BrandMark";
+import { LanguageSwitch, useI18n } from "../i18n";
 import type { RuntimeSettings } from "../relay/runtime-config";
 import type { ControlStorage } from "../relay/storage";
 import { Dialog } from "./Dialog";
@@ -9,7 +10,7 @@ import { NewTaskFlow, type NewTaskTarget } from "./NewTaskFlow";
 import { selectHomeGroups, selectNotifications, selectTasks, filterTasks, type TaskFilter, type TaskSummary } from "./selectors";
 import { SettingsView } from "./Settings";
 import { resourceKey, type ResourceState, type WorkbenchSession } from "./session";
-import { ContextRail, DevicesView, HomeView, TasksView } from "./TaskViews";
+import { DevicesView, HomeView, TaskContextBar, TasksView } from "./TaskViews";
 import { ThreadDetail } from "./ThreadDetail";
 import { connectionLabel, EmptyState, formatTime, ResourceMessage, SkeletonRows } from "./WorkbenchPrimitives";
 
@@ -18,6 +19,7 @@ type Selection = { nodeId: string; workspaceId: string; threadId: string };
 type HistorySurface = "thread" | "new-task";
 
 export function Workbench({ session, storage, settings, onSettingsSaved }: { session: WorkbenchSession; storage: ControlStorage; settings: RuntimeSettings; onSettingsSaved: () => void }) {
+  const { t } = useI18n();
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
   const saved = useRef(readContext());
   const restoredThreadPending = useRef(Boolean(saved.current.nodeId && saved.current.workspaceId && saved.current.threadId));
@@ -269,7 +271,8 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
   return <main className={`workbench-shell ${mobileThreadOpen ? "thread-open" : ""}`}>
     <header className="workbench-topbar">
       <div className="brand-lockup"><BrandMark /><div><strong>远枢</strong><span>Codex task relay</span></div></div>
-      <nav className="desktop-nav" aria-label="工作台导航"><button type="button" className={screen === "home" ? "active" : ""} onClick={() => selectScreen("home")}>首页</button><button type="button" className={screen === "tasks" ? "active" : ""} onClick={() => selectScreen("tasks")}>任务</button><button type="button" className={screen === "devices" ? "active" : ""} onClick={() => selectScreen("devices")}>设备</button><button type="button" className={screen === "settings" ? "active" : ""} onClick={() => selectScreen("settings")}>设置</button></nav>
+      <nav className="desktop-nav" aria-label="工作台导航"><button type="button" className={screen === "home" ? "active" : ""} onClick={() => selectScreen("home")}>{t("workbench.nav.home")}</button><button type="button" className={screen === "tasks" ? "active" : ""} onClick={() => selectScreen("tasks")}>{t("workbench.nav.tasks")}</button><button type="button" className={screen === "devices" ? "active" : ""} onClick={() => selectScreen("devices")}>{t("workbench.nav.devices")}</button><button type="button" className={screen === "settings" ? "active" : ""} onClick={() => selectScreen("settings")}>{t("workbench.nav.settings")}</button></nav>
+      <LanguageSwitch compact />
       <button className={`topbar-attention ${screen === "notifications" ? "active" : ""}`} type="button" onClick={() => selectScreen("notifications")} aria-label={`待办通知 ${unread}`}><Icon name="bell" />{unread > 0 && <span>{unread}</span>}</button>
       <button className={`connection-state ${snapshot.connectionState}`} type="button" onClick={() => void session.refreshAll()} aria-label="刷新连接状态"><span className="semantic-state" />{connectionLabel(snapshot.connectionState)}</button>
     </header>
@@ -280,11 +283,13 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
       : screen === "settings" ? <SettingsView session={session} storage={storage} settings={settings} connectionState={snapshot.connectionState} selectedNodeId={selectedNodeId} onSettingsSaved={onSettingsSaved} />
       : screen === "devices" ? <DevicesView nodes={nodes} workspaces={allWorkspaces} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} onNode={(nodeId) => navigate(() => { setSelectedNodeId(nodeId); setSelectedWorkspaceId(""); })} onWorkspace={selectDeviceWorkspace} onNewTask={(nodeId, workspaceId) => openNewTask({ nodeId, workspaceId })} onShowTasks={() => selectScreen("tasks")} />
       : <div className="workbench-grid">
-        <ContextRail nodes={nodes} workspaces={workspaces} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} resources={snapshot.resources} onNode={(nodeId) => navigate(() => { setSelectedNodeId(nodeId); setSelectedWorkspaceId(""); setSelectedThreadId(""); })} onWorkspace={(workspaceId) => navigate(() => { setSelectedWorkspaceId(workspaceId); setSelectedThreadId(""); })} />
-        <section className="task-pane">
+        <aside className="task-sidebar" aria-label="任务列表与上下文">
+          <TaskContextBar nodes={nodes} workspaces={workspaces} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} onNode={(nodeId) => navigate(() => { setSelectedNodeId(nodeId); setSelectedWorkspaceId(""); setSelectedThreadId(""); })} onWorkspace={(workspaceId) => navigate(() => { setSelectedWorkspaceId(workspaceId); setSelectedThreadId(""); })} />
+          <section className="task-pane">
           <TaskDataState resource={taskResource} hasTasks={tasks.length > 0} onRetry={() => void session.refreshAll()} />
           {screen === "home" ? <HomeView groups={groups} nodes={nodes} unreadNotifications={unread} onOpen={openThread} onNew={() => openNewTask()} onNotifications={() => selectScreen("notifications")} /> : <TasksView tasks={filteredTasks} allTasks={tasks} nodes={nodes} workspaces={allWorkspaces} filter={filter} query={query} selectedNodeId={taskNodeFilter} selectedWorkspaceId={taskWorkspaceFilter} onFilter={setFilter} onQuery={setQuery} onNode={(nodeId) => { setTaskNodeFilter(nodeId); setTaskWorkspaceFilter(""); }} onWorkspace={setTaskWorkspaceFilter} onOpen={openThread} onNew={() => openNewTask()} />}
-        </section>
+          </section>
+        </aside>
         <ThreadDetail session={session} snapshotRevision={snapshot.revision} connectionState={snapshot.connectionState} state={state} resource={selectedThreadId ? snapshot.resources[resourceKey.thread(selectedNodeId, selectedWorkspaceId, selectedThreadId)] : undefined} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} selectedThreadId={selectedThreadId} onRead={markTaskRead} onDraftChange={handleDetailDraftChange} onBack={() => navigate(() => leaveSurface("thread"))} />
       </div>}
 
@@ -292,10 +297,10 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
     {confirmDiscard && <Dialog title="放弃未发送的内容？" destructive onClose={() => setConfirmDiscard(false)} actions={<><button className="button secondary" type="button" onClick={() => setConfirmDiscard(false)}>继续编辑</button><button className="button danger solid" type="button" onClick={() => { setConfirmDiscard(false); draftDirtyRef.current = false; detailDraftDirtyRef.current = false; newTaskDraftDirtyRef.current = false; setDetailDraftDirty(false); setNewTaskDraftDirty(false); const action = pendingNavigation.current; pendingNavigation.current = undefined; action?.(); }}>放弃草稿</button></>}><p>当前内容尚未发送。离开后这份草稿不会保存在浏览器中。</p></Dialog>}
 
     <nav className="mobile-nav" aria-label="工作台导航">
-      <NavButton icon="home" label="首页" active={screen === "home"} onClick={() => selectScreen("home")} />
-      <NavButton icon="tasks" label="任务" active={screen === "tasks"} onClick={() => selectScreen("tasks")} />
-      <NavButton icon="node" label="设备" active={screen === "devices"} onClick={() => selectScreen("devices")} />
-      <NavButton icon="settings" label="设置" active={screen === "settings"} onClick={() => selectScreen("settings")} />
+      <NavButton icon="home" label={t("workbench.nav.home")} active={screen === "home"} onClick={() => selectScreen("home")} />
+      <NavButton icon="tasks" label={t("workbench.nav.tasks")} active={screen === "tasks"} onClick={() => selectScreen("tasks")} />
+      <NavButton icon="node" label={t("workbench.nav.devices")} active={screen === "devices"} onClick={() => selectScreen("devices")} />
+      <NavButton icon="settings" label={t("workbench.nav.settings")} active={screen === "settings"} onClick={() => selectScreen("settings")} />
     </nav>
   </main>;
 }
