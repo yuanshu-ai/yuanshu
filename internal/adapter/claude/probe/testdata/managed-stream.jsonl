@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"<SESSION_ID>","cwd":"<WORKSPACE>","capabilities":["interrupt_receipt_v1","interrupt_cancel_queued_v1"],"tools":["Read"]}
+{"type":"assistant","session_id":"<SESSION_ID>","message":{"role":"assistant","content":[{"type":"thinking","thinking":"<REDACTED_TEXT>"},{"type":"text","text":"<REDACTED_TEXT>"},{"type":"tool_use","id":"<TOOL_USE_ID>","name":"Read","input":{"file_path":"<WORKSPACE>"}}]}}
+{"type":"user","session_id":"<SESSION_ID>","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"<TOOL_USE_ID>","content":"<REDACTED_TEXT>"}]}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"<SESSION_ID>","result":"<REDACTED_TEXT>","duration_ms":1,"num_turns":1}

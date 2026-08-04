@@ -1,0 +1,8 @@
+{
+  "version": "1.18.13",
+  "tag": "v1.18.13",
+  "commit": "a105350812f05f914c768e468559dbd6bd508d8e",
+  "license": "MIT",
+  "npm_integrity": "sha512-HYmBizm5vyAqqYuKzhpleRdEKwh7TeFSeA4f/Edl0F8OSPnbLi3DaXNMtmtsL13e2/994M9JoIz11yrVNdoAfA==",
+  "types": "packages/sdk/js/src/v2/gen/types.gen.ts"
+}
