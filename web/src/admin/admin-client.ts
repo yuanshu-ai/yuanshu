@@ -17,6 +17,8 @@ export interface AdminOverview {
 }
 
 export interface AdminNode { id: string; name: string; os: string; version: string; status: string; online: boolean; createdAt: string; lastSeenAt?: string }
+export interface AdminNodeInvitation { invitationId: string; displayName: string; status: "pending" | "used" | "cancelled" | "expired"; createdAt: string; expiresAt: string; nodeId?: string }
+export interface IssuedNodeInvitation extends AdminNodeInvitation { secret: string; shortCode: string; serverUrl: string; invite: string; inviteUrl: string; qrCode: string }
 export interface AdminNodeDetail { node: AdminNode & { runtime: { nodeId: string; online: boolean; connectedAt?: string; lastFrameAt?: string; lastEventAt?: string; runtimeStatus?: string; relayStatus?: string; recoveryStatus?: string; lastErrorCode?: string; lastCloseReason?: string; workspaceCount: number } } }
 export interface AdminControlClient { id: string; name: string; status: string; online: boolean; current: boolean; createdAt: string; lastSeenAt?: string; revokedAt?: string }
 export interface AdminAccessRequest { id: string; kind: "control_client" | "node"; nodeId: string; name?: string; os?: string; version?: string; status: string; createdAt: string; expiresAt: string }

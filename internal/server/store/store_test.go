@@ -32,7 +32,7 @@ func openTestStore(t *testing.T) (*Store, string) {
 
 func TestOpenCreatesServerSchemaAndReopens(t *testing.T) {
 	local, path := openTestStore(t)
-	for _, table := range []string{"admin_audit_logs", "bootstrap", "control_clients", "node_credentials", "node_enrollments", "nodes", "owners", "pairings", "control_leases", "notifications", "schema_migrations", "server_security_settings", "server_replay_messages", "server_replay_nonces", "server_signer_sequences"} {
+	for _, table := range []string{"admin_audit_logs", "bootstrap", "control_clients", "node_credentials", "node_enrollments", "node_invitations", "nodes", "owners", "pairings", "control_leases", "notifications", "schema_migrations", "server_security_settings", "server_replay_messages", "server_replay_nonces", "server_signer_sequences"} {
 		var count int
 		if err := local.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("table %s count=%d err=%v", table, count, err)

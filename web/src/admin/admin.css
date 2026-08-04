@@ -97,6 +97,9 @@
 .confirm-dialog input { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; outline: 0; background: #0a100e; color: var(--ink); }
 .confirm-dialog input:focus { border-color: var(--danger); }
 .confirm-dialog > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.confirm-dialog select { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: #0a100e; color: var(--ink); }
+.invitation-result img { width: 220px; max-width: 100%; margin: 18px auto 0; padding: 8px; border-radius: 8px; background: #fff; }
+.invitation-result .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-align: center; }
 
 .admin-gate { display: grid; place-content: center; justify-items: start; min-height: 100dvh; padding: 24px; background: #0b100f; color: var(--ink); }
 .admin-gate h1 { margin: 20px 0 0; font-size: 28px; letter-spacing: -.045em; }

@@ -164,6 +164,7 @@ func newHandler(service *BootstrapService, ready readiness, local *serverstore.S
 			mux.Handle("/v1/node-enrollments/", pairing.Handler())
 			mux.Handle("/v1/nodes", pairing.Handler())
 			mux.Handle("/v1/nodes/", pairing.Handler())
+			mux.Handle("/v1/node-invitations/claim", pairing.Handler())
 			mux.Handle("/pair", PairingPageHandler())
 			mux.Handle("/pair/", PairingPageHandler())
 			if adminOptions.Enabled {

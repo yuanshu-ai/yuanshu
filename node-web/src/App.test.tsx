@@ -58,7 +58,8 @@ it("uses a native workspace token during first setup without exposing a path fie
   fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
   await screen.findByText("Server 与安全连接验证通过");
   fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-  fireEvent.change(screen.getByLabelText("Bootstrap secret"), { target: { value: "single-use-secret" } });
+  fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
+  fireEvent.change(screen.getByLabelText("Bootstrap secret (deprecated)"), { target: { value: "single-use-secret" } });
   fireEvent.click(screen.getByRole("button", { name: "下一步" }));
   fireEvent.click(screen.getByRole("button", { name: "下一步" }));
   const picker = screen.getByRole("button", { name: "选择文件夹" });

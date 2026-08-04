@@ -3,15 +3,15 @@ import { Children, useCallback, useEffect, useRef, useState, type ReactNode } fr
 import { BrandMark } from "../BrandMark";
 import { LanguageSwitch } from "../i18n";
 import { IndexedDBControlStorage } from "../relay/storage";
-import { AdminClient, type AdminAccessRequest, type AdminAudit, type AdminConfig, type AdminControlClient, type AdminLease, type AdminNode, type AdminNodeDetail, type AdminOverview } from "./admin-client";
+import { AdminClient, type AdminAccessRequest, type AdminAudit, type AdminConfig, type AdminControlClient, type AdminLease, type AdminNode, type AdminNodeDetail, type AdminNodeInvitation, type AdminOverview, type IssuedNodeInvitation } from "./admin-client";
 import { machineStatus } from "../status/catalog.generated";
 import "./admin.css";
 
 type Section = "overview" | "nodes" | "clients" | "access" | "security";
-type AdminData = { overview?: AdminOverview; nodes: AdminNode[]; nodeDetails: Record<string, AdminNodeDetail>; clients: AdminControlClient[]; requests: AdminAccessRequest[]; leases: AdminLease[]; audit: AdminAudit[]; config?: AdminConfig; diagnostics?: Record<string, unknown> };
+type AdminData = { overview?: AdminOverview; nodes: AdminNode[]; invitations: AdminNodeInvitation[]; nodeDetails: Record<string, AdminNodeDetail>; clients: AdminControlClient[]; requests: AdminAccessRequest[]; leases: AdminLease[]; audit: AdminAudit[]; config?: AdminConfig; diagnostics?: Record<string, unknown> };
 type Confirmation = { title: string; detail: string; confirmLabel: string; requiredText?: string; run: () => Promise<void> };
 
-const emptyData: AdminData = { nodes: [], nodeDetails: {}, clients: [], requests: [], leases: [], audit: [] };
+const emptyData: AdminData = { nodes: [], invitations: [], nodeDetails: {}, clients: [], requests: [], leases: [], audit: [] };
 
 export function AdminApp() {
   const [section, setSection] = useState<Section>("overview");
@@ -21,6 +21,8 @@ export function AdminApp() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation>();
+  const [inviteDialog, setInviteDialog] = useState(false);
+  const [issuedInvite, setIssuedInvite] = useState<IssuedNodeInvitation>();
   const alive = useRef(true);
 
   const refresh = useCallback(async (active: AdminClient, quiet = false) => {
@@ -35,6 +37,7 @@ export function AdminApp() {
         active.get<{ audit: AdminAudit[] }>("/v1/admin/audit"),
         active.get<AdminConfig>("/v1/admin/config"),
         active.get<Record<string, unknown>>("/v1/admin/diagnostics"),
+        active.get<{ invitations: AdminNodeInvitation[] }>("/v1/admin/node-invitations"),
       ]);
       if (!alive.current) return;
       const failed = results.filter((item) => item.status === "rejected").length;
@@ -48,6 +51,7 @@ export function AdminApp() {
         audit: settledValue<{ audit: AdminAudit[] }>(results[5])?.audit ?? previous.audit,
         config: settledValue<AdminConfig>(results[6]) ?? previous.config,
         diagnostics: settledValue<Record<string, unknown>>(results[7]) ?? previous.diagnostics,
+        invitations: settledValue<{ invitations: AdminNodeInvitation[] }>(results[8])?.invitations ?? previous.invitations,
       }));
       if (results[0].status === "fulfilled") setState("ready");
       else setState((current) => current === "ready" ? current : "error");
@@ -119,6 +123,15 @@ export function AdminApp() {
     if (!current) return;
     requestConfirmation({ title: "更新新接入策略", detail: "该设置只影响新的配对和 Node enrollment，不会断开现有连接。", confirmLabel: "应用接入策略", run: () => client!.highRisk("PUT", "/v1/admin/security/admission", { controlPairingEnabled: pairing, nodeEnrollmentEnabled: enrollment, baseRevision: current.revision }) });
   };
+  const createInvitation = async (displayName: string, expiresInMinutes: number) => {
+    if (!client) return;
+    setBusy(true);
+    try { const value = await client.highRisk<IssuedNodeInvitation>("POST", "/v1/admin/node-invitations", { displayName, expiresInMinutes }); setIssuedInvite(value); setInviteDialog(false); await refresh(client, true); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Node invitation failed"); }
+    finally { setBusy(false); }
+  };
+  const cancelInvitation = (item: AdminNodeInvitation) => requestConfirmation({ title: "取消 Node 邀请", detail: "邀请码将立即失效，尚未完成的 Node 无法再使用。", confirmLabel: "取消邀请", run: () => client!.highRisk("POST", `/v1/admin/node-invitations/${encodeURIComponent(item.invitationId)}/cancel`, {}) });
+  const reissueInvitation = (item: AdminNodeInvitation) => requestConfirmation({ title: "重新签发 Node 邀请", detail: "将为同一显示名称创建新的十分钟单次邀请；旧邀请不会恢复。", confirmLabel: "重新签发", run: async () => { const value = await client!.highRisk<IssuedNodeInvitation>("POST", `/v1/admin/node-invitations/${encodeURIComponent(item.invitationId)}/reissue`, { expiresInMinutes: 10 }); setIssuedInvite(value); } });
 
   return <main className="admin-shell">
     <LanguageSwitch compact />
@@ -131,12 +144,14 @@ export function AdminApp() {
       <header className="admin-topbar"><div><h1>{sectionLabel(section)}</h1><p>{sectionDescription(section)}</p></div><div className="admin-live"><span className={`semantic-dot ${data.overview?.status === "ready" ? "ok" : "warn"}`} />{data.overview?.status === "ready" ? "Server 正常" : "需要检查"}</div></header>
       {message && <div className="admin-message" role="status">{message}<button onClick={() => setMessage("")} aria-label="关闭提示">关闭</button></div>}
       {section === "overview" && <Overview data={data} />}
-      {section === "nodes" && <Nodes items={data.nodes} details={data.nodeDetails} onInspect={inspectNode} onRevoke={revokeNode} />}
+      {section === "nodes" && <Nodes items={data.nodes} invitations={data.invitations} details={data.nodeDetails} onAdd={() => setInviteDialog(true)} onCancelInvitation={cancelInvitation} onReissueInvitation={reissueInvitation} onInspect={inspectNode} onRevoke={revokeNode} />}
       {section === "clients" && <Clients items={data.clients} onRevoke={revokeClient} />}
       {section === "access" && <Access requests={data.requests} leases={data.leases} config={data.config} onCancel={cancelRequest} onRelease={releaseLease} onAdmission={changeAdmission} />}
       {section === "security" && <Security data={data} onDownload={() => downloadDiagnostics(data.diagnostics ?? {})} />}
     </section>
     {confirmation && <ConfirmDialog value={confirmation} busy={busy} onCancel={() => !busy && setConfirmation(undefined)} onConfirm={() => void run(confirmation.run)} />}
+    {inviteDialog && <NodeInvitationDialog busy={busy} onCancel={() => setInviteDialog(false)} onCreate={(name, ttl) => void createInvitation(name, ttl)} />}
+    {issuedInvite && <IssuedInvitationDialog value={issuedInvite} onClose={() => setIssuedInvite(undefined)} />}
   </main>;
 }
 
@@ -156,7 +171,7 @@ function Overview({ data }: { data: AdminData }) {
   return <div className="admin-stack">{certificate && <StatusNotice value={certificate} />}{backupStatus && <StatusNotice value={backupStatus} />}<section className="metric-grid">{metrics.map(([label, value, detail]) => <article key={String(label)}><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>)}</section><section className="admin-split"><article className="admin-block"><h2>运行状态</h2><dl><DataRow label="运行时间" value={formatDuration(overview.uptimeSeconds)} /><DataRow label="构建版本" value={overview.build.version || shortID(overview.build.revision) || "开发构建"} /><DataRow label="Go Runtime" value={overview.build.goVersion} /><DataRow label="SQLite schema" value={String(overview.database.schemaVersion)} /><DataRow label="数据库检查" value={overview.database.quickCheck} /><DataRow label="数据库大小" value={formatBytes(overview.database.sizeBytes)} /></dl></article><article className="admin-block"><h2>安全与恢复</h2><dl><DataRow label="TLS" value={overview.tls.configured ? "已启用" : "仅 loopback"} /><DataRow label="证书到期" value={formatDate(overview.tls.notAfter)} /><DataRow label="最近备份" value={backup.available ? formatDate(backup.lastBackupAt) : "尚无备份"} /><DataRow label="备份完整性" value={backup.integrity === "valid" ? "已验证" : backup.integrity === "invalid" ? "校验失败" : "不可用"} /><DataRow label="最近失败" value={`${overview.counts.recentFailures} 项`} /><DataRow label="未读通知" value={`${overview.counts.unreadNotifications} 项`} /></dl></article></section><RecentAudit items={data.audit.slice(0, 6)} /></div>;
 }
 
-function Nodes({ items, details, onInspect, onRevoke }: { items: AdminNode[]; details: Record<string, AdminNodeDetail>; onInspect: (id: string) => void; onRevoke: (item: AdminNode) => void }) { return <AdminList empty="还没有已注册 Node">{items.map((item) => <div className="node-detail-group" key={item.id}><article className="admin-row"><div><span className={`semantic-dot ${item.online ? "ok" : "quiet"}`} /><strong>{item.name}</strong><small>{item.os} / {item.version}</small></div><div className="row-meta"><span>{item.online ? machineStatus("online")!.title : machineStatus("offline")!.title}</span><span>最近连接 {formatDate(item.lastSeenAt)}</span></div><div className="row-actions"><button className="secondary-button" onClick={() => void onInspect(item.id)}>详情</button><button className="danger-button" disabled={item.status !== "active"} onClick={() => onRevoke(item)}>撤销</button></div></article>{details[item.id] && <NodeRuntimeDetail value={details[item.id]} />}</div>)}</AdminList>; }
+function Nodes({ items, invitations, details, onAdd, onCancelInvitation, onReissueInvitation, onInspect, onRevoke }: { items: AdminNode[]; invitations: AdminNodeInvitation[]; details: Record<string, AdminNodeDetail>; onAdd: () => void; onCancelInvitation: (item: AdminNodeInvitation) => void; onReissueInvitation: (item: AdminNodeInvitation) => void; onInspect: (id: string) => void; onRevoke: (item: AdminNode) => void }) { return <div className="admin-stack"><section className="admin-block"><div className="block-heading"><div><h2>Node</h2><p>Server 只创建一次性邀请，Node 始终主动建立出站连接。</p></div><button className="secondary-button" onClick={onAdd}>添加 Node</button></div><AdminList empty="还没有已注册 Node">{items.map((item) => <div className="node-detail-group" key={item.id}><article className="admin-row"><div><span className={`semantic-dot ${item.online ? "ok" : "quiet"}`} /><strong>{item.name}</strong><small>{item.os} / {item.version}</small></div><div className="row-meta"><span>{item.online ? machineStatus("online")!.title : machineStatus("offline")!.title}</span><span>最近连接 {formatDate(item.lastSeenAt)}</span></div><div className="row-actions"><button className="secondary-button" onClick={() => void onInspect(item.id)}>详情</button><button className="danger-button" disabled={item.status !== "active"} onClick={() => onRevoke(item)}>撤销</button></div></article>{details[item.id] && <NodeRuntimeDetail value={details[item.id]} />}</div>)}</AdminList></section><section className="admin-block"><h2>Node 邀请</h2><AdminList empty="没有邀请记录">{invitations.map((item) => <article className="admin-row compact" key={item.invitationId}><div><strong>{item.displayName}</strong><small>{shortID(item.invitationId)}</small></div><div className="row-meta"><span>{item.status}</span><span>{formatDate(item.expiresAt)} 过期</span></div><div className="row-actions">{item.status === "pending" ? <button className="secondary-button" onClick={() => onCancelInvitation(item)}>取消</button> : <button className="secondary-button" onClick={() => onReissueInvitation(item)}>重新签发</button>}</div></article>)}</AdminList></section></div>; }
 
 function NodeRuntimeDetail({ value }: { value: AdminNodeDetail }) { const runtime = value.node.runtime; return <section className="node-runtime-detail"><DataRow label="Relay" value={runtime.relayStatus || "未报告"} /><DataRow label="本次连接" value={formatDate(runtime.connectedAt)} /><DataRow label="Runtime" value={runtime.runtimeStatus || "未报告"} /><DataRow label="恢复状态" value={runtime.recoveryStatus || "无"} /><DataRow label="工作区数量" value={String(runtime.workspaceCount ?? 0)} /><DataRow label="最近 frame" value={formatDate(runtime.lastFrameAt)} /><DataRow label="最近事件" value={formatDate(runtime.lastEventAt)} /><DataRow label="最近错误" value={runtime.lastErrorCode || "无"} /><DataRow label="关闭原因" value={runtime.lastCloseReason || "无"} /></section>; }
 function Clients({ items, onRevoke }: { items: AdminControlClient[]; onRevoke: (item: AdminControlClient) => void }) { return <AdminList empty="还没有已配对控制端">{items.map((item) => <article className="admin-row" key={item.id}><div><span className={`semantic-dot ${item.online ? "ok" : "quiet"}`} /><strong>{item.name}{item.current ? "（当前）" : ""}</strong><small>{shortID(item.id)}</small></div><div className="row-meta"><span>{item.status === "active" ? (item.online ? "在线" : "未连接") : "已撤销"}</span><span>最近连接 {formatDate(item.lastSeenAt)}</span></div><button className="danger-button" disabled={item.status !== "active"} onClick={() => onRevoke(item)}>撤销</button></article>)}</AdminList>; }
@@ -169,6 +184,9 @@ function Access({ requests, leases, config, onCancel, onRelease, onAdmission }: 
 function Security({ data, onDownload }: { data: AdminData; onDownload: () => void }) { const config = data.config; const backup = data.overview?.backup; return <div className="admin-stack"><section className="admin-split"><article className="admin-block"><div className="block-heading"><h2>脱敏 Server 配置</h2><span>只读</span></div><dl><DataRow label="部署模式" value={config?.deploymentMode || "未报告"} /><DataRow label="Listen" value={config?.listen || "未报告"} /><DataRow label="Public URL" value={config?.publicUrl || "loopback"} /><DataRow label="Web" value={config?.webEnabled ? "启用" : "关闭"} /><DataRow label="Admin" value={config?.adminEnabled ? "启用" : "关闭"} /><DataRow label="TLS" value={config?.tls.configured ? "已配置" : "未配置"} /><DataRow label="证书来源" value={config?.tls.provider || "无"} /></dl>{config?.tls.trustUrl && <p><a href={config.tls.trustUrl}>打开根 CA 安装说明</a> · <a href={config.tls.caDownloadUrl}>下载公开根证书</a></p>}</article><article className="admin-block"><div className="block-heading"><div><h2>诊断摘要</h2><p>不包含凭据、任务正文或绝对路径。</p></div><button className="secondary-button" onClick={onDownload}>下载 JSON</button></div><dl><DataRow label="配置 revision" value={shortID(config?.configRevision)} /><DataRow label="允许 Origin" value={String(config?.allowedControlOrigins.length ?? 0)} /><DataRow label="TLS SAN" value={config?.tls.san?.join(", ") || "无"} /><DataRow label="证书指纹" value={shortID(config?.tls.fingerprint)} /><DataRow label="根 CA 指纹" value={shortID(config?.tls.caFingerprint)} /><DataRow label="证书到期" value={formatDate(config?.tls.notAfter)} /><DataRow label="下次续期" value={formatDate(config?.tls.nextRenewal)} /><DataRow label="CA 恢复包" value={config?.tls.caBackupAt ? `最近导出 ${formatDate(config.tls.caBackupAt)}` : "尚未记录；请在 Server 本机导出"} /><DataRow label="最近证书错误" value={config?.tls.lastErrorCode || "无"} /><DataRow label="最近备份" value={backup?.available ? `${formatDate(backup.lastBackupAt)} · ${formatBytes(backup.sizeBytes ?? 0)}` : "请在 Server 本机运行 backup"} /></dl></article></section><RecentAudit items={data.audit} /></div>; }
 
 function RecentAudit({ items }: { items: AdminAudit[] }) { return <section className="admin-block"><h2>安全审计</h2><AdminList empty="还没有管理操作记录">{items.map((item) => <article className="audit-row" key={item.id}><time>{formatDate(item.createdAt)}</time><strong>{auditLabel(item.action)}</strong><span>{item.resourceType} / {shortID(item.resourceRef)}</span><em className={item.result}>{item.result === "succeeded" ? "成功" : item.errorCode || "拒绝"}</em></article>)}</AdminList></section>; }
+
+function NodeInvitationDialog({ busy, onCancel, onCreate }: { busy: boolean; onCancel: () => void; onCreate: (name: string, ttl: number) => void }) { const [name,setName]=useState("New Node"); const [ttl,setTTL]=useState(10); return <div className="dialog-layer"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="invite-title"><h2 id="invite-title">添加 Node</h2><p>创建一个单次、短时有效的邀请。邀请码即授权，请通过可信渠道发送。</p><label>显示名称<input autoFocus maxLength={128} value={name} onChange={(event)=>setName(event.target.value)} /></label><label>有效期<select value={ttl} onChange={(event)=>setTTL(Number(event.target.value))}><option value={10}>10 分钟</option><option value={20}>20 分钟</option><option value={30}>30 分钟</option></select></label><div><button className="secondary-button" disabled={busy} onClick={onCancel}>取消</button><button className="danger-button solid" disabled={busy||!name.trim()} onClick={()=>onCreate(name.trim(),ttl)}>{busy?"创建中":"创建邀请"}</button></div></section></div>; }
+function IssuedInvitationDialog({ value, onClose }: { value: IssuedNodeInvitation; onClose: () => void }) { const download=()=>{const blob=new Blob([value.invite],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=`${value.displayName.replace(/[^A-Za-z0-9_-]+/g,"-")||"node"}.yuanshu-invite`;link.click();URL.revokeObjectURL(url)}; return <div className="dialog-layer"><section className="confirm-dialog invitation-result" role="dialog" aria-modal="true" aria-labelledby="issued-title"><h2 id="issued-title">Node 邀请已创建</h2><p>秘密只显示这一次，{formatDate(value.expiresAt)} 过期。</p><img src={value.qrCode} alt="Node invitation QR code" /><label>短代码<input className="mono" readOnly value={value.shortCode} /></label><div><button className="secondary-button" onClick={download}>下载邀请文件</button><button className="danger-button solid" onClick={onClose}>完成</button></div></section></div>; }
 
 function ConfirmDialog({ value, busy, onCancel, onConfirm }: { value: Confirmation; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
   const [typed, setTyped] = useState("");

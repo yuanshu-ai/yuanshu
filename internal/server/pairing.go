@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yuanshu-ai/yuanshu/internal/enrollment"
@@ -23,10 +25,68 @@ type PairingOptions struct {
 	Clock  func() time.Time
 }
 type PairingService struct {
-	store  *serverstore.Store
-	hub    *Hub
-	random io.Reader
-	clock  func() time.Time
+	store             *serverstore.Store
+	hub               *Hub
+	random            io.Reader
+	clock             func() time.Time
+	invitationLimiter *keyedAttemptLimiter
+}
+
+type keyedAttempt struct {
+	started time.Time
+	failed  int
+}
+
+type keyedAttemptLimiter struct {
+	mu       sync.Mutex
+	clock    func() time.Time
+	attempts map[string]keyedAttempt
+}
+
+func newKeyedAttemptLimiter(clock func() time.Time) *keyedAttemptLimiter {
+	return &keyedAttemptLimiter{clock: clock, attempts: make(map[string]keyedAttempt)}
+}
+
+func (l *keyedAttemptLimiter) allowed(keys ...string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.clock().UTC()
+	for _, key := range keys {
+		attempt := l.attempts[key]
+		if !attempt.started.IsZero() && now.Sub(attempt.started) < time.Minute && attempt.failed >= 5 {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *keyedAttemptLimiter) failure(keys ...string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.clock().UTC()
+	for _, key := range keys {
+		attempt := l.attempts[key]
+		if attempt.started.IsZero() || now.Sub(attempt.started) >= time.Minute {
+			attempt = keyedAttempt{started: now}
+		}
+		attempt.failed++
+		l.attempts[key] = attempt
+	}
+	if len(l.attempts) > 4096 {
+		for key, attempt := range l.attempts {
+			if now.Sub(attempt.started) >= time.Minute {
+				delete(l.attempts, key)
+			}
+		}
+	}
+}
+
+func remoteHost(value string) string {
+	host, _, err := net.SplitHostPort(value)
+	if err == nil {
+		return host
+	}
+	return value
 }
 
 type createPairingRequest struct {
@@ -62,7 +122,7 @@ func NewPairingService(local *serverstore.Store, hub *Hub, options PairingOption
 	if clock == nil {
 		clock = time.Now
 	}
-	return &PairingService{store: local, hub: hub, random: random, clock: clock}, nil
+	return &PairingService{store: local, hub: hub, random: random, clock: clock, invitationLimiter: newKeyedAttemptLimiter(clock)}, nil
 }
 
 func (s *PairingService) Handler() http.Handler {
@@ -80,6 +140,7 @@ func (s *PairingService) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/node-enrollments/{id}/decision", s.decideNodeEnrollment)
 	mux.HandleFunc("GET /v1/nodes", s.listNodes)
 	mux.HandleFunc("DELETE /v1/nodes/{id}", s.revokeNode)
+	mux.HandleFunc("POST /v1/node-invitations/claim", s.claimNodeInvitation)
 	mux.HandleFunc("GET /v1/control-clients", s.controlTrustManifest)
 	return mux
 }

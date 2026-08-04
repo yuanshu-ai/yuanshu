@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { BrandMark } from "./BrandMark";
 import { ConfigChange, LocalNodeAPI, NodeConfig, Overview } from "./api";
@@ -114,7 +114,7 @@ function GuidedSetupWizard({ value, run, busy, error, message }: { value: Overvi
   const [relayUrl, setRelayUrl] = useState("");
   const [server, setServer] = useState<SetupServer>();
   const [connectionReady, setConnectionReady] = useState(false);
-  const [enrollmentMode, setEnrollmentMode] = useState<"bootstrap" | "join">("bootstrap");
+  const [enrollmentMode, setEnrollmentMode] = useState<"invitation" | "code" | "bootstrap">("invitation");
   const [enrollmentSecret, setEnrollmentSecret] = useState("");
   const [codexBinary, setCodexBinary] = useState(setup.defaultCodex || "codex");
   const [workspaceToken, setWorkspaceToken] = useState("");
@@ -123,6 +123,7 @@ function GuidedSetupWizard({ value, run, busy, error, message }: { value: Overvi
   const [allowNetwork, setAllowNetwork] = useState(false);
   const [relayCaBundle, setRelayCaBundle] = useState("");
   const [relayCaError, setRelayCaError] = useState("");
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   useEffect(() => {
     void run("setup_discover").then((result) => {
@@ -163,11 +164,30 @@ function GuidedSetupWizard({ value, run, busy, error, message }: { value: Overvi
     if (!raw.includes("BEGIN CERTIFICATE") || raw.includes("PRIVATE KEY")) { setRelayCaError("CA file is invalid"); return; }
     setRelayCaBundle(raw);
   };
+  const loadInvitation = async (file?: File) => {
+    if (!file || file.size > 96 * 1024) return;
+    const raw = await file.text();
+    try {
+      const invite = JSON.parse(raw) as { version?: number; serverUrl?: string; caCertificate?: string };
+      if (invite.version !== 1 || !invite.serverUrl) throw new Error("invalid invitation");
+      setEnrollmentMode("invitation"); setEnrollmentSecret(raw); setServerUrl(invite.serverUrl); setServerMode("remote"); setConnectionReady(false);
+      if (invite.caCertificate) setRelayCaBundle(invite.caCertificate);
+    } catch { setRelayCaError("Invitation file is invalid"); }
+  };
+  const acceptInvitation = (raw: string) => {
+    try {
+      const invite = JSON.parse(raw) as { version?: number; serverUrl?: string; caCertificate?: string };
+      if (invite.version !== 1 || !invite.serverUrl) throw new Error("invalid invitation");
+      setEnrollmentMode("invitation"); setEnrollmentSecret(raw); setServerUrl(invite.serverUrl); setServerMode("remote"); setConnectionReady(false); setScannerOpen(false);
+      if (invite.caCertificate) setRelayCaBundle(invite.caCertificate);
+    } catch { setRelayCaError("Invitation QR code is invalid"); }
+  };
   const complete = async () => {
     await run("setup_complete", {
       locale, name, serverUrl, relayUrl, relayCaBundle: relayCaBundle || undefined,
       bootstrapSecret: enrollmentMode === "bootstrap" ? enrollmentSecret : undefined,
-      joinUrl: enrollmentMode === "join" ? enrollmentSecret : undefined,
+      invitation: enrollmentMode === "invitation" ? enrollmentSecret : undefined,
+      invitationCode: enrollmentMode === "code" ? enrollmentSecret : undefined,
       codexBinary, workspaceToken, workspaceName, permissionProfile: permission, allowNetwork,
     });
     setStep(8);
@@ -179,9 +199,9 @@ function GuidedSetupWizard({ value, run, busy, error, message }: { value: Overvi
     <aside className="setup-rail"><div className="brand"><BrandMark /><div><strong>Yuanshu Node</strong><small>{setup.platform}</small></div></div><nav>{steps.map((item, index) => <span key={item} className={index === step ? "active" : index < step ? "done" : ""}>{String(index + 1).padStart(2, "0")} · {t(`setup.node.step.${item}`)}</span>)}</nav></aside>
     <section className="setup-main"><header><span>{t("setup.node.title")}</span><small>{t("setup.node.subtitle")}</small></header><div className="setup-stage">
       {step === 0 && <><p className="step-label">01</p><h1>{t("language.choose.title")}</h1><p className="helper">{t("language.choose.description")}</p><div className="setup-choice-grid"><button type="button" className={locale === "zh-CN" ? "active" : ""} onClick={() => void setLocale("zh-CN")}><strong>中文</strong><small>简体中文</small></button><button type="button" className={locale === "en-US" ? "active" : ""} onClick={() => void setLocale("en-US")}><strong>English</strong><small>English (US)</small></button></div></>}
-      {step === 1 && <><p className="step-label">02</p><h1>{t("setup.node.step.server")}</h1><div className="setup-choice-grid"><button type="button" className={serverMode === "local" ? "active" : ""} disabled={!server?.publicUrl} onClick={() => { setServerMode("local"); if (server?.publicUrl) setServerUrl(server.publicUrl); }}><strong>{t("setup.node.localServer")}</strong><small>{server?.publicUrl ? t("setup.node.discovered") : t("setup.node.notDiscovered")}</small></button><button type="button" className={serverMode === "remote" ? "active" : ""} onClick={() => { setServerMode("remote"); setServerUrl(""); setConnectionReady(false); }}><strong>{t("setup.node.remoteServer")}</strong><small>HTTPS</small></button></div><label><span>{t("setup.node.serverURL")}</span><input className="mono" type="url" value={serverUrl} placeholder="https://192.168.1.20:9527" onChange={(event) => { setServerUrl(event.target.value); setConnectionReady(false); }} /></label><p className="helper">{t("setup.node.serverURL.help")}</p></>}
+      {step === 1 && <><p className="step-label">02</p><h1>{t("setup.node.step.server")}</h1><div className="setup-choice-grid"><button type="button" className={serverMode === "local" ? "active" : ""} disabled={!server?.publicUrl} onClick={() => { setServerMode("local"); if (server?.publicUrl) setServerUrl(server.publicUrl); }}><strong>{t("setup.node.localServer")}</strong><small>{server?.publicUrl ? t("setup.node.discovered") : t("setup.node.notDiscovered")}</small></button><button type="button" className={serverMode === "remote" ? "active" : ""} onClick={() => { setServerMode("remote"); setServerUrl(""); setConnectionReady(false); }}><strong>{t("setup.node.remoteServer")}</strong><small>HTTPS</small></button></div><label><span>.yuanshu-invite · {t("common.optional")}</span><input type="file" accept=".yuanshu-invite,application/json" onChange={(event) => void loadInvitation(event.target.files?.[0])} /></label><label><span>{t("setup.node.serverURL")}</span><input className="mono" type="url" value={serverUrl} placeholder="https://192.168.1.20:9527" onChange={(event) => { setServerUrl(event.target.value); setConnectionReady(false); }} /></label><p className="helper">{t("setup.node.serverURL.help")}</p></>}
       {step === 2 && <><p className="step-label">03</p><h1>{t("setup.node.step.verify")}</h1><p className="helper">{serverUrl}</p><label><span>Private CA · {t("common.optional")}</span><input type="file" accept=".pem,.crt,application/x-pem-file,application/x-x509-ca-cert" onChange={(event) => void loadCA(event.target.files?.[0])} /></label>{relayCaError && <Notice tone="danger">{relayCaError}</Notice>}<button type="button" className="primary standalone-action" disabled={busy || !serverUrl} onClick={() => void testConnection()}>{busy ? t("common.testing") : t("common.test")}</button>{connectionReady && <div className="selection-summary"><strong>{t("setup.node.connectionReady")}</strong><small>{server?.deploymentMode} · {server?.caFingerprint || "system trust"}</small></div>}</>}
-      {step === 3 && <><p className="step-label">04</p><h1>{t("setup.node.step.enroll")}</h1><div className="segmented"><button type="button" className={enrollmentMode === "bootstrap" ? "active" : ""} onClick={() => { setEnrollmentMode("bootstrap"); setEnrollmentSecret(""); }}>Bootstrap</button><button type="button" className={enrollmentMode === "join" ? "active" : ""} onClick={() => { setEnrollmentMode("join"); setEnrollmentSecret(""); }}>Join URL</button></div><label><span>{enrollmentMode === "bootstrap" ? "Bootstrap secret" : "Enrollment join URL"}</span><input className="mono" type="password" autoComplete="off" value={enrollmentSecret} onChange={(event) => setEnrollmentSecret(event.target.value)} /></label><p className="helper">{t("setup.node.invitation.help")}</p></>}
+      {step === 3 && <><p className="step-label">04</p><h1>{t("setup.node.step.enroll")}</h1><div className="segmented"><button type="button" className={enrollmentMode === "invitation" ? "active" : ""} onClick={() => { setEnrollmentMode("invitation"); setEnrollmentSecret(""); }}>QR / Invite</button><button type="button" className={enrollmentMode === "code" ? "active" : ""} onClick={() => { setEnrollmentMode("code"); setEnrollmentSecret(""); }}>Short code</button><button type="button" className={enrollmentMode === "bootstrap" ? "active" : ""} onClick={() => { setEnrollmentMode("bootstrap"); setEnrollmentSecret(""); }}>Advanced</button></div>{enrollmentMode === "invitation" && <div className="invite-actions"><label className="secondary file-action">Import .yuanshu-invite<input type="file" accept=".yuanshu-invite,application/json" onChange={(event) => void loadInvitation(event.target.files?.[0])} /></label>{"BarcodeDetector" in window && <button type="button" className="secondary" onClick={() => setScannerOpen(true)}>Scan QR</button>}</div>}<label><span>{enrollmentMode === "code" ? "16-character code" : enrollmentMode === "bootstrap" ? "Bootstrap secret (deprecated)" : "Invitation JSON or advanced URL"}</span><textarea className="mono" autoComplete="off" value={enrollmentSecret} onChange={(event) => setEnrollmentSecret(event.target.value)} /></label><p className="helper">{t("setup.node.invitation.help")}</p>{scannerOpen && <InvitationScanner onScan={acceptInvitation} onClose={() => setScannerOpen(false)} />}</>}
       {step === 4 && <><p className="step-label">05</p><h1>{t("setup.node.step.codex")}</h1><label><span>{t("setup.node.codexBinary")}</span><input className="mono" value={codexBinary} onChange={(event) => setCodexBinary(event.target.value)} /></label><div className="selection-summary"><strong>{t("setup.node.codexUnverified")}</strong><small>Compatibility is advisory, never a version allowlist.</small></div></>}
       {step === 5 && <><p className="step-label">06</p><h1>{t("setup.node.step.workspace")}</h1><p className="helper">Browser input cannot select an absolute path. The operating system picker returns an opaque, one-time token.</p><button type="button" className="primary standalone-action" disabled={busy || !setup.pickerAvailable} onClick={() => void pick()}>{t("setup.node.pickWorkspace")}</button>{workspaceToken && <div className="selection-summary"><strong>{workspaceName || t("setup.node.workspaceSelected")}</strong><small>Path stays on this Node</small></div>}</>}
       {step === 6 && <><p className="step-label">07</p><h1>{t("setup.node.step.permission")}</h1><label><span>{t("setup.node.workspaceName")}</span><input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} /></label><label><span>Permission</span><select value={permission} onChange={(event) => setPermission(event.target.value)}><option value="read-only">{t("setup.node.permission.readOnly")}</option><option value="workspace-write">{t("setup.node.permission.write")}</option></select></label><label className="check"><input type="checkbox" checked={allowNetwork} onChange={(event) => setAllowNetwork(event.target.checked)} /><span>{t("setup.node.allowNetwork")}</span></label></>}
@@ -190,6 +210,38 @@ function GuidedSetupWizard({ value, run, busy, error, message }: { value: Overvi
       {error && <Notice tone="danger">{error}</Notice>}{message && <Notice>{message}</Notice>}
     </div><footer><button type="button" className="secondary" disabled={busy || step === 0 || step === 8} onClick={() => setStep((current) => Math.max(0, current - 1))}>{t("common.back")}</button><button type="button" className="primary" disabled={busy || !canNext} onClick={() => step === 7 ? void complete() : setStep((current) => Math.min(8, current + 1))}>{step === 7 ? t("common.confirm") : t("common.next")}</button></footer></section>
   </main>;
+}
+
+function InvitationScanner({ onScan, onClose }: { onScan: (value: string) => void; onClose: () => void }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const [failure, setFailure] = useState("");
+  useEffect(() => {
+    let active = true;
+    let stream: MediaStream | undefined;
+    let timer = 0;
+    const Detector = (window as unknown as { BarcodeDetector?: new (options: { formats: string[] }) => { detect(source: HTMLVideoElement): Promise<Array<{ rawValue: string }>> } }).BarcodeDetector;
+    void (async () => {
+      try {
+        if (!Detector) throw new Error("scanner_unavailable");
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+        if (!active || !video.current) return;
+        video.current.srcObject = stream;
+        await video.current.play();
+        const detector = new Detector({ formats: ["qr_code"] });
+        const scan = async () => {
+          if (!active || !video.current) return;
+          try {
+            const values = await detector.detect(video.current);
+            if (values[0]?.rawValue) { onScan(values[0].rawValue); return; }
+          } catch { /* transient camera frame */ }
+          timer = window.setTimeout(scan, 250);
+        };
+        void scan();
+      } catch { if (active) setFailure("Camera scanning is unavailable. Import the invitation file or use the short code."); }
+    })();
+    return () => { active = false; window.clearTimeout(timer); stream?.getTracks().forEach((track) => track.stop()); };
+  }, [onScan]);
+  return <div className="scanner-layer" role="dialog" aria-modal="true" aria-label="Scan Node invitation"><section><video ref={video} muted playsInline />{failure && <Notice tone="danger">{failure}</Notice>}<button type="button" className="secondary" onClick={onClose}>Close camera</button></section></div>;
 }
 
 function SetupWizard({ value, run, busy, error, message }: { value: Overview; run: (command: string, fields?: Record<string, unknown>) => Promise<Record<string, unknown>>; busy: boolean; error: string; message: string }) {

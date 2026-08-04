@@ -157,6 +157,10 @@ func (s *adminService) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/admin/overview", s.overview)
 	mux.HandleFunc("GET /v1/admin/nodes", s.nodes)
 	mux.HandleFunc("GET /v1/admin/nodes/{id}", s.nodeDetail)
+	mux.HandleFunc("POST /v1/admin/node-invitations", s.createNodeInvitation)
+	mux.HandleFunc("GET /v1/admin/node-invitations", s.listNodeInvitations)
+	mux.HandleFunc("POST /v1/admin/node-invitations/{id}/cancel", s.cancelNodeInvitation)
+	mux.HandleFunc("POST /v1/admin/node-invitations/{id}/reissue", s.reissueNodeInvitation)
 	mux.HandleFunc("GET /v1/admin/control-clients", s.controlClients)
 	mux.HandleFunc("GET /v1/admin/access-requests", s.accessRequests)
 	mux.HandleFunc("GET /v1/admin/leases", s.leases)
@@ -278,7 +282,7 @@ func adminMutationPath(method, path string) bool {
 	if method != http.MethodPost {
 		return false
 	}
-	return strings.HasPrefix(path, "/v1/admin/nodes/") || strings.HasPrefix(path, "/v1/admin/control-clients/") || strings.HasPrefix(path, "/v1/admin/pairings/") || strings.HasPrefix(path, "/v1/admin/node-enrollments/") || path == "/v1/admin/leases/release"
+	return path == "/v1/admin/node-invitations" || strings.HasPrefix(path, "/v1/admin/node-invitations/") || strings.HasPrefix(path, "/v1/admin/nodes/") || strings.HasPrefix(path, "/v1/admin/control-clients/") || strings.HasPrefix(path, "/v1/admin/pairings/") || strings.HasPrefix(path, "/v1/admin/node-enrollments/") || path == "/v1/admin/leases/release"
 }
 
 func (s *adminService) issueChallenge(w http.ResponseWriter, r *http.Request) {
@@ -1009,7 +1013,7 @@ func decodeEmpty(w http.ResponseWriter, r *http.Request) bool {
 	return decodeAdminJSON(w, r, &request)
 }
 func highRiskAdminAction(method, path string) bool {
-	return (method == http.MethodPost && (strings.HasPrefix(path, "/v1/admin/nodes/") || strings.HasPrefix(path, "/v1/admin/control-clients/"))) || (method == http.MethodPut && path == "/v1/admin/security/admission")
+	return (method == http.MethodPost && (path == "/v1/admin/node-invitations" || strings.HasPrefix(path, "/v1/admin/node-invitations/") || strings.HasPrefix(path, "/v1/admin/nodes/") || strings.HasPrefix(path, "/v1/admin/control-clients/"))) || (method == http.MethodPut && path == "/v1/admin/security/admission")
 }
 func connectionSet(items []HubConnectionSnapshot, role string) map[string]bool {
 	result := map[string]bool{}

@@ -186,6 +186,8 @@ func (s *nodeSetupController) handle(ctx context.Context, request localRequest) 
 		joinURL, err := s.complete(ctx, request)
 		request.BootstrapSecret = ""
 		request.JoinURL = ""
+		request.Invitation = ""
+		request.InvitationCode = ""
 		if err != nil {
 			response.Error = setupErrorCode(err)
 			return response
@@ -356,10 +358,16 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 	if codexBinary == "" {
 		codexBinary = "codex"
 	}
-	if request.BootstrapSecret == "" && request.JoinURL == "" {
+	methods := 0
+	for _, value := range []string{request.BootstrapSecret, request.Invitation, request.InvitationCode, request.JoinURL} {
+		if strings.TrimSpace(value) != "" {
+			methods++
+		}
+	}
+	if methods == 0 {
 		return "", errors.New("setup enrollment is required")
 	}
-	if request.BootstrapSecret != "" && request.JoinURL != "" {
+	if methods != 1 {
 		return "", errors.New("setup enrollment is ambiguous")
 	}
 	if request.JoinURL != "" && !validEnrollmentURL(request.JoinURL, request.RelayURL) {
@@ -444,6 +452,22 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 		if _, err := manager.Bind(ctx, ownerID, nodeID); err != nil {
 			return "", errors.New("setup identity binding failed")
 		}
+	} else if request.JoinURL == "" {
+		client := s.httpClient
+		var clientErr error
+		if value.Relay.CABundleFile != "" || client == nil {
+			client, clientErr = relayHTTPClient("", 15*time.Second, value.Relay.CABundleFile)
+		}
+		if clientErr != nil {
+			return "", errors.New("setup relay CA is invalid")
+		}
+		ownerID, nodeID, err := claimNodeInvitation(ctx, client, request.ServerURL, request.RelayURL, request.Invitation, request.InvitationCode, name, nodeIdentity.PublicKey)
+		if err != nil {
+			return "", err
+		}
+		if _, err := manager.Bind(ctx, ownerID, nodeID); err != nil {
+			return "", errors.New("setup identity binding failed")
+		}
 	}
 	configurationStore, err := config.NewFileStore(s.configPath)
 	if err != nil {
@@ -508,6 +532,73 @@ func claimBootstrap(ctx context.Context, client *http.Client, relayURL, secret, 
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&result) != nil || result.OwnerID == "" || result.NodeID == "" || result.Status != "enrolled" {
 		return "", "", errors.New("setup bootstrap response is invalid")
+	}
+	return result.OwnerID, result.NodeID, nil
+}
+
+type nodeInvitationWire struct {
+	Version       int    `json:"version"`
+	ServerURL     string `json:"serverUrl"`
+	InvitationID  string `json:"invitationId"`
+	Secret        string `json:"secret"`
+	ExpiresAt     string `json:"expiresAt"`
+	CACertificate string `json:"caCertificate,omitempty"`
+	CAFingerprint string `json:"caFingerprint,omitempty"`
+}
+
+func claimNodeInvitation(ctx context.Context, client *http.Client, serverURL, relayURL, invitation, code, name string, publicKey []byte) (string, string, error) {
+	base, err := relayHTTPSBase(relayURL)
+	if err != nil {
+		return "", "", errors.New("setup invitation request is invalid")
+	}
+	wire := nodeInvitationWire{}
+	if invitation != "" {
+		raw := []byte(strings.TrimSpace(invitation))
+		if parsed, parseErr := url.Parse(string(raw)); parseErr == nil && parsed.Fragment != "" {
+			if decoded, decodeErr := base64.RawURLEncoding.DecodeString(parsed.Fragment); decodeErr == nil {
+				raw = decoded
+			}
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&wire) != nil || wire.Version != 1 || wire.InvitationID == "" || wire.Secret == "" {
+			return "", "", errors.New("setup invitation is invalid")
+		}
+		serverURL = wire.ServerURL
+	}
+	serverURL = strings.TrimRight(serverURL, "/")
+	if serverURL == "" {
+		serverURL = base
+	}
+	parsed, parseErr := url.Parse(serverURL)
+	if parseErr != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Scheme+"://"+parsed.Host != base {
+		return "", "", errors.New("setup invitation origin is invalid")
+	}
+	body := map[string]string{"name": name, "os": runtime.GOOS, "arch": runtime.GOARCH, "version": "dev", "publicKey": base64.RawURLEncoding.EncodeToString(publicKey)}
+	if code != "" {
+		body["shortCode"] = code
+	} else {
+		body["invitationId"], body["secret"] = wire.InvitationID, wire.Secret
+	}
+	raw, _ := json.Marshal(body)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/node-invitations/claim", bytes.NewReader(raw))
+	if err != nil {
+		return "", "", errors.New("setup invitation request failed")
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return "", "", errors.New("setup invitation service is unavailable")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		return "", "", errors.New("setup invitation was rejected")
+	}
+	var result struct{ OwnerID, NodeID, Status string }
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || result.OwnerID == "" || result.NodeID == "" || result.Status != "active" {
+		return "", "", errors.New("setup invitation response is invalid")
 	}
 	return result.OwnerID, result.NodeID, nil
 }

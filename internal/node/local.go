@@ -41,6 +41,8 @@ type localRequest struct {
 	RelayURL          string         `json:"relayUrl,omitempty"`
 	RelayCABundle     string         `json:"relayCaBundle,omitempty"`
 	BootstrapSecret   string         `json:"bootstrapSecret,omitempty"`
+	Invitation        string         `json:"invitation,omitempty"`
+	InvitationCode    string         `json:"invitationCode,omitempty"`
 	WorkspaceToken    string         `json:"workspaceToken,omitempty"`
 	WorkspaceName     string         `json:"workspaceName,omitempty"`
 	PermissionProfile string         `json:"permissionProfile,omitempty"`

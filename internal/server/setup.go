@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/skip2/go-qrcode"
 	producti18n "github.com/yuanshu-ai/yuanshu/internal/i18n"
+	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
 )
 
 //go:embed setup_web.html
@@ -268,6 +270,13 @@ func (s *serverSetupService) apply(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	result := map[string]any{"ok": true, "accessUrl": serverPublicBase(value)}
+	if invitation, invitationErr := createInitialNodeInvitation(request.Context(), value); invitationErr == nil {
+		result["nodeInvitation"] = invitation.Invite
+		result["nodeInvitationUrl"] = invitation.InviteURL
+		result["nodeInvitationCode"] = invitation.ShortCode
+		result["nodeInvitationExpiresAt"] = invitation.ExpiresAt
+		result["nodeInvitationQrDataUrl"] = invitation.QRCode
+	}
 	if value.DeploymentMode == DeploymentLANManaged {
 		if raw, readErr := readManagedCAPublic(value.DataDir); readErr == nil {
 			if block, _ := pem.Decode(raw); block != nil {
@@ -284,6 +293,47 @@ func (s *serverSetupService) apply(writer http.ResponseWriter, request *http.Req
 	case s.done <- nil:
 	default:
 	}
+}
+
+func createInitialNodeInvitation(ctx context.Context, configuration ConfigFile) (issuedNodeInvitation, error) {
+	local, err := serverstore.Open(ctx, filepath.Join(configuration.DataDir, "server.db"), serverstore.Options{})
+	if err != nil {
+		return issuedNodeInvitation{}, err
+	}
+	defer local.Close()
+	idRaw, secretRaw, codeRaw := make([]byte, 18), make([]byte, 32), make([]byte, 10)
+	if _, err = io.ReadFull(rand.Reader, idRaw); err != nil {
+		return issuedNodeInvitation{}, err
+	}
+	if _, err = io.ReadFull(rand.Reader, secretRaw); err != nil {
+		return issuedNodeInvitation{}, err
+	}
+	defer clear(secretRaw)
+	if _, err = io.ReadFull(rand.Reader, codeRaw); err != nil {
+		return issuedNodeInvitation{}, err
+	}
+	defer clear(codeRaw)
+	id := "inv_" + base64.RawURLEncoding.EncodeToString(idRaw)
+	secret, code := base64.RawURLEncoding.EncodeToString(secretRaw), crockfordCode(codeRaw)
+	secretHash, codeHash := sha256.Sum256([]byte(secret)), sha256.Sum256([]byte(code))
+	now, expires := time.Now().UTC(), time.Now().UTC().Add(10*time.Minute)
+	if err := local.CreateNodeInvitation(ctx, serverstore.CreateNodeInvitation{NodeInvitation: serverstore.NodeInvitation{ID: id, DisplayName: "First Node", Status: "pending", CreatedBy: "server_setup", CreatedAt: now, ExpiresAt: expires}, SecretHash: secretHash[:], CodeHash: codeHash[:]}); err != nil {
+		return issuedNodeInvitation{}, err
+	}
+	payload := nodeInvitationPayload{Version: 1, ServerURL: strings.TrimRight(serverPublicBase(configuration), "/"), InvitationID: id, Secret: secret, ExpiresAt: expires.Format(time.RFC3339Nano)}
+	if configuration.DeploymentMode == DeploymentLANManaged {
+		if ca, readErr := readManagedCAPublic(configuration.DataDir); readErr == nil {
+			payload.CACertificate = string(ca)
+			if block, _ := pem.Decode(ca); block != nil {
+				payload.CAFingerprint = certificateFingerprint(block.Bytes)
+			}
+		}
+	}
+	raw, _ := json.Marshal(payload)
+	encoded := base64.RawURLEncoding.EncodeToString(raw)
+	inviteURL := payload.ServerURL + "/join#" + encoded
+	qr, _ := qrcode.Encode(string(raw), qrcode.Medium, 256)
+	return issuedNodeInvitation{InvitationID: id, DisplayName: "First Node", Secret: secret, ShortCode: code, ServerURL: payload.ServerURL, ExpiresAt: payload.ExpiresAt, Invite: string(raw), InviteURL: inviteURL, QRCode: "data:image/png;base64," + base64.StdEncoding.EncodeToString(qr)}, nil
 }
 
 func decodeServerSetupPayload(writer http.ResponseWriter, request *http.Request) (serverSetupPayload, bool) {

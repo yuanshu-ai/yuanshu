@@ -17,6 +17,7 @@ import (
 
 	"github.com/yuanshu-ai/yuanshu/internal/enrollment"
 	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
 
@@ -127,6 +128,59 @@ func TestControlClientPairingApprovalRevocationAndNodeSessionRotation(t *testing
 		t.Fatalf("old session status=%d", oldResponse.StatusCode)
 	}
 	_ = doPairingJSON(t, server.Client(), http.MethodGet, server.URL+"/v1/nodes", nil, nodeHeaders(bound.NodeID, credential))
+}
+
+func TestNodeInvitationLimiterSeparatesIPAndInvitation(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	limiter := newKeyedAttemptLimiter(func() time.Time { return now })
+	for range 5 {
+		if !limiter.allowed("ip:192.0.2.10", "invite:a") {
+			t.Fatal("limiter blocked before the failure threshold")
+		}
+		limiter.failure("ip:192.0.2.10", "invite:a")
+	}
+	if limiter.allowed("ip:192.0.2.10", "invite:b") {
+		t.Fatal("IP limit did not protect a second invitation")
+	}
+	if limiter.allowed("ip:192.0.2.11", "invite:a") {
+		t.Fatal("invitation limit did not protect a second IP")
+	}
+	if !limiter.allowed("ip:192.0.2.11", "invite:b") {
+		t.Fatal("unrelated IP and invitation were blocked")
+	}
+}
+
+func TestNodeInvitationClaimActivatesFirstNodeOnce(t *testing.T) {
+	_, local, _ := openServerService(t)
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	secret := "single-use-node-invitation"
+	shortCode := "0123456789ABCDEF"
+	secretHash, codeHash := sha256.Sum256([]byte(secret)), sha256.Sum256([]byte(shortCode))
+	if err := local.CreateNodeInvitation(context.Background(), serverstore.CreateNodeInvitation{NodeInvitation: serverstore.NodeInvitation{ID: "inv_first", DisplayName: "First Node", Status: "pending", CreatedBy: "server_setup", CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}, SecretHash: secretHash[:], CodeHash: codeHash[:]}); err != nil {
+		t.Fatal(err)
+	}
+	pairing, err := NewPairingService(local, nil, PairingOptions{Clock: func() time.Time { return now.Add(time.Minute) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]string{"invitationId": "inv_first", "secret": secret, "name": "Office Mac", "os": "darwin", "arch": "arm64", "version": "dev", "publicKey": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, ed25519.PublicKeySize))}
+	raw, _ := json.Marshal(body)
+	request := httptest.NewRequest(http.MethodPost, "/v1/node-invitations/claim", bytes.NewReader(raw))
+	request.Header.Set("Content-Type", "application/json")
+	request.RemoteAddr = "192.0.2.10:50123"
+	response := httptest.NewRecorder()
+	pairing.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"status":"active"`)) {
+		t.Fatalf("claim status=%d body=%s", response.Code, response.Body.String())
+	}
+	replay := httptest.NewRequest(http.MethodPost, "/v1/node-invitations/claim", bytes.NewReader(raw))
+	replay.Header.Set("Content-Type", "application/json")
+	replay.RemoteAddr = "192.0.2.10:50124"
+	replayResponse := httptest.NewRecorder()
+	pairing.Handler().ServeHTTP(replayResponse, replay)
+	if replayResponse.Code != http.StatusUnauthorized && replayResponse.Code != http.StatusConflict {
+		t.Fatalf("replayed claim status=%d body=%s", replayResponse.Code, replayResponse.Body.String())
+	}
 }
 
 func TestPairingPageUsesStrictBrowserBoundary(t *testing.T) {

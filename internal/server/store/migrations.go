@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const CurrentSchemaVersion = 8
+const CurrentSchemaVersion = 9
 
 type migration struct {
 	version    int
@@ -270,6 +270,29 @@ var serverMigrations = []migration{{
 			SELECT node_id, NULL, status, created_at, rotated_at, revoked_at FROM legacy_node_credentials`,
 		`DROP TABLE legacy_node_credentials`,
 	},
+}, {
+	version: 9,
+	name:    "one_time_node_invitations",
+	statements: []string{
+		`CREATE TABLE node_invitations (
+			id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+			owner_id TEXT,
+			secret_hash BLOB NOT NULL UNIQUE CHECK (length(secret_hash) = 32),
+			code_hash BLOB NOT NULL UNIQUE CHECK (length(code_hash) = 32),
+			display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 128),
+			status TEXT NOT NULL CHECK (status IN ('pending','used','cancelled','expired')),
+			created_by TEXT NOT NULL CHECK (length(created_by) BETWEEN 1 AND 128),
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			used_at TEXT,
+			node_id TEXT,
+			FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE,
+			FOREIGN KEY (node_id) REFERENCES nodes(id),
+			CHECK ((status='pending' AND used_at IS NULL AND node_id IS NULL) OR status IN ('used','cancelled','expired'))
+		) STRICT`,
+		`CREATE INDEX node_invitations_owner_status ON node_invitations(owner_id,status,created_at DESC)`,
+		`CREATE INDEX node_invitations_expiry ON node_invitations(status,expires_at)`,
+	},
 }}
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -344,6 +367,8 @@ func schemaLiteral(version int) string {
 		return "8"
 	case 9:
 		return "9"
+	case 10:
+		return "10"
 	default:
 		panic("unsupported server schema version")
 	}
