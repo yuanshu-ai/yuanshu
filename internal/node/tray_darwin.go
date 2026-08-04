@@ -7,7 +7,7 @@ package node
 #cgo darwin LDFLAGS: -framework AppKit -framework Foundation
 #include <stdlib.h>
 
-void YuanshuTrayRun(void);
+void YuanshuTrayRun(const unsigned char *iconData, int iconLength);
 void YuanshuTrayStop(void);
 void YuanshuTrayUpdate(const char *state, int autostartEnabled);
 void YuanshuTrayOpenURL(const char *target);
@@ -18,11 +18,15 @@ import "C"
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"sync"
 	"time"
 	"unsafe"
 )
+
+//go:embed brand/yuanshu-menubar-template-18@2x.png
+var darwinTrayIcon []byte
 
 const (
 	darwinTrayOpen = iota + 1
@@ -80,7 +84,7 @@ func (t *darwinTray) Run(ctx context.Context, callbacks trayCallbacks) error {
 		}
 	}()
 	t.pushStatus()
-	C.YuanshuTrayRun()
+	C.YuanshuTrayRun((*C.uchar)(unsafe.Pointer(&darwinTrayIcon[0])), C.int(len(darwinTrayIcon)))
 	close(done)
 
 	darwinTrayState.Lock()

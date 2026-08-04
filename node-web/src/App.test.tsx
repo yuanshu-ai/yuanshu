@@ -16,6 +16,7 @@ describe("Node control center", () => {
   it("exchanges the fragment without persisting it and renders status", async () => {
     render(<App />);
     await waitFor(() => expect(screen.getAllByText("已在线")).toHaveLength(2));
+    expect(document.querySelector('img[src="/brand/yuanshu-mark.svg"]')).toBeInTheDocument();
     expect(window.location.hash).toBe("");
     expect(localStorage.length).toBe(0);
   });

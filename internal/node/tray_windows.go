@@ -4,6 +4,8 @@ package node
 
 import (
 	"context"
+	_ "embed"
+	"encoding/binary"
 	"errors"
 	"runtime"
 	"sync"
@@ -71,6 +73,7 @@ var (
 	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
 	procShowWindow          = user32.NewProc("ShowWindow")
 	procCreateIcon          = user32.NewProc("CreateIcon")
+	procCreateIconResource  = user32.NewProc("CreateIconFromResourceEx")
 	procDestroyIcon         = user32.NewProc("DestroyIcon")
 	procOpenClipboard       = user32.NewProc("OpenClipboard")
 	procCloseClipboard      = user32.NewProc("CloseClipboard")
@@ -86,6 +89,9 @@ var (
 	procGlobalFree          = kernel32.NewProc("GlobalFree")
 	procRtlMoveMemory       = kernel32.NewProc("RtlMoveMemory")
 )
+
+//go:embed brand/yuanshu-tray.ico
+var windowsTrayIcon []byte
 
 type trayPoint struct{ X, Y int32 }
 type trayMessage struct {
@@ -323,6 +329,12 @@ func appendTrayMenu(menu uintptr, flags uint32, id uint32, label string) {
 }
 
 func createYuanshuIcon(instance uintptr) uintptr {
+	if payload := windowsIconPayload(windowsTrayIcon); len(payload) > 0 {
+		icon, _, _ := procCreateIconResource.Call(uintptr(unsafe.Pointer(&payload[0])), uintptr(len(payload)), 1, 0x00030000, 32, 32, 0)
+		if icon != 0 {
+			return icon
+		}
+	}
 	andMask := make([]byte, 128)
 	xorMask := make([]byte, 128)
 	for index := range andMask {
@@ -345,6 +357,18 @@ func createYuanshuIcon(instance uintptr) uintptr {
 	}
 	icon, _, _ := procCreateIcon.Call(instance, 32, 32, 1, 1, uintptr(unsafe.Pointer(&andMask[0])), uintptr(unsafe.Pointer(&xorMask[0])))
 	return icon
+}
+
+func windowsIconPayload(value []byte) []byte {
+	if len(value) < 22 || binary.LittleEndian.Uint16(value[0:2]) != 0 || binary.LittleEndian.Uint16(value[2:4]) != 1 || binary.LittleEndian.Uint16(value[4:6]) < 1 {
+		return nil
+	}
+	size := uint64(binary.LittleEndian.Uint32(value[14:18]))
+	offset := uint64(binary.LittleEndian.Uint32(value[18:22]))
+	if size == 0 || offset > uint64(len(value)) || size > uint64(len(value))-offset {
+		return nil
+	}
+	return value[offset : offset+size]
 }
 
 func (t *windowsTray) OpenURL(target string) error {

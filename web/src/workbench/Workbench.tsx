@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { BrandMark } from "../BrandMark";
 import type { RuntimeSettings } from "../relay/runtime-config";
 import type { ControlStorage } from "../relay/storage";
 import { Dialog } from "./Dialog";
@@ -258,7 +259,7 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
 
   return <main className={`workbench-shell ${mobileThreadOpen ? "thread-open" : ""}`}>
     <header className="workbench-topbar">
-      <div className="brand-lockup"><span className="brand-mark">枢</span><div><strong>远枢</strong><span>Codex task relay</span></div></div>
+      <div className="brand-lockup"><BrandMark /><div><strong>远枢</strong><span>Codex task relay</span></div></div>
       <nav className="desktop-nav" aria-label="工作台导航"><button type="button" className={screen === "home" ? "active" : ""} onClick={() => selectScreen("home")}>首页</button><button type="button" className={screen === "tasks" ? "active" : ""} onClick={() => selectScreen("tasks")}>任务</button><button type="button" className={screen === "devices" ? "active" : ""} onClick={() => selectScreen("devices")}>设备</button><button type="button" className={screen === "settings" ? "active" : ""} onClick={() => selectScreen("settings")}>设置</button></nav>
       <button className={`topbar-attention ${screen === "notifications" ? "active" : ""}`} type="button" onClick={() => selectScreen("notifications")} aria-label={`待办通知 ${unread}`}><Icon name="bell" />{unread > 0 && <span>{unread}</span>}</button>
       <button className={`connection-state ${snapshot.connectionState}`} type="button" onClick={() => void session.refreshAll()} aria-label="刷新连接状态"><span className="semantic-state" />{connectionLabel(snapshot.connectionState)}</button>

@@ -18,6 +18,7 @@ enum {
 @property(nonatomic, strong) NSStatusItem *statusItem;
 @property(nonatomic, strong) NSMenuItem *stateItem;
 @property(nonatomic, strong) NSMenuItem *autostartItem;
+@property(nonatomic, strong) NSImage *brandIcon;
 @property(nonatomic, copy) NSString *state;
 @property(nonatomic) BOOL autostartEnabled;
 @end
@@ -28,7 +29,9 @@ enum {
     (void)notification;
     self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
     NSStatusBarButton *button = self.statusItem.button;
-    if (@available(macOS 11.0, *)) {
+    if (self.brandIcon != nil) {
+        button.image = self.brandIcon;
+    } else if (@available(macOS 11.0, *)) {
         NSImage *image = [NSImage imageWithSystemSymbolName:@"point.3.connected.trianglepath.dotted"
                                   accessibilityDescription:@"Yuanshu Node"];
         image.template = YES;
@@ -85,11 +88,18 @@ enum {
 
 static YuanshuTrayDelegate *YuanshuDelegate;
 
-void YuanshuTrayRun(void) {
+void YuanshuTrayRun(const unsigned char *iconData, int iconLength) {
     @autoreleasepool {
         NSApplication *application = [NSApplication sharedApplication];
         [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
         YuanshuDelegate = [[YuanshuTrayDelegate alloc] init];
+        if (iconData != NULL && iconLength > 0) {
+            NSData *data = [NSData dataWithBytes:iconData length:(NSUInteger)iconLength];
+            NSImage *image = [[NSImage alloc] initWithData:data];
+            image.size = NSMakeSize(18, 18);
+            image.template = YES;
+            YuanshuDelegate.brandIcon = image;
+        }
         application.delegate = YuanshuDelegate;
         [application run];
         if (YuanshuDelegate.statusItem != nil) {

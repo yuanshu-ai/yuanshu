@@ -1,5 +1,7 @@
 # Yuanshu · 远枢
 
+<p align="center"><img src="./.github/assets/readme/yuanshu-logo.png" alt="远枢远程枢纽标志" width="152"></p>
+
 > 面向运行在个人电脑上的 AI 编程 Agent 的开源远程工作台。
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)

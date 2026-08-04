@@ -26,6 +26,7 @@ function pairingPageDevPlugin(): Plugin {
     "/pair/session.js": { file: "session.js", contentType: "text/javascript; charset=utf-8" },
     "/pair/storage.js": { file: "storage.js", contentType: "text/javascript; charset=utf-8" },
     "/pair/style.css": { file: "style.css", contentType: "text/css; charset=utf-8" },
+    "/pair/logo.svg": { file: "logo.svg", contentType: "image/svg+xml" },
   };
   return {
     name: "yuanshu-pairing-page-dev",

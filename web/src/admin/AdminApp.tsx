@@ -1,5 +1,6 @@
 import { Children, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { BrandMark } from "../BrandMark";
 import { IndexedDBControlStorage } from "../relay/storage";
 import { AdminClient, type AdminAccessRequest, type AdminAudit, type AdminConfig, type AdminControlClient, type AdminLease, type AdminNode, type AdminNodeDetail, type AdminOverview } from "./admin-client";
 import { machineStatus } from "../status/catalog.generated";
@@ -120,7 +121,7 @@ export function AdminApp() {
 
   return <main className="admin-shell">
     <aside className="admin-nav" aria-label="Server 管理导航">
-      <a className="admin-brand" href="/"><span className="brand-mark">枢</span><span><strong>远枢</strong><small>Server 管理</small></span></a>
+      <a className="admin-brand" href="/"><BrandMark /><span><strong>远枢</strong><small>Server 管理</small></span></a>
       <nav>{(["overview", "nodes", "clients", "access", "security"] as Section[]).map((item) => <button key={item} className={section === item ? "active" : ""} onClick={() => setSection(item)}>{sectionLabel(item)}<span>{sectionCount(item, data)}</span></button>)}</nav>
       <div className="admin-nav-foot"><a href="/">返回工作台</a><button onClick={() => void client?.close().then(() => window.location.reload())}>退出管理会话</button></div>
     </aside>
@@ -190,7 +191,7 @@ function ConfirmDialog({ value, busy, onCancel, onConfirm }: { value: Confirmati
   }, [busy, onCancel]);
   return <div className="dialog-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onCancel(); }}><section ref={dialogRef} className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-detail"><h2 id="confirm-title">{value.title}</h2><p id="confirm-detail">{value.detail}</p>{value.requiredText && <label>输入 <strong>{value.requiredText}</strong> 继续<input ref={inputRef} value={typed} onChange={(event) => setTyped(event.target.value)} /></label>}<div><button ref={cancelRef} className="secondary-button" disabled={busy} onClick={onCancel}>取消</button><button className="danger-button solid" disabled={busy || !allowed} onClick={onConfirm}>{busy ? "处理中" : value.confirmLabel}</button></div></section></div>;
 }
-function AdminGate({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) { return <main className="admin-gate"><span className="brand-mark">枢</span><h1>{title}</h1><p>{detail}</p>{action}</main>; }
+function AdminGate({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) { return <main className="admin-gate"><BrandMark className="brand-mark-large" /><h1>{title}</h1><p>{detail}</p>{action}</main>; }
 function AdminSkeleton() { return <div className="admin-skeleton" aria-label="正在读取管理状态"><i /><i /><i /><i /></div>; }
 function AdminList({ children, empty }: { children: ReactNode; empty: string }) { return <div className="admin-list">{Children.count(children) ? children : <p className="admin-empty">{empty}</p>}</div>; }
 function DataRow({ label, value }: { label: string; value: string }) { return <div><dt>{label}</dt><dd>{value}</dd></div>; }

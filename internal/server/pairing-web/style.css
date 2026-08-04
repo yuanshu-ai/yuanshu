@@ -32,13 +32,10 @@ header {
 }
 
 .mark {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  color: #fff;
-  background: #183d2d;
+  display: block;
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
 }
 
 .card {

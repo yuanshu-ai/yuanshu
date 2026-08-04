@@ -1,5 +1,7 @@
 # Yuanshu · 远枢
 
+<p align="center"><img src="./.github/assets/readme/yuanshu-logo.png" alt="Yuanshu remote hub logo" width="152"></p>
+
 > An open-source remote workbench for AI coding agents running on your own computers.
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)

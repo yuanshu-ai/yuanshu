@@ -51,7 +51,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .brand-lockup > div { display: grid; gap: 1px; }
 .brand-lockup strong { font-size: 15px; letter-spacing: -.03em; }
 .brand-lockup span:last-child { color: var(--quiet); font: 9px ui-monospace, SFMono-Regular, monospace; letter-spacing: .06em; text-transform: uppercase; }
-.brand-mark { display: grid; place-items: center; flex: 0 0 auto; width: 32px; height: 32px; border: 1px solid rgba(114, 215, 162, .42); border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); font-weight: 800; }
+.brand-mark { display: grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px; }
+.brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.brand-mark.brand-mark-large { width: 58px; height: 58px; }
 .desktop-nav { display: flex; align-self: stretch; gap: 3px; }
 .desktop-nav button { position: relative; min-width: 58px; border: 0; background: transparent; color: var(--quiet); font-size: 11px; }
 .desktop-nav button:hover { color: var(--ink); }

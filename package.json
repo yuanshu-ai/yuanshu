@@ -2,7 +2,9 @@
   "name": "yuanshu-workspace",
   "private": true,
   "scripts": {
-    "build": "pnpm --dir web build && pnpm --dir node-web build",
+    "brand:sync": "node scripts/brand-assets.mjs sync",
+    "brand:check": "node scripts/brand-assets.mjs check",
+    "build": "pnpm brand:sync && pnpm --dir web build && pnpm --dir node-web build",
     "protocol:check": "node scripts/protocol.mjs check",
     "protocol:generate": "node scripts/protocol.mjs generate",
     "protocol:test": "node scripts/protocol-test.mjs",

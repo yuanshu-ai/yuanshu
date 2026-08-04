@@ -15,6 +15,7 @@ describe("personal workbench", () => {
     const fake = new FakeSession();
     render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
 
+    expect(document.querySelector('img[src="/brand/yuanshu-mark.svg"]')).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "继续你的 Codex 工作" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "继续任务 Office task" })).toHaveTextContent("Office");
     expect(screen.queryByRole("heading", { name: "其它运行中任务" })).not.toBeInTheDocument();

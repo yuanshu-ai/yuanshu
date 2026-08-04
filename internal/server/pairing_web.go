@@ -43,5 +43,11 @@ func PairingPageHandler() http.Handler {
 		raw, _ := pairingWeb.ReadFile("pairing-web/style.css")
 		_, _ = w.Write(raw)
 	})
+	mux.HandleFunc("GET /pair/logo.svg", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		raw, _ := pairingWeb.ReadFile("pairing-web/logo.svg")
+		_, _ = w.Write(raw)
+	})
 	return mux
 }

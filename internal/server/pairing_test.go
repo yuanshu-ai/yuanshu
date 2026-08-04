@@ -136,6 +136,11 @@ func TestPairingPageUsesStrictBrowserBoundary(t *testing.T) {
 	if strings.Contains(script.Body.String(), "innerHTML") {
 		t.Fatal("pairing script uses unsafe HTML rendering")
 	}
+	logo := httptest.NewRecorder()
+	handler.ServeHTTP(logo, httptest.NewRequest(http.MethodGet, "/pair/logo.svg", nil))
+	if logo.Code != http.StatusOK || logo.Header().Get("Content-Type") != "image/svg+xml" || !strings.Contains(logo.Body.String(), "Yuanshu remote hub mark") {
+		t.Fatalf("pairing logo status=%d content-type=%q", logo.Code, logo.Header().Get("Content-Type"))
+	}
 	storage := httptest.NewRecorder()
 	handler.ServeHTTP(storage, httptest.NewRequest(http.MethodGet, "/pair/storage.js", nil))
 	for _, required := range []string{"CONTROL_DATABASE_VERSION = 4", "runtime-settings", "node-bindings"} {

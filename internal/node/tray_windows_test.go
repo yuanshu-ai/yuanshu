@@ -20,6 +20,12 @@ func TestWindowsTrayStateLabels(t *testing.T) {
 	}
 }
 
+func TestWindowsTrayEmbedsBrandIcon(t *testing.T) {
+	if payload := windowsIconPayload(windowsTrayIcon); len(payload) == 0 {
+		t.Fatal("embedded Windows tray icon is invalid")
+	}
+}
+
 func TestWindowsTrayLive(t *testing.T) {
 	if os.Getenv("YUANSHU_WINDOWS_PACKAGING_LIVE") != "1" {
 		t.Skip("set YUANSHU_WINDOWS_PACKAGING_LIVE=1")

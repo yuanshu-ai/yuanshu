@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 320" role="img" aria-labelledby="title desc">
+  <title id="title">Yuanshu logo lockup</title>
+  <desc id="desc">Yuanshu remote hub symbol with the Yuanshu product name.</desc>
+  <g transform="translate(24 -8) scale(.625)">
+    <path fill="#0B100F" d="M113 164h71v31c0 7 3 13 8 18l51 51c4 4 6 9 6 15v31c0 6 3 9 7 9s7-3 7-9v-31c0-6 2-11 6-15l51-51c5-5 8-11 8-18v-31h71c5 0 9 4 9 9v34c0 8-4 15-10 20l-97 83c-7 6-10 14-10 23v64c0 8-6 13-14 13h-42c-8 0-14-5-14-13v-64c0-9-3-17-10-23l-97-83c-6-5-10-12-10-20v-34c0-5 4-9 9-9Z"/>
+    <rect width="55" height="55" x="104" y="102" fill="#72D7A2" rx="9"/>
+    <rect width="55" height="55" x="353" y="102" fill="#72D7A2" rx="9"/>
+    <rect width="48" height="48" x="232" y="179" fill="#72D7A2" rx="5" transform="rotate(45 256 203)"/>
+    <path fill="#72D7A2" d="M169 290l32 26c3 2 4 5 4 9v56c0 5-5 7-9 4l-25-21c-3-3-5-7-5-11v-58c0-3 1-5 3-5Z"/>
+    <path fill="#72D7A2" d="m343 290-32 26c-3 2-4 5-4 9v56c0 5 5 7 9 4l25-21c3-3 5-7 5-11v-58c0-3-1-5-3-5Z"/>
+  </g>
+  <text x="370" y="207" fill="#0B100F" font-family="Inter, SF Pro Display, system-ui, sans-serif" font-size="128" font-weight="650" letter-spacing="-6">Yuanshu</text>
+</svg>

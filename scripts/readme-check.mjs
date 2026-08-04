@@ -29,6 +29,7 @@ const requiredFiles = [
   ".github/assets/readme/desktop-workbench.png",
   ".github/assets/readme/mobile-home.png",
   ".github/assets/readme/mobile-task-detail.png",
+  ".github/assets/readme/yuanshu-logo.png",
   "guides/README.md",
   "guides/self-hosting.md",
   "guides/configuration.md",
