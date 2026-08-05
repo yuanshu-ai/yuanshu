@@ -38,6 +38,14 @@ func decodeStrictJSON(raw []byte) (any, error) {
 	return value, nil
 }
 
+// DecodeStrictJSON is shared by minor-version protocol validators so duplicate
+// member, UTF-8, surrogate, and I-JSON rules cannot drift between v1.0 and
+// v1.1. It performs syntax validation only; callers must still apply their
+// version-specific schema, target, signature, and replay checks.
+func DecodeStrictJSON(raw []byte) (any, error) {
+	return decodeStrictJSON(raw)
+}
+
 func decodeUniqueJSONValue(decoder *json.Decoder) (any, error) {
 	token, err := decoder.Token()
 	if err != nil {

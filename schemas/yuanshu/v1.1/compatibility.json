@@ -1,0 +1,10 @@
+{
+  "protocolVersion": "1.1",
+  "coexistsWith": ["1.0"],
+  "defaultLegacyAgentInstance": "codex-default",
+  "eventStream": "node-events-v1.1",
+  "legacyEventStream": "node-events-v1",
+  "sharedControlSequenceAcrossMinorVersions": true,
+  "nativeSessionIdentifiersAllowed": false,
+  "serverTranslatesAgentPayloads": false
+}
