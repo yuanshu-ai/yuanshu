@@ -145,6 +145,39 @@ describe("personal data projection", () => {
     expect(Object.values(projection.state.interactions)[0]).toMatchObject({ kind: "question", blocking: true, status: "pending" });
     expect(projection.state.threads[threadKey("node-a", "workspace", "task")].tokenUsage).toMatchObject({ totalTokens: 18, modelContextWindow: 200000 });
   });
+
+  it("bridges Protocol 1.1 approval interactions into the approval projection", () => {
+    const projection = new DataProjection();
+    projection.apply({
+      ...messageV11("node-a", 1, "interaction.requested", {
+        id: "approval-a",
+        kind: "command_approval",
+        status: "pending",
+        operationDigest: "digest-a",
+        risk: "high",
+        summary: "Run checks",
+      }, "workspace", "codex", "task", "run"),
+      interactionId: "approval-a",
+      activityId: "activity",
+    } as never);
+
+    expect(Object.values(projection.state.approvals)[0]).toMatchObject({ approvalId: "approval-a", kind: "command_approval", risk: "high", status: "pending" });
+    expect(projection.state.threads[threadKey("node-a", "workspace", "task")].pendingApprovals).toBe(1);
+
+    projection.apply({
+      ...messageV11("node-a", 2, "interaction.resolved", {
+        id: "approval-a",
+        kind: "command_approval",
+        status: "accepted",
+        operationDigest: "digest-a",
+      }, "workspace", "codex", "task", "run"),
+      interactionId: "approval-a",
+      activityId: "activity",
+    } as never);
+
+    expect(Object.values(projection.state.approvals)[0].status).toBe("resolved");
+    expect(projection.state.threads[threadKey("node-a", "workspace", "task")].pendingApprovals).toBe(0);
+  });
 });
 
 function message(nodeId: string, sequence: number, type: string, payload: Record<string, unknown>, workspaceId?: string, threadId?: string, turnId?: string, itemId?: string): YuanshuMessage {

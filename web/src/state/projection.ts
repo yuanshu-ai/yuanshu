@@ -346,6 +346,10 @@ export class DataProjection {
       }
       if (event.type === "interaction.requested" || event.type === "interaction.resolved") {
         this.applyInteraction(event);
+        const approvalEvent = normalizeAgentEvent(event);
+        if (approvalEvent.type === "approval.requested") this.applyApprovalRequested(approvalEvent);
+        if (approvalEvent.type === "approval.resolved") this.applyApprovalResolved(approvalEvent);
+        this.updatePendingInteractionCount(event);
         this.appendEvent(event);
         return;
       }
@@ -648,8 +652,21 @@ export class DataProjection {
       summary: stringValue(event.payload.summary) ?? current?.summary, operationDigest: stringValue(event.payload.operationDigest) ?? current?.operationDigest,
       expiresAt: stringValue(event.payload.expiresAt) ?? current?.expiresAt, blocking: booleanValue(event.payload.blocking) ?? current?.blocking, questions,
     };
+    this.updatePendingInteractionCount(event);
+  }
+
+  private updatePendingInteractionCount(event: RelayMessage): void {
+    const workspaceId = event.workspaceId;
+    const threadId = event.taskId ?? event.threadId;
+    if (!workspaceId || !threadId) return;
+    const pendingQuestions = Object.values(this.stateValue.interactions).filter((item) =>
+      item.nodeId === event.nodeId && item.workspaceId === workspaceId && item.threadId === threadId && item.status === "pending" && (item.kind === "question" || item.kind === "mcp_elicitation"),
+    ).length;
+    const pendingApprovals = Object.values(this.stateValue.approvals).filter((item) =>
+      item.nodeId === event.nodeId && item.workspaceId === workspaceId && item.threadId === threadId && item.status === "pending",
+    ).length;
     const thread = this.upsertThread(event.nodeId, event.ownerId, workspaceId, threadId, event.sequence);
-    thread.pendingApprovals = Object.values(this.stateValue.interactions).filter((item) => item.nodeId === event.nodeId && item.workspaceId === workspaceId && item.threadId === threadId && item.status === "pending").length + Object.values(this.stateValue.approvals).filter((item) => item.nodeId === event.nodeId && item.workspaceId === workspaceId && item.threadId === threadId && item.status === "pending").length;
+    thread.pendingApprovals = pendingQuestions + pendingApprovals;
   }
 
   private applyThreadLifecycle(event: RelayMessage, fallback: string): void {
