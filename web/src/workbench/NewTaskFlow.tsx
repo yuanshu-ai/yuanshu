@@ -53,6 +53,7 @@ export function NewTaskFlow({ session, connectionState, nodes, agents, workspace
   useEffect(() => {
     if (initialTarget || targetWasAutomatic || step !== "target" || nodeId || agentInstanceId || workspaceId || candidates.length !== 1) return;
     const target = candidates[0];
+    if (!target.agentInstanceId) return;
     setNodeId(target.nodeId);
     setAgentInstanceId(target.agentInstanceId);
     setWorkspaceId(target.workspaceId);

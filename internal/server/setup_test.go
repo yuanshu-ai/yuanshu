@@ -89,6 +89,16 @@ func TestServerSetupManagedLANReturnsTrustFingerprintAndQRCode(t *testing.T) {
 	}
 }
 
+func TestServerSetupUsesSimpleModesAndKeepsAdvancedModesBehindDisclosure(t *testing.T) {
+	if !bytes.Contains([]byte(serverSetupWizardHTML), []byte(`data-mode="local"`)) ||
+		!bytes.Contains([]byte(serverSetupWizardHTML), []byte(`data-mode="lan-managed"`)) ||
+		!bytes.Contains([]byte(serverSetupWizardHTML), []byte(`class="advanced-deployment"`)) ||
+		!bytes.Contains([]byte(serverSetupWizardHTML), []byte(`data-mode="public-ip-acme"`)) ||
+		!bytes.Contains([]byte(serverSetupWizardHTML), []byte(`data-mode="external"`)) {
+		t.Fatal("server setup wizard does not expose the simple and advanced mode paths")
+	}
+}
+
 func TestServerSetupRejectsCrossOriginAndExpiredSession(t *testing.T) {
 	service := &serverSetupService{host: "127.0.0.1:49153", bootstrap: "token", bootstrapExpires: time.Now().Add(-time.Second), done: make(chan error, 1)}
 	body, _ := json.Marshal(map[string]string{"token": "token"})

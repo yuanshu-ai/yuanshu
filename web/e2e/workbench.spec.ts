@@ -97,8 +97,8 @@ test("uses phone, tablet and desktop layout contracts", async ({ page }) => {
   }
   if (width < 1200) {
     const selector = width < 768
-      ? ".mobile-nav button, .topbar-attention"
-      : ".desktop-nav button, .topbar-attention, .connection-state";
+      ? ".mobile-nav button, .connection-state"
+      : ".desktop-nav button, .connection-state";
     const touchTargets = await page.locator(selector).evaluateAll((elements) =>
       elements.filter((element) => {
         const bounds = element.getBoundingClientRect();
@@ -181,7 +181,7 @@ test("protects a new-task draft from browser Back", async ({ page }) => {
 
 test("disables new work when presence or Runtime becomes unavailable", async ({ page }) => {
   await page.evaluate(() => (window as unknown as { __yuanshuEmitRuntime: (nodeId: string, state: string) => void }).__yuanshuEmitRuntime("node-office", "unavailable"));
-  await page.locator(".desktop-nav:visible, .mobile-nav:visible").getByRole("button", { name: "设备" }).click();
+  await page.getByRole("button", { name: "设备" }).click();
   await page.getByRole("button", { name: /Office Mac.*Codex 不可用/ }).click();
   await page.getByRole("button", { name: /Codex.*只读/ }).click();
   await expect(page.getByRole("button", { name: "使用 Codex 在 Release repo 新建任务" })).toBeDisabled();
