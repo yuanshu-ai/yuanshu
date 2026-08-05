@@ -31,3 +31,6 @@ pnpm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+
+# Local coding-agent instructions
+/AGENTS.md
