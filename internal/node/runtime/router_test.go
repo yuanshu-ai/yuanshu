@@ -61,6 +61,15 @@ func TestRouterIsolatesSameNativeSessionAcrossInstances(t *testing.T) {
 	if got := office.lastThreadID(); got != "" {
 		t.Fatalf("office runtime received home task control: %q", got)
 	}
+	if err := router.ResolveInteraction(context.Background(), adapter.InteractionDecision{WorkspaceID: "workspace", ThreadID: homeTask.ID, TurnID: "run", ItemID: "item", InteractionID: "interaction", Answers: []adapter.InteractionAnswer{{QuestionID: "q1", Answers: []string{"o1"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := home.lastInteractionThreadID(); got != "native-session" {
+		t.Fatalf("home interaction used task ID instead of native session: %q", got)
+	}
+	if got := office.lastInteractionThreadID(); got != "" {
+		t.Fatalf("office runtime received home interaction: %q", got)
+	}
 
 	go home.emit(adapter.AgentEvent{Type: "message.completed", WorkspaceID: "workspace", ThreadID: "native-session", Payload: map[string]any{"text": "done"}})
 	select {
@@ -139,11 +148,12 @@ func (s *memoryBindingStore) WorkspaceAgents(_ context.Context, workspaceID stri
 }
 
 type recordingRuntime struct {
-	mu              sync.Mutex
-	nativeSessionID string
-	threadID        string
-	events          chan adapter.AgentEvent
-	closeOnce       sync.Once
+	mu                  sync.Mutex
+	nativeSessionID     string
+	threadID            string
+	interactionThreadID string
+	events              chan adapter.AgentEvent
+	closeOnce           sync.Once
 }
 
 func newRecordingRuntime(nativeSessionID string) *recordingRuntime {
@@ -175,6 +185,12 @@ func (r *recordingRuntime) InterruptTurn(context.Context, adapter.InterruptTurnR
 func (r *recordingRuntime) ResolveApproval(context.Context, adapter.ApprovalDecision) error {
 	return nil
 }
+func (r *recordingRuntime) ResolveInteraction(_ context.Context, decision adapter.InteractionDecision) error {
+	r.mu.Lock()
+	r.interactionThreadID = decision.ThreadID
+	r.mu.Unlock()
+	return nil
+}
 func (r *recordingRuntime) Events() <-chan adapter.AgentEvent { return r.events }
 func (r *recordingRuntime) Health() adapter.HealthStatus {
 	return adapter.HealthStatus{State: "ready"}
@@ -188,4 +204,9 @@ func (r *recordingRuntime) lastThreadID() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.threadID
+}
+func (r *recordingRuntime) lastInteractionThreadID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.interactionThreadID
 }

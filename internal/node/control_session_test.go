@@ -115,6 +115,28 @@ func TestControlSessionProtocol11UsesOpaqueTaskSurfaceAndIndependentStream(t *te
 	if runtime.calls != 2 || runtime.lastInput != "synthetic input" {
 		t.Fatalf("runtime calls/input = %d/%q", runtime.calls, runtime.lastInput)
 	}
+	runtime.events <- adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventReasoningSummaryDelta), AgentInstanceID: "codex-default", WorkspaceID: "workspace", ThreadID: "thread", TurnID: "turn", ItemID: "reasoning", Payload: map[string]any{"text": "Visible summary"}}
+	for {
+		ctxReceive, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		frame, receiveErr := serverSide.Receive(ctxReceive)
+		stop()
+		if receiveErr != nil {
+			t.Fatal(receiveErr)
+		}
+		message, parseErr := protocolv11.ParseEvent(frame.Bytes())
+		if parseErr == nil && string(message.Type) == string(protocolv11.EventReasoningSummaryDelta) {
+			break
+		}
+	}
+	legacy, _, err := local.ReplayEvents(context.Background(), store.EventBinding{OwnerID: "owner", NodeID: "node", StreamID: eventlog.DefaultStreamID}, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range legacy {
+		if record.Type == string(protocolv11.EventReasoningSummaryDelta) {
+			t.Fatal("Protocol 1.1 reasoning event leaked into the frozen 1.0 stream")
+		}
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
