@@ -41,9 +41,11 @@ yuanshu node ui
 yuanshu node doctor --json
 ```
 
-The current schema exposes one Codex Adapter. A future version will add local Agent
-instances and workspace-to-Agent bindings through an explicit migration; users should
-not add arbitrary unofficial TOML fields in anticipation of that format.
+The code now contains a static Adapter Registry, local Agent Inventory, and a multi-runtime
+manager, but the public schema still exposes only the production `codex-default` managed
+runtime. Persisted Agent instances, runtime endpoints, and workspace/task bindings require
+an explicit future migration; users should not add arbitrary unofficial TOML fields in
+anticipation of that format.
 
 When automatic browser opening or the native directory picker is unavailable, keep the setup local by printing the one-minute loopback URL and preselecting the workspace from the CLI:
 

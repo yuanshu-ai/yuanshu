@@ -40,6 +40,8 @@ The implementation is usable for development and self-hosting evaluation. Automa
 - Node event journals provide cursor replay, snapshots, history-gap recovery, and conservative handling of ambiguous operations.
 - The Server embeds the workbench, pairing page, Relay, and same-origin administration console in one process.
 - Four self-hosting modes cover loopback, managed LAN certificates, public-IP ACME, and existing certificates or a same-host reverse proxy.
+- The Node now uses a static Adapter Registry, a redacted local Agent Inventory, and an isolated multi-runtime manager; the production path remains `codex-default` managed stdio.
+- Evidence-only Claude Code and OpenCode probes are present for architecture validation, but they are not registered as production Adapters or exposed as remote task controls.
 
 Yuanshu currently integrates Codex first. Its Server does not proxy model API calls or require the Agent to use a vendor-owned mobile-account path. It does not provide hosted compute, remote desktop, a general-purpose browser terminal, permanent Server-side task-content storage, team ACLs, or additional production Agent adapters yet.
 
@@ -129,9 +131,12 @@ flowchart LR
     Client["Phone / Tablet / Browser"] -->|"HTTPS / WSS"| Server["Yuanshu Server<br/>Web + Pairing + Relay + Admin"]
     Node["Yuanshu Node<br/>Local security boundary"] -->|"Outbound WSS"| Server
     Server -->|"Signed controls"| Node
+    Node --> Inventory["Local Agent inventory<br/>redacted detection"]
     Node --> Registry["Agent Adapter boundary"]
     Registry --> Adapter["CodexAdapter today"]
-    Adapter --> Runtime["Codex app-server"]
+    Node --> Manager["Runtime Manager"]
+    Adapter --> Manager
+    Manager --> Runtime["Managed Codex app-server"]
     Runtime --> Workspace["Allowed workspaces"]
     Runtime --> Credentials["Local Agent / Provider credentials"]
 ```
@@ -170,9 +175,11 @@ Report security vulnerabilities privately through [GitHub Private Vulnerability 
 - LAN-managed devices still require explicit operating-system trust of the Server's public root CA.
 - Public-IP ACME requires a globally routable fixed IP and public TCP 443.
 - Linux Node, installable PWA, Web Push, team roles, multi-tenant hosting, and additional Agent adapters are later work.
+- External Codex CLI/Desktop session attachment is not available: the current evidence did not prove reliable cross-process session discovery and history reading.
+- Persisted Agent instances, runtime endpoints, stable Yuanshu Task bindings, remote Agent navigation, and Protocol capability negotiation are not implemented yet.
 - The Server remains a personal single-Owner control plane and does not permanently store task bodies.
 
-The project will finish the personal remote Codex loop before expanding to small-team permissions or commercial multi-tenancy. Before adding a second Agent, the Node will introduce a static Adapter Registry, local Agent Instances, stable Yuanshu Task bindings, and runtime capability negotiation so new adapters do not leak private protocols into the Server or Web.
+The project will finish the personal remote Codex loop before expanding to small-team permissions or commercial multi-tenancy. The Registry, Inventory, and Runtime Manager foundations are implemented; persistence and public Protocol/Web resources remain blocked by explicit evidence gates. A detected process or an evidence probe must never be presented as a remotely controllable Agent.
 
 <!-- readme-section: documentation -->
 ## Documentation

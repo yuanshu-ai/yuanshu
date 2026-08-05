@@ -40,6 +40,8 @@ Codex 是第一个完整集成。长期产品是面向本地 Coding Agent 的开
 - Node 事件日志支持游标补发、Snapshot、历史缺口恢复和不确定操作的保守处理。
 - Server 在一个进程中内嵌工作台、配对页、Relay 和同源管理后台。
 - 四种自托管模式覆盖本机 loopback、局域网托管证书、公网 IP ACME，以及已有证书或同机反向代理。
+- Node 已使用静态 Adapter Registry、脱敏本地 Agent Inventory 和相互隔离的多 Runtime Manager；正式运行路径仍是 `codex-default` managed stdio。
+- 仓库包含仅用于架构验证的 Claude Code 与 OpenCode Probe，但它们没有注册为正式 Adapter，也没有开放远程任务控制。
 
 远枢当前首先集成 Codex。Server 不代理模型 API，也不要求 Agent 必须使用某个厂商移动端账户链路。当前不提供托管算力、远程桌面、通用 Web Terminal、Server 永久任务正文存储、团队 ACL 或其它正式 Agent Adapter。
 
@@ -129,9 +131,12 @@ flowchart LR
     Client["手机 / 平板 / 浏览器"] -->|"HTTPS / WSS"| Server["Yuanshu Server<br/>Web + 配对 + Relay + Admin"]
     Node["Yuanshu Node<br/>本地安全边界"] -->|"出站 WSS"| Server
     Server -->|"签名控制消息"| Node
+    Node --> Inventory["本地 Agent Inventory<br/>脱敏检测"]
     Node --> Registry["Agent Adapter 边界"]
     Registry --> Adapter["当前 CodexAdapter"]
-    Adapter --> Runtime["Codex app-server"]
+    Node --> Manager["Runtime Manager"]
+    Adapter --> Manager
+    Manager --> Runtime["受管 Codex app-server"]
     Runtime --> Workspace["允许的工作区"]
     Runtime --> Credentials["本地 Agent / Provider 凭据"]
 ```
@@ -170,9 +175,11 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - LAN Managed 设备仍需要用户在操作系统中明确安装并信任 Server 公共根 CA。
 - 公网 IP ACME 需要全局可路由固定 IP 和公网 TCP 443。
 - Linux Node、可安装 PWA、Web Push、团队角色、多租户托管和其他 Agent Adapter 属于后续能力。
+- 当前不能附着外部 Codex CLI/Desktop 会话：现有证据没有证明可靠的跨进程会话发现和历史读取。
+- 持久化 Agent Instance、Runtime Endpoint、稳定 Yuanshu Task Binding、远程 Agent 导航和 Protocol 能力协商尚未实现。
 - Server 仍是个人单 Owner 控制面，不永久保存任务正文。
 
-项目会先完成个人远程 Codex 闭环，再扩展小团队权限或商业多租户。接入第二个 Agent 前，Node 会先加入静态 Adapter Registry、本地 Agent Instance、稳定 Yuanshu Task Binding 和运行时能力协商，避免新 Adapter 把私有协议泄漏到 Server 或 Web。
+项目会先完成个人远程 Codex 闭环，再扩展小团队权限或商业多租户。Registry、Inventory 和 Runtime Manager 基础已经实现；持久化与公开 Protocol/Web 资源仍受明确证据 Gate 阻塞。检测到进程或存在 Probe 证据，绝不能被展示为可远程控制的 Agent。
 
 <!-- readme-section: documentation -->
 ## 文档
