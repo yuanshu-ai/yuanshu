@@ -125,15 +125,17 @@ test("starts a task only after explicitly confirming its device and workspace", 
   await expect(dialog.getByLabel("你希望 Codex 完成什么？")).toHaveCount(0);
 
   await dialog.getByRole("button", { name: /Office Mac.*Codex 可用/ }).click();
+  await dialog.getByRole("button", { name: /Codex.*可创建任务/ }).click();
   await dialog.getByRole("button", { name: /Release repo.*可修改工作区文件/ }).click();
   await dialog.getByRole("button", { name: "下一步" }).click();
   await dialog.getByLabel("你希望 Codex 完成什么？").fill("Create an explicit-target task");
   await dialog.getByRole("button", { name: "下一步" }).click();
   await expect(dialog.getByRole("region", { name: "执行目标" })).toContainText("Office Mac");
+  await expect(dialog.getByRole("region", { name: "执行目标" })).toContainText("Codex");
   await expect(dialog.getByRole("region", { name: "执行目标" })).toContainText("Release repo");
   await dialog.getByRole("button", { name: "确认并启动" }).click();
 
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __yuanshuStartedTarget?: unknown }).__yuanshuStartedTarget)).toEqual({ nodeId: "node-office", workspaceId: "workspace-office", input: "Create an explicit-target task" });
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __yuanshuStartedTarget?: unknown }).__yuanshuStartedTarget)).toEqual({ nodeId: "node-office", agentInstanceId: "codex-default", workspaceId: "workspace-office", input: "Create an explicit-target task" });
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("heading", { name: "Explicit target task" })).toBeVisible();
 });
@@ -167,6 +169,7 @@ test("protects a new-task draft from browser Back", async ({ page }) => {
   await page.getByRole("button", { name: "新任务" }).click();
   const flow = page.getByRole("dialog", { name: "开始新任务" });
   await flow.getByRole("button", { name: /Office Mac.*Codex 可用/ }).click();
+  await flow.getByRole("button", { name: /Codex.*可创建任务/ }).click();
   await flow.getByRole("button", { name: /Release repo.*可修改工作区文件/ }).click();
   await flow.getByRole("button", { name: "下一步" }).click();
   await flow.getByLabel("你希望 Codex 完成什么？").fill("Keep this new-task draft");
@@ -179,14 +182,16 @@ test("protects a new-task draft from browser Back", async ({ page }) => {
 test("disables new work when presence or Runtime becomes unavailable", async ({ page }) => {
   await page.evaluate(() => (window as unknown as { __yuanshuEmitRuntime: (nodeId: string, state: string) => void }).__yuanshuEmitRuntime("node-office", "unavailable"));
   await page.locator(".desktop-nav:visible, .mobile-nav:visible").getByRole("button", { name: "设备" }).click();
-  await expect(page.getByRole("button", { name: "在 Release repo 新建任务" })).toBeDisabled();
+  await page.getByRole("button", { name: /Office Mac.*Codex 不可用/ }).click();
+  await page.getByRole("button", { name: /Codex.*只读/ }).click();
+  await expect(page.getByRole("button", { name: "使用 Codex 在 Release repo 新建任务" })).toBeDisabled();
 
   await page.evaluate(() => {
     (window as unknown as { __yuanshuSetNodeOnline: (nodeId: string, online: boolean) => void }).__yuanshuSetNodeOnline("node-office", false);
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect(page.getByText("离线", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "在 Release repo 新建任务" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "使用 Codex 在 Release repo 新建任务" })).toBeDisabled();
 });
 
 test("marks a Thread first observed after hydration as new progress", async ({ page }) => {
@@ -295,12 +300,12 @@ async function installFakeRelay(page: Page): Promise<void> {
         (window as unknown as { __yuanshuEmitRuntime: (nodeId: string, state: string) => void }).__yuanshuEmitRuntime = (nodeId, state) => {
           const sequence = (sequences[nodeId] ?? 0) + 1;
           sequences[nodeId] = sequence;
-          this.emit({ protocolVersion: "1.0", messageId: `event-${nodeId}-${sequence}`, type: "runtime.status", ownerId, nodeId, streamId: "node-events-v1", sequence, correlationId: "runtime-e2e", sentAt: new Date().toISOString(), payload: { state } });
+          this.emit({ protocolVersion: "1.1", messageId: `event-${nodeId}-${sequence}`, type: "runtime.status", ownerId, nodeId, streamId: "node-events-v1.1", sequence, correlationId: "runtime-e2e", sentAt: new Date().toISOString(), payload: { state } });
         };
         (window as unknown as { __yuanshuEmitThread: (nodeId: string, workspaceId: string, threadId: string) => void }).__yuanshuEmitThread = (nodeId, workspaceId, threadId) => {
           const sequence = (sequences[nodeId] ?? 0) + 1;
           sequences[nodeId] = sequence;
-          this.emit({ protocolVersion: "1.0", messageId: `event-${nodeId}-${sequence}`, type: "thread.started", ownerId, nodeId, workspaceId, threadId, streamId: "node-events-v1", sequence, correlationId: "external-thread-e2e", sentAt: new Date().toISOString(), payload: { status: "running", title: "External task" } });
+          this.emit({ protocolVersion: "1.1", messageId: `event-${nodeId}-${sequence}`, type: "task.started", ownerId, nodeId, agentInstanceId: "codex-default", workspaceId, taskId: threadId, streamId: "node-events-v1.1", sequence, correlationId: "external-thread-e2e", sentAt: new Date().toISOString(), payload: { status: "running", title: "External task" } });
         };
       }
 
@@ -327,8 +332,7 @@ async function installFakeRelay(page: Page): Promise<void> {
         const type = String(control.type);
         const nodeId = String(control.nodeId);
         const workspaceId = typeof control.workspaceId === "string" ? control.workspaceId : undefined;
-        const threadId = typeof control.threadId === "string" ? control.threadId : undefined;
-        const turnId = typeof control.turnId === "string" ? control.turnId : undefined;
+        const taskId = typeof control.taskId === "string" ? control.taskId : undefined;
         const payload = control.payload as Record<string, unknown>;
         if (!onlineNodes.has(nodeId) && !new Set(["lease.acquire", "lease.renew", "lease.release", "lease.status", "notifications.list", "notifications.read"]).has(type)) return;
 
@@ -338,28 +342,37 @@ async function installFakeRelay(page: Page): Promise<void> {
         }
         if (type === "device.sync" || type === "workspace.list") {
           const office = nodeId === "node-office";
-          this.nodeEvent(control, "device.status", { status: "online", runtime: "ready", name: office ? "Office Mac" : "Home PC", workspaces: [{ id: office ? "workspace-office" : "workspace-home", name: office ? "Release repo" : "Home repo", permissionProfile: "workspace-write", allowNetwork: false }] });
+          this.nodeEvent(control, "device.status", { status: "online", runtime: "ready", name: office ? "Office Mac" : "Home PC", workspaces: [{ id: office ? "workspace-office" : "workspace-home", name: office ? "Release repo" : "Home repo", permissionProfile: "workspace-write", allowNetwork: false, agents: [{ agentInstanceId: "codex-default", default: true }] }] });
           this.nodeEvent(control, "control.result", { status: "confirmed" });
           return;
         }
-        if (type === "thread.list") {
+        if (type === "agent.list" || type === "agent.read") {
+          this.nodeEvent(control, "agent.snapshot", { agents: [{ id: "codex-default", adapterType: "codex", displayName: "Codex", version: "0.144.6", runtimeMode: "managed", status: "ready", providerType: "custom", customEndpoint: true, authenticationAvailable: true, configurationFingerprint: "sha256:e2e", capabilities: [{ id: "task.read", level: "full" }, { id: "task.start", level: "full" }, { id: "run.start", level: "full" }, { id: "run.steer", level: "full" }, { id: "run.interrupt", level: "full" }, { id: "interaction.resolve", level: "full" }] }] });
+          this.nodeEvent(control, "control.result", { status: "confirmed" });
+          return;
+        }
+        if (type === "task.list") {
           const office = nodeId === "node-office";
-          this.nodeEvent(control, "thread.snapshot", { threads: [{ id: office ? "thread-release" : "thread-home", title: office ? "Office release" : "Home maintenance", preview: office ? "Ship the personal alpha" : "Update local scripts", status: office ? "running" : "completed", updatedAt: "2026-08-03T08:00:00Z", pendingApprovals: office ? 1 : 0 }] });
+          this.nodeEvent(control, "task.snapshot", { tasks: [{ id: office ? "thread-release" : "thread-home", agentInstanceId: "codex-default", workspaceId: office ? "workspace-office" : "workspace-home", title: office ? "Office release" : "Home maintenance", preview: office ? "Ship the personal alpha" : "Update local scripts", status: office ? "running" : "completed", updatedAt: "2026-08-03T08:00:00Z", pendingInteractions: office ? 1 : 0 }] });
           this.nodeEvent(control, "control.result", { status: "confirmed" });
           return;
         }
-        if (type === "thread.read" && payload.includeDiffs === true) {
-          this.nodeEvent(control, "thread.snapshot", { historyState: "complete", turns: [{ id: "turn-release", status: "running", items: [{ id: "diff-app", kind: "diff", path: "src/app.ts", changeType: "modified", diff: "+const ready = true;", digest: "sha256-diff", totalBytes: 20 }] }] });
+        if (type === "task.read" && payload.includeDiffs === true) {
+          this.nodeEvent(control, "task.snapshot", { task: { id: taskId, agentInstanceId: "codex-default", workspaceId, status: "running", historyState: "complete" }, runs: [{ id: "turn-release", status: "running" }] });
+          this.nodeEvent({ ...control, runId: "turn-release", activityId: "diff-app" }, "diff.updated", { path: "src/app.ts", changeType: "modified", diff: "+const ready = true;", digest: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", totalBytes: 20, truncated: false });
           this.nodeEvent(control, "control.result", { status: "confirmed" });
           return;
         }
-        if (type === "thread.read") {
-          if (control.threadId === "thread-new") {
-            this.nodeEvent(control, "thread.snapshot", { title: "Explicit target task", status: "running", historyState: "complete", turns: [] });
+        if (type === "task.read") {
+          if (taskId === "thread-new") {
+            this.nodeEvent(control, "task.snapshot", { task: { id: "thread-new", agentInstanceId: "codex-default", workspaceId, title: "Explicit target task", status: "running", historyState: "complete" }, runs: [] });
             this.nodeEvent(control, "control.result", { status: "confirmed" });
             return;
           }
-          this.nodeEvent(control, "thread.snapshot", { title: "Office release", preview: "Ship the personal alpha", status: "running", historyState: "complete", turns: [{ id: "turn-release", status: "running", items: [{ id: "agent-1", kind: "agent_message", status: "completed", text: "Remote workbench ready" }, { id: "file-app", kind: "file_change", status: "completed", path: "src/app.ts", changeType: "modified" }] }], pendingApprovals: [{ approvalId: "approval-1", turnId: "turn-release", itemId: "command-1", operationDigest: "sha256-approval", kind: "command", risk: "high", summary: "Run release verification" }] });
+          this.nodeEvent(control, "task.snapshot", { task: { id: taskId, agentInstanceId: "codex-default", workspaceId, title: "Office release", preview: "Ship the personal alpha", status: "running", historyState: "complete" }, runs: [{ id: "turn-release", status: "running" }] });
+          this.nodeEvent({ ...control, runId: "turn-release", activityId: "agent-1" }, "message.completed", { text: "Remote workbench ready" });
+          this.nodeEvent({ ...control, runId: "turn-release", activityId: "file-app" }, "file.changed", { path: "src/app.ts", changeType: "modified" });
+          this.nodeEvent({ ...control, runId: "turn-release", interactionId: "approval-1" }, "interaction.requested", { id: "approval-1", kind: "command_approval", status: "pending", operationDigest: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", risk: "high", summary: "Run release verification", expiresAt: new Date(Date.now() + 60_000).toISOString() });
           this.nodeEvent(control, "control.result", { status: "confirmed" });
           return;
         }
@@ -383,39 +396,39 @@ async function installFakeRelay(page: Page): Promise<void> {
           this.serverResult(control, { status: "confirmed" });
           return;
         }
-        if (type === "thread.start") {
-          (window as unknown as { __yuanshuStartedTarget?: unknown }).__yuanshuStartedTarget = { nodeId, workspaceId, input: payload.input };
+        if (type === "task.start") {
+          (window as unknown as { __yuanshuStartedTarget?: unknown }).__yuanshuStartedTarget = { nodeId, agentInstanceId: control.agentInstanceId, workspaceId, input: payload.input };
           setTimeout(() => {
             const sequence = (sequences[nodeId] ?? 0) + 1;
             sequences[nodeId] = sequence;
-            this.emit({ protocolVersion: "1.0", messageId: `event-${nodeId}-${sequence}`, type: "thread.started", ownerId, nodeId, workspaceId, threadId: "thread-new", streamId: "node-events-v1", sequence, correlationId: String(control.messageId), sentAt: new Date().toISOString(), payload: { status: "running", title: "Explicit target task" } });
+            this.emit({ protocolVersion: "1.1", messageId: `event-${nodeId}-${sequence}`, type: "task.started", ownerId, nodeId, agentInstanceId: "codex-default", workspaceId, taskId: "thread-new", streamId: "node-events-v1.1", sequence, correlationId: String(control.messageId), sentAt: new Date().toISOString(), payload: { status: "running", title: "Explicit target task" } });
             this.nodeEvent(control, "control.result", { status: "confirmed" });
           }, 0);
           return;
         }
-        if (type === "turn.steer") {
-          this.nodeEvent(control, "agent.message.completed", { text: "Streaming follow-up received" }, "agent-follow-up");
+        if (type === "run.steer") {
+          this.nodeEvent(control, "message.completed", { text: "Streaming follow-up received" }, "agent-follow-up");
           this.nodeEvent(control, "control.result", { status: "confirmed" });
           return;
         }
-        if (type === "approval.resolve") {
-          this.nodeEvent(control, "approval.resolved", { approvalId: "approval-1", decision: payload.decision, operationDigest: payload.operationDigest }, "command-1");
+        if (type === "interaction.resolve") {
+          this.nodeEvent(control, "interaction.resolved", { id: "approval-1", kind: "command_approval", status: payload.decision === "accept" ? "accepted" : "declined", operationDigest: payload.operationDigest, expiresAt: new Date(Date.now() + 60_000).toISOString() });
           this.nodeEvent(control, "control.result", { status: "confirmed" });
           return;
         }
         this.nodeEvent(control, "control.result", { status: "confirmed" });
       }
 
-      private nodeEvent(control: Record<string, unknown>, type: string, payload: Record<string, unknown>, itemId?: string): void {
+      private nodeEvent(control: Record<string, unknown>, type: string, payload: Record<string, unknown>, activityId?: string): void {
         const nodeId = String(control.nodeId);
         const sequence = (sequences[nodeId] ?? 0) + 1;
         sequences[nodeId] = sequence;
-        this.emit({ protocolVersion: "1.0", messageId: `event-${nodeId}-${sequence}`, type, ownerId, nodeId, streamId: "node-events-v1", sequence, correlationId: String(control.messageId), sentAt: new Date().toISOString(), payload, ...(control.workspaceId ? { workspaceId: control.workspaceId } : {}), ...(control.threadId ? { threadId: control.threadId } : {}), ...(control.turnId ? { turnId: control.turnId } : {}), ...(itemId ? { itemId } : {}) });
+        this.emit({ protocolVersion: "1.1", messageId: `event-${nodeId}-${sequence}`, type, ownerId, nodeId, streamId: "node-events-v1.1", sequence, correlationId: String(control.messageId), sentAt: new Date().toISOString(), payload, ...(control.agentInstanceId ? { agentInstanceId: control.agentInstanceId } : {}), ...(control.workspaceId ? { workspaceId: control.workspaceId } : {}), ...(control.taskId ? { taskId: control.taskId } : {}), ...(control.runId ? { runId: control.runId } : {}), ...(control.activityId || activityId ? { activityId: control.activityId ?? activityId } : {}), ...(control.interactionId ? { interactionId: control.interactionId } : {}) });
       }
 
       private serverResult(control: Record<string, unknown>, payload: Record<string, unknown>): void {
         serverSequence += 1;
-        this.emit({ protocolVersion: "1.0", messageId: `server-${serverSequence}`, type: "control.result", ownerId, nodeId: String(control.nodeId), streamId: `server-control-v1-${clientId}`, sequence: serverSequence, correlationId: String(control.messageId), sentAt: new Date().toISOString(), payload, ...(control.workspaceId ? { workspaceId: control.workspaceId } : {}), ...(control.threadId ? { threadId: control.threadId } : {}) });
+        this.emit({ protocolVersion: "1.1", messageId: `server-${serverSequence}`, type: "control.result", ownerId, nodeId: String(control.nodeId), streamId: `server-control-v1-${clientId}`, sequence: serverSequence, correlationId: String(control.messageId), sentAt: new Date().toISOString(), payload, ...(control.workspaceId ? { workspaceId: control.workspaceId } : {}), ...(control.taskId ? { taskId: control.taskId } : {}) });
       }
 
       private emit(message: Record<string, unknown>): void {

@@ -240,6 +240,43 @@ describe("ControlClient recovery", () => {
     await expect(handle.result).resolves.toMatchObject({ correlationId: handle.messageId });
     client.close();
   });
+
+  it("uses the Protocol 1.1 event stream without mixing legacy cursors", async () => {
+    const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+    const storage = new MemoryControlStorage();
+    const socket = new FakeSocket();
+    const received: string[] = [];
+    const client = new ControlClient({
+      url: "wss://relay.test/web/connect",
+      protocolVersion: "1.1",
+      identity: { ownerId: "owner", clientId: "client", keyId: "key", privateKey: keyPair.privateKey },
+      nodes: [{ ownerId: "owner", nodeId: "node", online: true }],
+      storage,
+      websocketFactory: () => socket,
+      onEvent: (value) => { received.push(value.type); },
+    });
+
+    client.connect();
+    socket.open();
+    socket.receive(challenge());
+    await tick();
+    socket.receive({ version: "1", type: "authenticated" });
+    await tick();
+
+    const replay = socket.sent.map((raw) => JSON.parse(raw)).find((message) => message.type === "events.replay");
+    expect(replay).toMatchObject({ protocolVersion: "1.1", nodeId: "node", payload: { afterSequence: 0 } });
+    socket.receive(eventForV11("node", "agent.snapshot", 1, "agent-snapshot", { agents: [] }));
+    socket.receive(eventForV11("node", "control.result", 2, replay.messageId));
+    socket.receive(eventFor("node", "device.status", 3, "legacy", { status: "online" }));
+    await tick();
+
+    expect(received).toEqual(["agent.snapshot", "control.result"]);
+    expect(await storage.getEventCursor({ ownerId: "owner", nodeId: "node", streamId: "node-events-v1.1" })).toBe(2);
+    expect(await storage.getEventCursor({ ownerId: "owner", nodeId: "node", streamId: "node-events-v1" })).toBe(0);
+    await client.sendControl("agent.list", {}, { nodeId: "node" });
+    expect(JSON.parse(socket.sent.at(-1) as string)).toMatchObject({ protocolVersion: "1.1", type: "agent.list", nodeId: "node" });
+    client.close();
+  });
 });
 
 function challenge(): Record<string, unknown> {
@@ -256,6 +293,13 @@ function event(type: string, sequence: number, correlationId: string): Record<st
 function eventFor(nodeId: string, type: string, sequence: number, correlationId: string, payload: Record<string, unknown> = { status: "confirmed" }): Record<string, unknown> {
   return {
     protocolVersion: "1.0", messageId: `${nodeId}-event-${sequence}`, type, ownerId: "owner", nodeId, streamId: "node-events-v1",
+    sequence, correlationId, sentAt: "2026-08-03T00:00:00Z", payload,
+  };
+}
+
+function eventForV11(nodeId: string, type: string, sequence: number, correlationId: string, payload: Record<string, unknown> = { status: "confirmed" }): Record<string, unknown> {
+  return {
+    protocolVersion: "1.1", messageId: `${nodeId}-v11-event-${sequence}`, type, ownerId: "owner", nodeId, streamId: "node-events-v1.1",
     sequence, correlationId, sentAt: "2026-08-03T00:00:00Z", payload,
   };
 }

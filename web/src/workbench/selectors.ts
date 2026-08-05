@@ -1,5 +1,6 @@
 import type {
   ApprovalProjection,
+  AgentProjection,
   NodeProjection,
   NotificationProjection,
   ProjectionState,
@@ -14,6 +15,7 @@ export interface TaskSummary {
   thread: ThreadProjection;
   node?: NodeProjection;
   workspace?: WorkspaceProjection;
+  agent?: AgentProjection;
   latestTurn?: TurnProjection;
   pendingApprovals: number;
   unreadCount: number;
@@ -47,6 +49,7 @@ export function selectTasks(state: ProjectionState, readSequences: Readonly<Reco
         thread,
         node: state.nodes[thread.nodeId],
         workspace: state.workspaces[`${thread.nodeId}\u001f${thread.workspaceId}`],
+        agent: thread.agentInstanceId ? state.agents[`${thread.nodeId}\u001f${thread.agentInstanceId}`] : undefined,
         latestTurn: turns.at(-1),
         pendingApprovals,
         unreadCount: Math.max(0, thread.latestSequence - (readSequences[thread.key] ?? thread.latestSequence)),

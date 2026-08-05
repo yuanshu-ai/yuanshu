@@ -1,6 +1,9 @@
-import { CURRENT_VERSION, KNOWN_EVENT_TYPES, type ControlType } from "../protocol/v1/catalog.generated";
-import { controlSigningInput } from "../protocol/v1/signing";
-import type { YuanshuMessage } from "../protocol/v1/types.generated";
+import { CURRENT_VERSION as V1_VERSION, KNOWN_EVENT_TYPES as V1_EVENT_TYPES, type ControlType as V1ControlType } from "../protocol/v1/catalog.generated";
+import { controlSigningInput as controlSigningInputV1 } from "../protocol/v1/signing";
+import type { YuanshuMessage as V1Message } from "../protocol/v1/types.generated";
+import { CURRENT_VERSION as V11_VERSION, KNOWN_EVENT_TYPES as V11_EVENT_TYPES, type ControlType as V11ControlType } from "../protocol/v11/catalog.generated";
+import { controlSigningInput as controlSigningInputV11 } from "../protocol/v11/signing";
+import type { YuanshuMessage as V11Message } from "../protocol/v11/types.generated";
 import { RELAY_SUBPROTOCOL, sessionSigningInput, type RelayChallenge } from "./session";
 import {
   IndexedDBControlStorage,
@@ -12,6 +15,19 @@ import {
 
 export type ControlClientState = "idle" | "connecting" | "authenticating" | "connected" | "reconnecting" | "paused" | "closed" | "reauth_required";
 export type ControlActionState = "sent" | "executing" | "confirmed" | "rejected" | "failed" | "ambiguous" | "unknown" | "offline";
+export type ControlProtocolVersion = "1.0" | "1.1";
+export type ControlType = V1ControlType | V11ControlType;
+export type RelayMessage = (V1Message | V11Message) & {
+  readonly workspaceId?: string;
+  readonly threadId?: string;
+  readonly turnId?: string;
+  readonly itemId?: string;
+  readonly agentInstanceId?: string;
+  readonly taskId?: string;
+  readonly runId?: string;
+  readonly activityId?: string;
+  readonly interactionId?: string;
+};
 
 export interface RecoveryTarget {
   nodeId: string;
@@ -64,6 +80,7 @@ export interface RelaySocket {
 export interface ControlClientOptions {
   url: string;
   identity: ControlClientIdentity;
+  protocolVersion?: ControlProtocolVersion;
   nodes?: NodeBinding[];
   storage?: ControlStorage;
   websocketFactory?: (url: string, protocol: string) => RelaySocket;
@@ -71,8 +88,8 @@ export interface ControlClientOptions {
   random?: () => Uint8Array;
   onState?: (state: ControlClientState) => void;
   onNode?: (node: NodeBinding) => void;
-  onEvent?: (event: YuanshuMessage) => void | Promise<void>;
-  onControlResult?: (event: YuanshuMessage) => void;
+  onEvent?: (event: RelayMessage) => void | Promise<void>;
+  onControlResult?: (event: RelayMessage) => void;
   onControlAction?: (action: ControlAction) => void;
   onUnknownControl?: (control: { messageId: string; nodeId: string; type: string }) => void;
   onLease?: (scope: LeaseScope, state: LeaseState) => void;
@@ -84,18 +101,23 @@ export interface ControlTarget {
   threadId?: string;
   turnId?: string;
   itemId?: string;
+  agentInstanceId?: string;
+  taskId?: string;
+  runId?: string;
+  activityId?: string;
+  interactionId?: string;
 }
 
 export interface ControlRequestHandle {
   messageId: string;
-  result: Promise<YuanshuMessage>;
+  result: Promise<RelayMessage>;
 }
 
 interface PendingControl {
   action: ControlAction;
-  resolve: (event: YuanshuMessage) => void;
+  resolve: (event: RelayMessage) => void;
   reject: (error: Error) => void;
-  result: Promise<YuanshuMessage>;
+  result: Promise<RelayMessage>;
 }
 
 interface ReplayState {
@@ -106,7 +128,8 @@ interface ReplayState {
 }
 
 const CONTROL_STREAM_ID = "control-stream";
-const EVENT_STREAM_ID = "node-events-v1";
+const EVENT_STREAM_ID_V1 = "node-events-v1";
+const EVENT_STREAM_ID_V11 = "node-events-v1.1";
 const SERVER_CONTROL_STREAM_PREFIX = "server-control-v1-";
 const REPLAY_PAGE_SIZE = 256;
 const PENDING_LIMIT = 512;
@@ -114,19 +137,21 @@ const RECONNECT_INITIAL = 500;
 const RECONNECT_MAX = 30_000;
 const STABLE_WINDOW = 5_000;
 const MAX_AUTH_FAILURES = 10;
-const MUTATING_CONTROLS = new Set(["turn.start", "turn.steer", "turn.interrupt", "approval.resolve"]);
+const MUTATING_CONTROLS = new Set(["turn.start", "turn.steer", "turn.interrupt", "approval.resolve", "task.resume", "run.start", "run.steer", "run.interrupt", "interaction.resolve"]);
 const SERVER_CONTROLS = new Set(["lease.acquire", "lease.renew", "lease.release", "lease.status", "notifications.list", "notifications.read"]);
-const knownEvents = new Set<string>(KNOWN_EVENT_TYPES);
+const knownEventsV1 = new Set<string>(V1_EVENT_TYPES);
+const knownEventsV11 = new Set<string>(V11_EVENT_TYPES);
 
 export class ControlClient {
   private readonly options: ControlClientOptions;
+	private readonly protocolVersion: ControlProtocolVersion;
   private readonly storage: ControlStorage;
   private readonly now: () => Date;
   private readonly random: () => Uint8Array;
   private readonly websocketFactory: (url: string, protocol: string) => RelaySocket;
   private readonly nodes = new Map<string, NodeBinding>();
   private readonly cursors = new Map<string, number>();
-  private readonly pendingEvents = new Map<string, Map<number, YuanshuMessage>>();
+  private readonly pendingEvents = new Map<string, Map<number, RelayMessage>>();
   private readonly gapStreams = new Set<string>();
   private readonly historyGapStreams = new Set<string>();
   private readonly recoveryTargets = new Map<string, RecoveryTarget>();
@@ -135,7 +160,7 @@ export class ControlClient {
   private readonly leaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly snapshotRequests = new Set<string>();
   private readonly pendingControls = new Map<string, PendingControl>();
-  private readonly completedResults = new Map<string, YuanshuMessage>();
+  private readonly completedResults = new Map<string, RelayMessage>();
   private readonly replays = new Map<string, ReplayState>();
   private socket?: RelaySocket;
   private desired = false;
@@ -153,6 +178,7 @@ export class ControlClient {
       throw new Error("control client configuration is invalid");
     }
     this.options = options;
+	this.protocolVersion = options.protocolVersion ?? V1_VERSION;
     this.storage = options.storage ?? new IndexedDBControlStorage();
     this.now = options.now ?? (() => new Date());
     this.random = options.random ?? (() => crypto.getRandomValues(new Uint8Array(16)));
@@ -319,7 +345,7 @@ export class ControlClient {
     this.options.onLease?.({ ...scope }, { ...state });
   }
 
-  private leaseFromResult(scope: LeaseScope, result: YuanshuMessage): LeaseState {
+  private leaseFromResult(scope: LeaseScope, result: RelayMessage): LeaseState {
     const raw = isPlainObject(result.payload.lease) ? result.payload.lease : result.payload;
     const epoch = numberValue(raw.epoch) ?? this.getLease(scope).epoch;
     const status = stringValue(result.payload.status);
@@ -337,7 +363,10 @@ export class ControlClient {
     const node = this.nodes.get(nodeId);
     if (!node) throw new Error("node is not registered");
     const messageId = randomID(this.random());
-    const scope = target.workspaceId && target.threadId ? { nodeId, workspaceId: target.workspaceId, threadId: target.threadId } : undefined;
+    const taskID = target.taskId ?? target.threadId;
+    const runID = target.runId ?? target.turnId;
+    const interactionID = target.interactionId ?? target.itemId;
+    const scope = target.workspaceId && taskID ? { nodeId, workspaceId: target.workspaceId, threadId: taskID } : undefined;
     if (node.online === false && !SERVER_CONTROLS.has(type)) {
       const action: ControlAction = { messageId, nodeId, type, state: "offline", ...targetWithoutNode(target) };
       this.options.onControlAction?.(action);
@@ -364,33 +393,32 @@ export class ControlClient {
     const signedPayload = lease?.state === "held" && lease.leaseId
       ? { ...payload, lease: { leaseId: lease.leaseId, epoch: lease.epoch } }
       : payload;
-    const message: YuanshuMessage = {
-      protocolVersion: CURRENT_VERSION,
-      messageId,
-      type,
-      sentAt,
-      expiresAt,
-      ownerId: this.options.identity.ownerId,
-      nodeId,
-      streamId: CONTROL_STREAM_ID,
-      sequence,
-      correlationId: messageId,
-      nonce: randomID(this.random()),
-      signer: { clientId: this.options.identity.clientId, keyId: this.options.identity.keyId },
-      payload: signedPayload,
+    const common = {
+      messageId, type, sentAt, expiresAt, ownerId: this.options.identity.ownerId, nodeId,
+      streamId: CONTROL_STREAM_ID, sequence, correlationId: messageId, nonce: randomID(this.random()),
+      signer: { clientId: this.options.identity.clientId, keyId: this.options.identity.keyId }, payload: signedPayload,
       ...(target.workspaceId ? { workspaceId: target.workspaceId } : {}),
-      ...(target.threadId ? { threadId: target.threadId } : {}),
-      ...(target.turnId ? { turnId: target.turnId } : {}),
-      ...(target.itemId ? { itemId: target.itemId } : {}),
     };
-    const input = controlSigningInput(message);
+    const message: RelayMessage = this.protocolVersion === V11_VERSION
+      ? {
+          ...common, protocolVersion: V11_VERSION, type: type as V11ControlType,
+          ...(target.agentInstanceId ? { agentInstanceId: target.agentInstanceId } : {}),
+          ...(taskID ? { taskId: taskID } : {}), ...(runID ? { runId: runID } : {}),
+          ...(target.activityId ? { activityId: target.activityId } : {}), ...(interactionID ? { interactionId: interactionID } : {}),
+        } as RelayMessage
+      : {
+          ...common, protocolVersion: V1_VERSION, type: type as V1ControlType,
+          ...(taskID ? { threadId: taskID } : {}), ...(runID ? { turnId: runID } : {}),
+          ...(interactionID ? { itemId: interactionID } : {}),
+        } as RelayMessage;
+    const input = this.protocolVersion === V11_VERSION ? controlSigningInputV11(message as V11Message) : controlSigningInputV1(message as V1Message);
     const signature = await crypto.subtle.sign("Ed25519", this.options.identity.privateKey, input as unknown as ArrayBuffer);
-    const signed: YuanshuMessage = { ...message, signature: bytesToBase64Url(new Uint8Array(signature)) };
+    const signed: RelayMessage = { ...message, signature: bytesToBase64Url(new Uint8Array(signature)) };
     const socket = this.socket;
     if (!socket || this.stateValue !== "connected") throw new Error("control client disconnected before send");
-    let resolve!: (event: YuanshuMessage) => void;
+    let resolve!: (event: RelayMessage) => void;
     let reject!: (error: Error) => void;
-    const result = new Promise<YuanshuMessage>((resolveResult, rejectResult) => { resolve = resolveResult; reject = rejectResult; });
+    const result = new Promise<RelayMessage>((resolveResult, rejectResult) => { resolve = resolveResult; reject = rejectResult; });
     // sendControl callers do not necessarily wait for a result. Keep the
     // internal request promise from becoming an unhandled rejection when a
     // relay disappears before the result is known.
@@ -429,7 +457,7 @@ export class ControlClient {
   }
 
   /** Sends a control and waits for its correlated control.result. */
-  async request(type: ControlType, payload: Record<string, unknown>, target: ControlTarget = {}): Promise<YuanshuMessage> {
+  async request(type: ControlType, payload: Record<string, unknown>, target: ControlTarget = {}): Promise<RelayMessage> {
     const handle = await this.startRequest(type, payload, target);
     return handle.result;
   }
@@ -494,7 +522,7 @@ export class ControlClient {
       return;
     }
     if (!isPlainObject(message.payload) || typeof message.type !== "string") return;
-    await this.handleEvent(message as unknown as YuanshuMessage);
+    await this.handleEvent(message as unknown as RelayMessage);
   }
 
   private async authenticate(message: Record<string, unknown>): Promise<void> {
@@ -563,7 +591,7 @@ export class ControlClient {
     this.reconnectTimer = undefined;
   }
 
-  private async handleEvent(event: YuanshuMessage): Promise<void> {
+  private async handleEvent(event: RelayMessage): Promise<void> {
     if (this.isServerControlResult(event)) {
       this.applyPresenceSnapshot(event);
       this.options.onControlResult?.(event);
@@ -593,7 +621,7 @@ export class ControlClient {
     await this.applyOrBuffer(event, cursorKey, !replay);
   }
 
-  private async applyOrBuffer(event: YuanshuMessage, key: CursorKey, allowRecovery: boolean): Promise<void> {
+  private async applyOrBuffer(event: RelayMessage, key: CursorKey, allowRecovery: boolean): Promise<void> {
     const storageKey = this.storageKey(key);
     const cursor = await this.cursor(key);
     if (event.sequence <= cursor) return;
@@ -612,7 +640,7 @@ export class ControlClient {
     if (allowRecovery && !this.replays.has(key.nodeId)) await this.startReplayForNode(key.nodeId);
   }
 
-  private async applyEvent(event: YuanshuMessage, key: CursorKey): Promise<void> {
+  private async applyEvent(event: RelayMessage, key: CursorKey): Promise<void> {
     try {
       await this.options.onEvent?.(event);
     } catch {
@@ -625,7 +653,8 @@ export class ControlClient {
     await this.storage.putEventCursor(key, event.sequence);
     this.cursors.set(storageKey, event.sequence);
     this.observeNodeEvent(event);
-    if (event.workspaceId && event.threadId) this.registerRecoveryTarget(event.nodeId, event.workspaceId, event.threadId);
+    const taskID = event.taskId ?? event.threadId;
+    if (event.workspaceId && taskID) this.registerRecoveryTarget(event.nodeId, event.workspaceId, taskID);
     if (event.type === "history.gap") {
       this.gapStreams.add(storageKey);
       this.historyGapStreams.add(storageKey);
@@ -664,7 +693,7 @@ export class ControlClient {
     const replay: ReplayState = { nodeId, correlationId: "pending", count: 0, resetAttempted: false };
     this.replays.set(nodeId, replay);
     try {
-      const key: CursorKey = { ownerId: this.options.identity.ownerId, nodeId, streamId: EVENT_STREAM_ID };
+      const key: CursorKey = { ownerId: this.options.identity.ownerId, nodeId, streamId: this.eventStreamID() };
       const sequence = await this.cursor(key);
       const messageId = await this.sendRecoveryControl("events.replay", { afterSequence: sequence }, { nodeId });
       const current = this.replays.get(nodeId);
@@ -675,12 +704,12 @@ export class ControlClient {
     }
   }
 
-  private async finishReplay(nodeId: string, result: YuanshuMessage): Promise<void> {
+  private async finishReplay(nodeId: string, result: RelayMessage): Promise<void> {
     const replay = this.replays.get(nodeId);
     if (!replay) return;
     const status = typeof result.payload.status === "string" ? result.payload.status : "rejected";
     const errorCode = typeof result.payload.errorCode === "string" ? result.payload.errorCode : "";
-    const key: CursorKey = { ownerId: this.options.identity.ownerId, nodeId, streamId: EVENT_STREAM_ID };
+    const key: CursorKey = { ownerId: this.options.identity.ownerId, nodeId, streamId: this.eventStreamID() };
     if (status !== "confirmed") {
       if (!replay.resetAttempted && (errorCode === "conflict" || errorCode === "history_gap")) {
         replay.resetAttempted = true;
@@ -720,20 +749,21 @@ export class ControlClient {
     }
   }
 
-  private resolveControl(event: YuanshuMessage): void {
+  private resolveControl(event: RelayMessage): void {
     const pending = this.pendingControls.get(event.correlationId);
     if (!pending) return;
     const rawStatus = typeof event.payload.status === "string" ? event.payload.status : "rejected";
     const state: ControlActionState = rawStatus === "dispatching" ? "executing" : rawStatus === "confirmed" || rawStatus === "rejected" || rawStatus === "ambiguous" ? rawStatus : "sent";
     const action = { ...pending.action, state, ...(typeof event.payload.errorCode === "string" ? { errorCode: event.payload.errorCode } : {}) };
     this.options.onControlAction?.(action);
-    if (pending.action.type === "snapshot.request" && state !== "confirmed" && event.workspaceId && event.threadId) {
-      this.snapshotRequests.delete(`${pending.action.nodeId}\u001f${event.workspaceId}\u001f${event.threadId}`);
+    const taskID = event.taskId ?? event.threadId;
+    if (pending.action.type === "snapshot.request" && state !== "confirmed" && event.workspaceId && taskID) {
+      this.snapshotRequests.delete(`${pending.action.nodeId}\u001f${event.workspaceId}\u001f${taskID}`);
     }
-    if (pending.action.type === "snapshot.request" && state === "confirmed" && event.workspaceId && event.threadId) {
+    if (pending.action.type === "snapshot.request" && state === "confirmed" && event.workspaceId && taskID) {
       this.gapStreams.delete(this.storageKey(this.eventKey(event)));
       this.historyGapStreams.delete(this.storageKey(this.eventKey(event)));
-      this.snapshotRequests.delete(`${pending.action.nodeId}\u001f${event.workspaceId}\u001f${event.threadId}`);
+      this.snapshotRequests.delete(`${pending.action.nodeId}\u001f${event.workspaceId}\u001f${taskID}`);
     }
     if (state !== "sent" && state !== "executing") {
       pending.resolve(event);
@@ -743,7 +773,7 @@ export class ControlClient {
     }
   }
 
-  private applyLeaseResult(event: YuanshuMessage): void {
+  private applyLeaseResult(event: RelayMessage): void {
     const pending = this.pendingControls.get(event.correlationId);
     if (!pending || !pending.action.workspaceId || !pending.action.threadId) return;
     if (!pending.action.type.startsWith("lease.")) return;
@@ -751,9 +781,10 @@ export class ControlClient {
     this.setLease(scope, this.leaseFromResult(scope, event));
   }
 
-  private applyLeaseChanged(event: YuanshuMessage): void {
-    if (!event.workspaceId || !event.threadId || !isPlainObject(event.payload)) return;
-    const scope: LeaseScope = { nodeId: event.nodeId, workspaceId: event.workspaceId, threadId: event.threadId };
+  private applyLeaseChanged(event: RelayMessage): void {
+	const taskID = event.taskId ?? event.threadId;
+	if (!event.workspaceId || !taskID || !isPlainObject(event.payload)) return;
+	const scope: LeaseScope = { nodeId: event.nodeId, workspaceId: event.workspaceId, threadId: taskID };
     const epoch = numberValue(event.payload.epoch) ?? 0;
     const current = this.getLease(scope);
     if (epoch < current.epoch) return;
@@ -794,7 +825,7 @@ export class ControlClient {
     return normalized;
   }
 
-  private pendingFor(key: string): Map<number, YuanshuMessage> {
+  private pendingFor(key: string): Map<number, RelayMessage> {
     let pending = this.pendingEvents.get(key);
     if (!pending) {
       pending = new Map();
@@ -803,7 +834,7 @@ export class ControlClient {
     return pending;
   }
 
-  private eventKey(event: YuanshuMessage): CursorKey {
+  private eventKey(event: RelayMessage): CursorKey {
     return { ownerId: event.ownerId, nodeId: event.nodeId, streamId: event.streamId };
   }
 
@@ -811,19 +842,20 @@ export class ControlClient {
     return `${key.ownerId}\u001f${key.nodeId}\u001f${key.streamId}`;
   }
 
-  private validEvent(event: YuanshuMessage): boolean {
-    return event.protocolVersion === CURRENT_VERSION && knownEvents.has(event.type) && event.ownerId === this.options.identity.ownerId && !!event.nodeId && event.streamId === EVENT_STREAM_ID && Number.isSafeInteger(event.sequence) && event.sequence > 0 && isPlainObject(event.payload);
+  private validEvent(event: RelayMessage): boolean {
+	const known = this.protocolVersion === V11_VERSION ? knownEventsV11 : knownEventsV1;
+	return event.protocolVersion === this.protocolVersion && known.has(event.type) && event.ownerId === this.options.identity.ownerId && !!event.nodeId && event.streamId === this.eventStreamID() && Number.isSafeInteger(event.sequence) && event.sequence > 0 && isPlainObject(event.payload);
   }
 
-  private isServerControlResult(event: YuanshuMessage): boolean {
-    return event.protocolVersion === CURRENT_VERSION && event.type === "control.result" && event.ownerId === this.options.identity.ownerId && !!event.nodeId && event.streamId === `${SERVER_CONTROL_STREAM_PREFIX}${this.options.identity.clientId}` && Number.isSafeInteger(event.sequence) && event.sequence > 0 && isPlainObject(event.payload);
+  private isServerControlResult(event: RelayMessage): boolean {
+	return event.protocolVersion === this.protocolVersion && event.type === "control.result" && event.ownerId === this.options.identity.ownerId && !!event.nodeId && event.streamId === `${SERVER_CONTROL_STREAM_PREFIX}${this.options.identity.clientId}` && Number.isSafeInteger(event.sequence) && event.sequence > 0 && isPlainObject(event.payload);
   }
 
-  private isLeaseChanged(event: YuanshuMessage): boolean {
-    return event.protocolVersion === CURRENT_VERSION && event.type === "lease.changed" && event.ownerId === this.options.identity.ownerId && !!event.nodeId && event.streamId.startsWith("lease.") && Number.isSafeInteger(event.sequence) && event.sequence > 0 && isPlainObject(event.payload);
+  private isLeaseChanged(event: RelayMessage): boolean {
+	return event.protocolVersion === this.protocolVersion && event.type === "lease.changed" && event.ownerId === this.options.identity.ownerId && !!event.nodeId && event.streamId.startsWith("lease.") && Number.isSafeInteger(event.sequence) && event.sequence > 0 && isPlainObject(event.payload);
   }
 
-  private observeNodeEvent(event: YuanshuMessage): void {
+  private observeNodeEvent(event: RelayMessage): void {
     const node = this.nodes.get(event.nodeId);
     if (!node) return;
     const payload = event.payload;
@@ -840,7 +872,7 @@ export class ControlClient {
     this.registerNode(patch);
   }
 
-  private applyPresenceSnapshot(event: YuanshuMessage): void {
+  private applyPresenceSnapshot(event: RelayMessage): void {
     if (!Array.isArray(event.payload.onlineNodeIds)) return;
     const online = new Set(event.payload.onlineNodeIds.filter((value): value is string => typeof value === "string"));
     for (const node of this.nodes.values()) {
@@ -860,6 +892,10 @@ export class ControlClient {
     this.options.onState?.(state);
   }
 
+  private eventStreamID(): string {
+    return this.protocolVersion === V11_VERSION ? EVENT_STREAM_ID_V11 : EVENT_STREAM_ID_V1;
+  }
+
   private relayURL(): string {
     const base = typeof location === "undefined" ? "http://localhost" : location.origin;
     const url = new URL(this.options.url, base);
@@ -869,7 +905,10 @@ export class ControlClient {
 }
 
 function targetWithoutNode(target: ControlTarget): Pick<ControlTarget, "workspaceId" | "threadId" | "turnId" | "itemId"> {
-  const { workspaceId, threadId, turnId, itemId } = target;
+  const workspaceId = target.workspaceId;
+  const threadId = target.taskId ?? target.threadId;
+  const turnId = target.runId ?? target.turnId;
+  const itemId = target.interactionId ?? target.activityId ?? target.itemId;
   return { ...(workspaceId ? { workspaceId } : {}), ...(threadId ? { threadId } : {}), ...(turnId ? { turnId } : {}), ...(itemId ? { itemId } : {}) };
 }
 

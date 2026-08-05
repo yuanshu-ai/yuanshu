@@ -62,9 +62,11 @@ describe("personal workbench", () => {
     render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "设备" })[0]);
-    expect(screen.getByRole("heading", { name: "设备与工作区" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "设备与 Agent" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Codex.*managed/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Codex.*managed/ }));
     expect(screen.getByRole("button", { name: /^Office repo/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "在 Office repo 新建任务" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "使用 Codex 在 Office repo 新建任务" })).toBeEnabled();
   });
 
   it("requires an explicit target before starting a new task", async () => {
@@ -77,6 +79,7 @@ describe("personal workbench", () => {
     expect(screen.queryByLabelText("你希望 Codex 完成什么？")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Office.*Codex 可用/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Codex.*可创建任务/ }));
     fireEvent.click(screen.getByRole("button", { name: /Office repo.*可修改工作区文件/ }));
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.change(screen.getByLabelText("你希望 Codex 完成什么？"), { target: { value: "Run the release checks" } });
@@ -84,7 +87,7 @@ describe("personal workbench", () => {
     expect(screen.getByRole("region", { name: "执行目标" })).toHaveTextContent("Office");
     expect(screen.getByRole("region", { name: "执行目标" })).toHaveTextContent("Office repo");
     fireEvent.click(screen.getByRole("button", { name: "确认并启动" }));
-    await waitFor(() => expect(fake.startThread).toHaveBeenCalledWith("node-a", "workspace-a", "Run the release checks"));
+    await waitFor(() => expect(fake.startThread).toHaveBeenCalledWith("node-a", "workspace-a", "Run the release checks", "codex-default"));
   });
 
   it("prefills only the workspace explicitly chosen from the device view", () => {
@@ -92,7 +95,8 @@ describe("personal workbench", () => {
     render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "设备" })[0]);
-    fireEvent.click(screen.getByRole("button", { name: "在 Office repo 新建任务" }));
+    fireEvent.click(screen.getByRole("button", { name: /Codex.*managed/ }));
+    fireEvent.click(screen.getByRole("button", { name: "使用 Codex 在 Office repo 新建任务" }));
     expect(screen.getByLabelText("你希望 Codex 完成什么？")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "执行目标" })).toHaveTextContent("Office repo");
   });
@@ -149,7 +153,7 @@ describe("personal workbench", () => {
     const fake = new FakeSession();
     render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
     await waitFor(() => expect(screen.queryByText("1 条新进展")).not.toBeInTheDocument());
-    act(() => fake.push(event(5, "thread.started", { status: "running", title: "External task" }, "workspace-a", "thread-external")));
+    act(() => fake.push(event(6, "thread.started", { status: "running", title: "External task" }, "workspace-a", "thread-external")));
     expect(await screen.findByText("1 条新进展")).toBeInTheDocument();
   });
 });
@@ -162,11 +166,12 @@ class FakeSession {
   private listener?: () => void;
 
   constructor(connectionState: WorkbenchSnapshot["connectionState"] = "connected") {
-    this.projection.apply(event(1, "device.status", { status: "online", runtime: "ready", name: "Office", workspaces: [{ id: "workspace-a", name: "Office repo", permissionProfile: "workspace-write", allowNetwork: false }] }));
-    this.projection.apply(event(2, "thread.snapshot", { threads: [{ id: "thread-a", title: "Office task", preview: "Continue release", status: "running", updatedAt: "2026-08-03T02:00:00Z" }] }, "workspace-a"));
-    this.projection.apply(event(3, "turn.started", { status: "running" }, "workspace-a", "thread-a", "turn-a"));
-    this.projection.applyServerControlResult({ ...event(4, "control.result", { status: "confirmed", notifications: [{ id: "notice", nodeId: "node-a", workspaceId: "workspace-a", threadId: "thread-a", type: "task.completed", summary: "任务已完成", sourceSequence: 3, createdAt: "2026-08-03T02:10:00Z", read: false }] }), streamId: "server-control-v1-client" });
-    this.snapshot = { revision: 1, connectionState, projection: this.projection.state, resources: { "threads:node-a:workspace-a": { state: "ready", updatedAt: "2026-08-03T02:00:00Z" } } };
+    this.projection.apply(event(1, "agent.snapshot", { agents: [{ id: "codex-default", adapterType: "codex", displayName: "Codex", runtimeMode: "managed", status: "ready", capabilities: [{ id: "task.start", level: "full" }] }] }));
+    this.projection.apply(event(2, "device.status", { status: "online", runtime: "ready", name: "Office", workspaces: [{ id: "workspace-a", name: "Office repo", permissionProfile: "workspace-write", allowNetwork: false, agents: [{ agentInstanceId: "codex-default", default: true }] }] }));
+    this.projection.apply(event(3, "thread.snapshot", { threads: [{ id: "thread-a", agentInstanceId: "codex-default", title: "Office task", preview: "Continue release", status: "running", updatedAt: "2026-08-03T02:00:00Z" }] }, "workspace-a"));
+    this.projection.apply(event(4, "turn.started", { status: "running" }, "workspace-a", "thread-a", "turn-a"));
+    this.projection.applyServerControlResult({ ...event(5, "control.result", { status: "confirmed", notifications: [{ id: "notice", nodeId: "node-a", workspaceId: "workspace-a", threadId: "thread-a", type: "task.completed", summary: "任务已完成", sourceSequence: 3, createdAt: "2026-08-03T02:10:00Z", read: false }] }), streamId: "server-control-v1-client" });
+    this.snapshot = { revision: 1, connectionState, projection: this.projection.state, resources: { "tasks:node-a:codex-default:workspace-a": { state: "ready", updatedAt: "2026-08-03T02:00:00Z" } } };
   }
 
   subscribe = (listener: () => void) => { this.listener = listener; return () => { this.listener = undefined; }; };

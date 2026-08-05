@@ -676,8 +676,31 @@ func (s *ControlSession) dispatchV11(ctx context.Context, message protocolv11.Yu
 			_ = s.store.MarkApprovalAmbiguous(ctx, claimed.ApprovalID)
 		}
 		return err
-	case protocolv11.ControlDeviceSync, protocolv11.ControlWorkspaceList:
+	case protocolv11.ControlDeviceSync:
 		return s.dispatch(ctx, legacyControlFromV11(message))
+	case protocolv11.ControlWorkspaceList:
+		items, err := s.store.Workspaces(ctx)
+		if err != nil {
+			return adapter.ErrUnavailable
+		}
+		resources, _ := s.store.(controlAgentStore)
+		workspaces := make([]any, 0, len(items))
+		for _, item := range items {
+			entry := map[string]any{"id": item.ID, "name": item.DisplayName, "permissionProfile": item.PermissionProfile, "allowNetwork": item.AllowNetwork}
+			if resources != nil {
+				links, linkErr := resources.WorkspaceAgents(ctx, item.ID)
+				if linkErr != nil {
+					return adapter.ErrUnavailable
+				}
+				agents := make([]any, 0, len(links))
+				for _, link := range links {
+					agents = append(agents, map[string]any{"agentInstanceId": link.InstanceID, "default": link.Default})
+				}
+				entry["agents"] = agents
+			}
+			workspaces = append(workspaces, entry)
+		}
+		return s.publishV11Only(ctx, adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventDeviceStatus), CorrelationID: message.MessageID, Payload: map[string]any{"status": "online", "workspaces": workspaces}})
 	case protocolv11.ControlSnapshotRequest:
 		record, err := s.eventsV11.Snapshot(ctx, s.runtime, eventlog.SnapshotTarget{WorkspaceID: workspaceID, ThreadID: taskID})
 		if err != nil {

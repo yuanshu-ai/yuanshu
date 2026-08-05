@@ -286,6 +286,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .device-card-heading > span:nth-child(2) { display: grid; min-width: 0; gap: 3px; }
 .device-card-heading b { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .device-card-heading small { color: var(--quiet); font-size: 9px; }
+.device-agent-list { display: grid; gap: 8px; padding: 10px; }
+.agent-card { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
+.agent-card.selected { border-color: rgba(114, 215, 162, .34); }
+.agent-card-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 58px; padding: 9px 10px; border: 0; background: transparent; color: var(--ink); text-align: left; }
+.agent-card-heading > span:nth-child(2) { display: grid; min-width: 0; gap: 3px; }
+.agent-card-heading b, .agent-card-heading small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-card-heading small { color: var(--quiet); font-size: 9px; }
+.node-monogram.agent { background: rgba(114, 215, 162, .08); color: var(--accent); }
+.agent-capabilities { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 9px; }
+.agent-capabilities > span { display: inline-flex; gap: 5px; align-items: center; padding: 4px 7px; border-radius: 999px; background: var(--surface); color: var(--quiet); font: 9px/1.2 var(--mono); }
+.agent-capabilities > span.full { color: var(--accent); }
+.agent-capabilities small { opacity: .72; }
+.agent-boundary-note { margin: 0; padding: 10px; color: var(--quiet); font-size: 10px; line-height: 1.5; }
 .device-workspaces { display: grid; }
 .device-workspace-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; border-bottom: 1px solid var(--line); }
 .device-workspace-row.selected { background: var(--accent-soft); }

@@ -37,6 +37,7 @@ describe("workbench task selectors", () => {
 
 function state(): ProjectionState {
   return {
+	agents: {},
     nodes: {
       "node-a": { ownerId: "owner", nodeId: "node-a", name: "Office", online: true, workspaceIds: ["workspace-a"], lastEventSequence: 1 },
       "node-b": { ownerId: "owner", nodeId: "node-b", name: "Home", online: true, workspaceIds: ["workspace-b"], lastEventSequence: 1 },

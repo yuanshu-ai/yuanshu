@@ -1,7 +1,6 @@
-import type { ControlType } from "../protocol/v1/catalog.generated";
-import type { YuanshuMessage } from "../protocol/v1/types.generated";
 import {
   ControlClient,
+  type ControlType,
   type ControlClientOptions,
   type ControlClientState,
   type ControlRequestHandle,
@@ -9,6 +8,7 @@ import {
   type LeaseScope,
   type LeaseState,
   type NodeBinding,
+  type RelayMessage,
 } from "../relay/control-client";
 import type { ControlStorage, StoredControlIdentity } from "../relay/storage";
 import type { RuntimeSettings } from "../relay/runtime-config";
@@ -27,6 +27,7 @@ export interface CreatedThreadSignal {
   nodeId: string;
   workspaceId: string;
   threadId: string;
+  agentInstanceId?: string;
 }
 
 export interface WorkbenchSnapshot {
@@ -47,7 +48,7 @@ export interface WorkbenchSessionOptions {
 
 type RequestIntent =
   | { kind: "diff"; path: string }
-  | { kind: "thread-start"; nodeId: string; workspaceId: string };
+  | { kind: "task-start"; nodeId: string; workspaceId: string; agentInstanceId: string };
 
 const EMPTY_RESOURCE: ResourceState = { state: "idle" };
 
@@ -73,6 +74,7 @@ export class WorkbenchSession {
     this.now = options.now ?? (() => new Date());
     const clientOptions: ControlClientOptions = {
       url: options.settings.relayUrl,
+      protocolVersion: "1.1",
       identity: options.identity,
       storage: options.storage,
       onState: (state) => this.handleConnectionState(state),
@@ -144,7 +146,9 @@ export class WorkbenchSession {
     if (!force && this.resources[key]?.state === "loading") return;
     this.client.registerLeaseScope({ nodeId, workspaceId, threadId });
     this.client.registerRecoveryTarget(nodeId, workspaceId, threadId);
-    await this.readControl(key, "thread.read", { includeTurns: true, includeDiffs: false }, { nodeId, workspaceId, threadId });
+    const agentInstanceId = this.resolveAgentInstance(nodeId, workspaceId, threadId);
+    if (!agentInstanceId) throw new Error("agent_instance_unavailable");
+    await this.readControl(key, "task.read", { includeRuns: true, includeDiffs: false }, { nodeId, agentInstanceId, workspaceId, taskId: threadId });
   }
 
   async loadDiff(nodeId: string, workspaceId: string, threadId: string, path: string): Promise<void> {
@@ -153,7 +157,9 @@ export class WorkbenchSession {
     this.setResource(key, { state: "loading" });
     let messageId = "";
     try {
-      const handle = await this.client.startRequest("thread.read", { includeTurns: true, includeDiffs: true, diffPath: path, maxDiffBytes: 65_536 }, { nodeId, workspaceId, threadId }, (startedMessageId) => {
+      const agentInstanceId = this.resolveAgentInstance(nodeId, workspaceId, threadId);
+      if (!agentInstanceId) throw new Error("agent_instance_unavailable");
+      const handle = await this.client.startRequest("task.read", { includeRuns: true, includeDiffs: true, diffPath: path, maxDiffBytes: 65_536 }, { nodeId, agentInstanceId, workspaceId, taskId: threadId }, (startedMessageId) => {
         this.requestIntents.set(startedMessageId, { kind: "diff", path });
       });
       messageId = handle.messageId;
@@ -168,15 +174,17 @@ export class WorkbenchSession {
     }
   }
 
-  async startThread(nodeId: string, workspaceId: string, input: string): Promise<ControlRequestHandle> {
-    const handle = await this.client.startRequest("thread.start", { input }, { nodeId, workspaceId }, (messageId) => {
-      this.requestIntents.set(messageId, { kind: "thread-start", nodeId, workspaceId });
+  async startThread(nodeId: string, workspaceId: string, input: string, agentInstanceId?: string): Promise<ControlRequestHandle> {
+    const selectedAgent = agentInstanceId ?? this.projection.state.workspaces[`${nodeId}\u001f${workspaceId}`]?.defaultAgentInstanceId;
+    if (!selectedAgent) throw new Error("agent_instance_unavailable");
+    const handle = await this.client.startRequest("task.start", { input }, { nodeId, agentInstanceId: selectedAgent, workspaceId }, (messageId) => {
+      this.requestIntents.set(messageId, { kind: "task-start", nodeId, workspaceId, agentInstanceId: selectedAgent });
     });
     void handle.result.finally(() => this.requestIntents.delete(handle.messageId)).catch(() => undefined);
     return handle;
   }
 
-  request(type: ControlType, payload: Record<string, unknown>, target: ControlTarget = {}): Promise<YuanshuMessage> {
+  request(type: ControlType, payload: Record<string, unknown>, target: ControlTarget = {}): Promise<RelayMessage> {
     return this.client.request(type, payload, target);
   }
 
@@ -234,20 +242,21 @@ export class WorkbenchSession {
     }
   }
 
-  private handleEvent(event: YuanshuMessage): void {
+  private handleEvent(event: RelayMessage): void {
     if (this.disposed) return;
     const intent = this.requestIntents.get(event.correlationId);
-    if (intent?.kind === "diff" && event.type === "thread.snapshot") {
+    if (intent?.kind === "diff" && event.type === "task.snapshot") {
       this.projection.applyDiffSnapshot(event, intent.path);
     } else {
       this.projection.apply(event);
     }
-    if (intent?.kind === "thread-start" && event.type === "thread.started" && event.threadId) {
+    if (intent?.kind === "task-start" && event.type === "task.started" && event.taskId) {
       this.createdThread = {
         messageId: event.correlationId,
         nodeId: intent.nodeId,
         workspaceId: intent.workspaceId,
-        threadId: event.threadId,
+        threadId: event.taskId,
+        agentInstanceId: intent.agentInstanceId,
       };
     }
     this.emit();
@@ -263,13 +272,9 @@ export class WorkbenchSession {
     const workspaces = Object.values(this.projection.state.workspaces);
     await mapLimit(workspaces, 2, async (workspace) => {
       if (generation !== this.synchronizationGeneration || this.disposed) return;
-      await this.readControl(
-        resourceKey.threads(workspace.nodeId, workspace.workspaceId),
-        "thread.list",
-        { limit: 100 },
-        { nodeId: workspace.nodeId, workspaceId: workspace.workspaceId },
-        false,
-      );
+      for (const agentInstanceId of workspace.agentInstanceIds ?? []) {
+        await this.readControl(resourceKey.tasks(workspace.nodeId, agentInstanceId, workspace.workspaceId), "task.list", { limit: 100 }, { nodeId: workspace.nodeId, agentInstanceId, workspaceId: workspace.workspaceId }, false);
+      }
     });
   }
 
@@ -292,6 +297,7 @@ export class WorkbenchSession {
       await Promise.all([
         this.client.request("device.sync", {}, { nodeId }),
         this.client.request("workspace.list", { limit: 100 }, { nodeId }),
+        this.client.request("agent.list", {}, { nodeId }),
       ]);
       if (generation !== this.synchronizationGeneration || this.disposed) return;
       const count = Object.values(this.projection.state.workspaces).filter((workspace) => workspace.nodeId === nodeId).length;
@@ -306,7 +312,7 @@ export class WorkbenchSession {
     try {
       const result = await this.client.request(type, payload, target);
       this.assertConfirmed(result);
-      const empty = type === "thread.list" && !Object.values(this.projection.state.threads).some((thread) => thread.nodeId === target.nodeId && thread.workspaceId === target.workspaceId);
+      const empty = (type === "thread.list" || type === "task.list") && !Object.values(this.projection.state.threads).some((thread) => thread.nodeId === target.nodeId && thread.workspaceId === target.workspaceId && (!target.agentInstanceId || thread.agentInstanceId === target.agentInstanceId));
       this.setResource(key, { state: empty ? "empty" : "ready", updatedAt: this.timestamp() });
     } catch (error) {
       this.setResource(key, resourceError(error));
@@ -314,7 +320,13 @@ export class WorkbenchSession {
     }
   }
 
-  private assertConfirmed(result: YuanshuMessage): void {
+  private resolveAgentInstance(nodeId: string, workspaceId: string, threadId: string): string | undefined {
+    const thread = this.projection.state.threads[`${nodeId}\u001f${workspaceId}\u001f${threadId}`];
+    if (thread?.agentInstanceId) return thread.agentInstanceId;
+    return this.projection.state.workspaces[`${nodeId}\u001f${workspaceId}`]?.defaultAgentInstanceId;
+  }
+
+  private assertConfirmed(result: RelayMessage): void {
     const status = typeof result.payload.status === "string" ? result.payload.status : "rejected";
     if (status === "confirmed") return;
     const code = typeof result.payload.errorCode === "string" ? result.payload.errorCode : status;
@@ -355,6 +367,8 @@ export class WorkbenchSession {
 export const resourceKey = {
   node: (nodeId: string) => `node:${nodeId}`,
   threads: (nodeId: string, workspaceId: string) => `threads:${nodeId}:${workspaceId}`,
+  agents: (nodeId: string) => `agents:${nodeId}`,
+  tasks: (nodeId: string, agentInstanceId: string, workspaceId: string) => `tasks:${nodeId}:${agentInstanceId}:${workspaceId}`,
   thread: (nodeId: string, workspaceId: string, threadId: string) => `thread:${nodeId}:${workspaceId}:${threadId}`,
   diff: (nodeId: string, workspaceId: string, threadId: string, path: string) => `diff:${nodeId}:${workspaceId}:${threadId}:${path}`,
   notifications: "notifications",

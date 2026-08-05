@@ -42,6 +42,8 @@ describe("WorkbenchSession", () => {
       clientFactory: (options) => (fake = new FakeClient(options)) as unknown as ControlClient,
     });
     await session.initialize();
+    session.connect();
+    await waitFor(() => Object.values(session.projection.state.agents).length === 1);
     await session.loadThread("node-a", "workspace-1", "thread-1", true);
     await session.loadDiff("node-a", "workspace-1", "thread-1", "app.go");
 
@@ -108,17 +110,20 @@ class FakeClient {
   async request(type: string, _payload: Record<string, unknown>, target: ControlTarget = {}): Promise<YuanshuMessage> {
     const correlationId = `control-${++this.message}`;
     if (type === "workspace.list") {
-      await this.emit(event("device.status", target.nodeId ?? "node-a", correlationId, { status: "online", workspaces: [1, 2, 3].map((index) => ({ id: `workspace-${index}`, name: `Workspace ${index}` })) }));
+      await this.emit(event("device.status", target.nodeId ?? "node-a", correlationId, { status: "online", workspaces: [1, 2, 3].map((index) => ({ id: `workspace-${index}`, name: `Workspace ${index}`, agents: [{ agentInstanceId: "codex-default", default: true }] })) }));
     }
-    if (type === "thread.list") {
+    if (type === "agent.list") {
+      await this.emit(event("agent.snapshot", target.nodeId ?? "node-a", correlationId, { agents: [{ id: "codex-default", adapterType: "codex", displayName: "Codex", runtimeMode: "managed", status: "ready", capabilities: [{ id: "task.start", level: "full" }] }] }));
+    }
+    if (type === "task.list") {
       this.activeThreadReads += 1;
       this.maxThreadReads = Math.max(this.maxThreadReads, this.activeThreadReads);
       await new Promise((resolve) => setTimeout(resolve, 8));
       this.activeThreadReads -= 1;
-      await this.emit(event("thread.snapshot", target.nodeId ?? "node-a", correlationId, { threads: [{ id: `thread-${target.workspaceId?.slice(-1)}`, title: `Task ${target.workspaceId}`, status: "idle", updatedAt: "2026-08-03T00:00:00Z" }] }, target.workspaceId));
+      await this.emit(event("task.snapshot", target.nodeId ?? "node-a", correlationId, { tasks: [{ id: `thread-${target.workspaceId?.slice(-1)}`, agentInstanceId: "codex-default", title: `Task ${target.workspaceId}`, status: "idle", updatedAt: "2026-08-03T00:00:00Z" }] }, target.workspaceId, undefined, undefined, "codex-default"));
     }
-    if (type === "thread.read") {
-      await this.emit(event("thread.snapshot", target.nodeId ?? "node-a", correlationId, { status: "idle", turns: [{ id: "turn-1", status: "completed", items: [{ id: "agent", kind: "agent_message", text: "baseline" }, { id: "file", kind: "file_change", path: "app.go", changeType: "modified" }] }] }, target.workspaceId, target.threadId));
+    if (type === "task.read") {
+      await this.emit(event("task.snapshot", target.nodeId ?? "node-a", correlationId, { task: { id: target.taskId, agentInstanceId: "codex-default", status: "idle" }, runs: [{ id: "turn-1", status: "completed", items: [{ id: "agent", kind: "agent_message", text: "baseline" }, { id: "file", kind: "file_change", path: "app.go", changeType: "modified" }] }] }, target.workspaceId, target.taskId, undefined, "codex-default"));
     }
     const result = controlResult(target.nodeId ?? "node-a", correlationId);
     if (type === "notifications.list") {
@@ -133,7 +138,7 @@ class FakeClient {
     const messageId = `control-${++this.message}`;
     onStarted?.(messageId);
     const result = Promise.resolve().then(async () => {
-      await this.emit(event("thread.snapshot", target.nodeId ?? "node-a", messageId, { status: "idle", turns: [{ id: "turn-1", status: "completed", items: [{ id: "file", kind: "file_change", path: "app.go", changeType: "modified", diff: "+detail", truncated: true, totalBytes: 70000, digest: "digest" }] }] }, target.workspaceId, target.threadId));
+      await this.emit(event("task.snapshot", target.nodeId ?? "node-a", messageId, { task: { id: target.taskId, agentInstanceId: "codex-default", status: "idle" }, runs: [{ id: "turn-1", status: "completed", items: [{ id: "file", kind: "file_change", path: "app.go", changeType: "modified", diff: "+detail", truncated: true, totalBytes: 70000, digest: "digest" }] }] }, target.workspaceId, target.taskId, undefined, "codex-default"));
       return controlResult(target.nodeId ?? "node-a", messageId);
     });
     return { messageId, result };
@@ -142,15 +147,15 @@ class FakeClient {
   private async emit(value: YuanshuMessage) { await this.options.onEvent?.(value); }
 }
 
-function event(type: string, nodeId: string, correlationId: string, payload: Record<string, unknown>, workspaceId?: string, threadId?: string): YuanshuMessage {
+function event(type: string, nodeId: string, correlationId: string, payload: Record<string, unknown>, workspaceId?: string, taskId?: string, runId?: string, agentInstanceId?: string): YuanshuMessage {
   const sequence = eventSequence++;
-  return { protocolVersion: "1.0", messageId: `event-${sequence}`, type, ownerId: "owner", nodeId, streamId: "node-events-v1", sequence, correlationId, sentAt: "2026-08-03T00:00:00Z", payload, ...(workspaceId ? { workspaceId } : {}), ...(threadId ? { threadId } : {}) };
+  return { protocolVersion: "1.1", messageId: `event-${sequence}`, type, ownerId: "owner", nodeId, streamId: "node-events-v1.1", sequence, correlationId, sentAt: "2026-08-03T00:00:00Z", payload, ...(workspaceId ? { workspaceId } : {}), ...(taskId ? { taskId } : {}), ...(runId ? { runId } : {}), ...(agentInstanceId ? { agentInstanceId } : {}) } as YuanshuMessage;
 }
 
 let eventSequence = 0;
 
 function controlResult(nodeId: string, correlationId: string): YuanshuMessage {
-  return { protocolVersion: "1.0", messageId: `result-${correlationId}`, type: "control.result", ownerId: "owner", nodeId, streamId: "server-control-v1-client", sequence: 1, correlationId, sentAt: "2026-08-03T00:00:00Z", payload: { status: "confirmed" } };
+  return { protocolVersion: "1.1", messageId: `result-${correlationId}`, type: "control.result", ownerId: "owner", nodeId, streamId: "server-control-v1.1-client", sequence: 1, correlationId, sentAt: "2026-08-03T00:00:00Z", payload: { status: "confirmed" } } as YuanshuMessage;
 }
 
 async function waitFor(check: () => boolean): Promise<void> {

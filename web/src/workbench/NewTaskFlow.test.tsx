@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { NodeProjection, WorkspaceProjection } from "../state/projection";
+import type { AgentProjection, NodeProjection, WorkspaceProjection } from "../state/projection";
 import { NewTaskFlow } from "./NewTaskFlow";
 import type { WorkbenchSession } from "./session";
 
@@ -50,6 +50,7 @@ describe("new task flow", () => {
     const props = {
       session: { startThread: vi.fn() } as unknown as WorkbenchSession,
       connectionState: "connected",
+	  agents: [agent("office")],
       workspaces: [workspace("office", "repo")],
       initialTarget: { nodeId: "office", workspaceId: "repo" },
       onClose: vi.fn(),
@@ -73,11 +74,23 @@ describe("new task flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认并启动" }));
     await waitFor(() => expect(onConfirmed).toHaveBeenCalledWith("start-confirmed"));
   });
+
+  it("shows detected-only agents without offering a control path", () => {
+    renderFlow({
+      nodes: [node("office", true, "ready")],
+      agents: [{ ...agent("office"), agentInstanceId: "external-codex", key: "office:external-codex", displayName: "External Codex", runtimeMode: "detected-only", status: "detected", capabilities: [] }],
+      workspaces: [workspace("office", "repo")],
+    });
+    fireEvent.click(screen.getByRole("button", { name: /office.*Codex 可用/i }));
+    expect(screen.getByRole("button", { name: /External Codex.*仅检测到/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
+  });
 });
 
 function renderFlow(options: {
   nodes?: NodeProjection[];
   workspaces?: WorkspaceProjection[];
+	agents?: AgentProjection[];
   startThread?: ReturnType<typeof vi.fn>;
   initialTarget?: { nodeId: string; workspaceId: string };
   onClose?: () => void;
@@ -86,9 +99,10 @@ function renderFlow(options: {
 } = {}) {
   const nodes = options.nodes ?? [node("office", true, "ready")];
   const workspaces = options.workspaces ?? [workspace("office", "repo")];
+	const agents = options.agents ?? nodes.map((item) => agent(item.nodeId));
   const startThread = options.startThread ?? vi.fn();
   const session = { startThread } as unknown as WorkbenchSession;
-  return render(<NewTaskFlow session={session} connectionState="connected" nodes={nodes} workspaces={workspaces} initialTarget={options.initialTarget} onClose={options.onClose ?? vi.fn()} onConfirmed={options.onConfirmed ?? vi.fn()} onDraftChange={options.onDraftChange} />);
+  return render(<NewTaskFlow session={session} connectionState="connected" nodes={nodes} agents={agents} workspaces={workspaces} initialTarget={options.initialTarget} onClose={options.onClose ?? vi.fn()} onConfirmed={options.onConfirmed ?? vi.fn()} onDraftChange={options.onDraftChange} />);
 }
 
 function node(nodeId: string, online: boolean, runtimeStatus = "ready"): NodeProjection {
@@ -96,5 +110,9 @@ function node(nodeId: string, online: boolean, runtimeStatus = "ready"): NodePro
 }
 
 function workspace(nodeId: string, workspaceId: string): WorkspaceProjection {
-  return { key: `${nodeId}:${workspaceId}`, ownerId: "owner", nodeId, workspaceId, name: workspaceId, permissionProfile: "workspace-write", allowNetwork: false };
+  return { key: `${nodeId}:${workspaceId}`, ownerId: "owner", nodeId, workspaceId, name: workspaceId, permissionProfile: "workspace-write", allowNetwork: false, agentInstanceIds: ["codex-default"], defaultAgentInstanceId: "codex-default" };
+}
+
+function agent(nodeId: string): AgentProjection {
+  return { key: `${nodeId}:codex-default`, ownerId: "owner", nodeId, agentInstanceId: "codex-default", adapterType: "codex", displayName: "Codex", runtimeMode: "managed", status: "ready", capabilities: [{ id: "task.start", level: "full" }], workspaceIds: ["repo"], updatedAt: "2026-08-05T00:00:00Z" };
 }

@@ -25,6 +25,7 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
   const restoredThreadPending = useRef(Boolean(saved.current.nodeId && saved.current.workspaceId && saved.current.threadId));
   const [screen, setScreen] = useState<Screen>("home");
   const [selectedNodeId, setSelectedNodeId] = useState(saved.current.nodeId ?? "");
+  const [selectedAgentInstanceId, setSelectedAgentInstanceId] = useState("");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(saved.current.workspaceId ?? "");
   const [selectedThreadId, setSelectedThreadId] = useState(saved.current.threadId ?? "");
   const [mobileThreadOpen, setMobileThreadOpen] = useState(Boolean(saved.current.threadId));
@@ -53,6 +54,7 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
   draftDirtyRef.current = detailDraftDirty || newTaskDraftDirty;
 
   const nodes = useMemo(() => Object.values(state.nodes).sort((left, right) => (left.name ?? left.nodeId).localeCompare(right.name ?? right.nodeId)), [state, snapshot.revision]);
+  const agents = useMemo(() => Object.values(state.agents).sort((left, right) => left.displayName.localeCompare(right.displayName)), [state, snapshot.revision]);
   const allWorkspaces = useMemo(() => Object.values(state.workspaces), [state, snapshot.revision]);
   const workspaces = useMemo(() => allWorkspaces.filter((workspace) => !selectedNodeId || workspace.nodeId === selectedNodeId), [allWorkspaces, selectedNodeId]);
   const tasks = useMemo(() => selectTasks(state, readSequences), [state, readSequences, snapshot.revision]);
@@ -133,6 +135,12 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
 
   useEffect(() => {
     if (!selectedNodeId) return;
+	const availableAgents = agents.filter((agent) => agent.nodeId === selectedNodeId);
+	if (availableAgents.length && (!selectedAgentInstanceId || !availableAgents.some((agent) => agent.agentInstanceId === selectedAgentInstanceId))) setSelectedAgentInstanceId(availableAgents[0].agentInstanceId);
+  }, [agents, selectedAgentInstanceId, selectedNodeId]);
+
+  useEffect(() => {
+    if (!selectedNodeId) return;
     const available = allWorkspaces.filter((workspace) => workspace.nodeId === selectedNodeId);
     if (!available.length) return;
     if (!selectedWorkspaceId || !available.some((workspace) => workspace.workspaceId === selectedWorkspaceId)) setSelectedWorkspaceId(available[0].workspaceId);
@@ -142,7 +150,8 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
     const additions: Record<string, number> = {};
     for (const workspace of allWorkspaces) {
       const workspaceKey = `${workspace.nodeId}\u001f${workspace.workspaceId}`;
-      const resource = snapshot.resources[resourceKey.threads(workspace.nodeId, workspace.workspaceId)];
+	  const agentIDs = workspace.agentInstanceIds ?? [];
+	  const resource = agentIDs.map((agentID) => snapshot.resources[resourceKey.tasks(workspace.nodeId, agentID, workspace.workspaceId)]).find((value) => value?.state === "ready" || value?.state === "empty");
       if (resource?.state !== "ready" && resource?.state !== "empty") continue;
       const baseline = !hydratedWorkspaces.current.has(workspaceKey);
       for (const thread of Object.values(state.threads)) {
@@ -281,7 +290,7 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
 
     {screen === "notifications" ? <NotificationsView notifications={notifications} resource={snapshot.resources[resourceKey.notifications]} onRefresh={() => void session.refreshNotifications()} onOpen={(notification) => void openNotification(notification)} />
       : screen === "settings" ? <SettingsView session={session} storage={storage} settings={settings} connectionState={snapshot.connectionState} selectedNodeId={selectedNodeId} onSettingsSaved={onSettingsSaved} />
-      : screen === "devices" ? <DevicesView nodes={nodes} workspaces={allWorkspaces} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} onNode={(nodeId) => navigate(() => { setSelectedNodeId(nodeId); setSelectedWorkspaceId(""); })} onWorkspace={selectDeviceWorkspace} onNewTask={(nodeId, workspaceId) => openNewTask({ nodeId, workspaceId })} onShowTasks={() => selectScreen("tasks")} />
+      : screen === "devices" ? <DevicesView nodes={nodes} agents={agents} workspaces={allWorkspaces} selectedNodeId={selectedNodeId} selectedAgentInstanceId={selectedAgentInstanceId} selectedWorkspaceId={selectedWorkspaceId} onNode={(nodeId) => navigate(() => { setSelectedNodeId(nodeId); setSelectedAgentInstanceId(""); setSelectedWorkspaceId(""); })} onAgent={(agentInstanceId) => navigate(() => { setSelectedAgentInstanceId(agentInstanceId); setSelectedWorkspaceId(""); })} onWorkspace={selectDeviceWorkspace} onNewTask={(nodeId, agentInstanceId, workspaceId) => openNewTask({ nodeId, agentInstanceId, workspaceId })} onShowTasks={() => { setTaskNodeFilter(selectedNodeId); setTaskWorkspaceFilter(selectedWorkspaceId); selectScreen("tasks"); }} />
       : <div className="workbench-grid">
         <aside className="task-sidebar" aria-label="任务列表与上下文">
           <TaskContextBar nodes={nodes} workspaces={workspaces} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} onNode={(nodeId) => navigate(() => { setSelectedNodeId(nodeId); setSelectedWorkspaceId(""); setSelectedThreadId(""); })} onWorkspace={(workspaceId) => navigate(() => { setSelectedWorkspaceId(workspaceId); setSelectedThreadId(""); })} />
@@ -293,7 +302,7 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
         <ThreadDetail session={session} snapshotRevision={snapshot.revision} connectionState={snapshot.connectionState} state={state} resource={selectedThreadId ? snapshot.resources[resourceKey.thread(selectedNodeId, selectedWorkspaceId, selectedThreadId)] : undefined} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} selectedThreadId={selectedThreadId} onRead={markTaskRead} onDraftChange={handleDetailDraftChange} onBack={() => navigate(() => leaveSurface("thread"))} />
       </div>}
 
-    {newTask && <NewTaskFlow session={session} connectionState={snapshot.connectionState} nodes={nodes} workspaces={allWorkspaces} initialTarget={newTask.initialTarget} onClose={() => navigate(() => leaveSurface("new-task"))} onConfirmed={(messageId) => { draftDirtyRef.current = false; setNewTaskDraftDirty(false); leaveSurface("new-task", () => setConfirmedThreadStart(messageId)); }} onDraftChange={handleNewTaskDraftChange} />}
+    {newTask && <NewTaskFlow session={session} connectionState={snapshot.connectionState} nodes={nodes} agents={agents} workspaces={allWorkspaces} initialTarget={newTask.initialTarget} onClose={() => navigate(() => leaveSurface("new-task"))} onConfirmed={(messageId) => { draftDirtyRef.current = false; setNewTaskDraftDirty(false); leaveSurface("new-task", () => setConfirmedThreadStart(messageId)); }} onDraftChange={handleNewTaskDraftChange} />}
     {confirmDiscard && <Dialog title="放弃未发送的内容？" destructive onClose={() => setConfirmDiscard(false)} actions={<><button className="button secondary" type="button" onClick={() => setConfirmDiscard(false)}>继续编辑</button><button className="button danger solid" type="button" onClick={() => { setConfirmDiscard(false); draftDirtyRef.current = false; detailDraftDirtyRef.current = false; newTaskDraftDirtyRef.current = false; setDetailDraftDirty(false); setNewTaskDraftDirty(false); const action = pendingNavigation.current; pendingNavigation.current = undefined; action?.(); }}>放弃草稿</button></>}><p>当前内容尚未发送。离开后这份草稿不会保存在浏览器中。</p></Dialog>}
 
     <nav className="mobile-nav" aria-label="工作台导航">
@@ -349,7 +358,7 @@ function writeTaskProgress(value: Readonly<Record<string, number>>) {
 }
 
 function summarizeTaskResources(resources: Readonly<Record<string, ResourceState>>): ResourceState | undefined {
-  const values = Object.entries(resources).filter(([key]) => key.startsWith("threads:")).map(([, value]) => value);
+  const values = Object.entries(resources).filter(([key]) => key.startsWith("tasks:")).map(([, value]) => value);
   if (!values.length) return undefined;
   const error = values.find((value) => value.state === "error");
   if (error) return error;

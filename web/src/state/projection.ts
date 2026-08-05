@@ -1,5 +1,4 @@
-import type { YuanshuMessage } from "../protocol/v1/types.generated";
-import type { ControlAction } from "../relay/control-client";
+import type { ControlAction, RelayMessage } from "../relay/control-client";
 
 export interface NodeProjection {
   ownerId: string;
@@ -11,8 +10,28 @@ export interface NodeProjection {
   online: boolean;
   discovered?: boolean;
   workspaceIds: string[];
+  agentInstanceIds?: string[];
   lastEventSequence: number;
   lastSeen?: string;
+}
+
+export interface AgentProjection {
+  key: string;
+  ownerId: string;
+  nodeId: string;
+  agentInstanceId: string;
+  adapterType: string;
+  displayName: string;
+  version?: string;
+  runtimeMode: "managed" | "attached" | "history-only" | "detected-only";
+  status: string;
+  providerType?: string;
+  customEndpoint?: boolean;
+  authenticationAvailable?: boolean;
+  configurationFingerprint?: string;
+  capabilities: Array<{ id: string; level: "full" | "read-only" | "unavailable"; reason?: string }>;
+  workspaceIds: string[];
+  updatedAt: string;
 }
 
 export interface WorkspaceProjection {
@@ -24,6 +43,8 @@ export interface WorkspaceProjection {
   adapter?: string;
   permissionProfile?: string;
   allowNetwork?: boolean;
+  agentInstanceIds?: string[];
+  defaultAgentInstanceId?: string;
 }
 
 export interface ThreadProjection {
@@ -32,6 +53,7 @@ export interface ThreadProjection {
   nodeId: string;
   workspaceId: string;
   threadId: string;
+  agentInstanceId?: string;
   status?: string;
   title?: string;
   preview?: string;
@@ -104,7 +126,7 @@ export interface EventProjection {
   threadId?: string;
   turnId?: string;
   sequence: number;
-  event: YuanshuMessage;
+  event: RelayMessage;
 }
 
 export interface ApprovalProjection {
@@ -143,6 +165,7 @@ export interface NotificationProjection {
 
 export interface ProjectionState {
   nodes: Record<string, NodeProjection>;
+  agents: Record<string, AgentProjection>;
   workspaces: Record<string, WorkspaceProjection>;
   threads: Record<string, ThreadProjection>;
   turns: Record<string, TurnProjection>;
@@ -173,6 +196,7 @@ export class DataProjection {
   private readonly seenEvents = new Set<string>();
   private readonly stateValue: ProjectionState = {
     nodes: {},
+    agents: {},
     workspaces: {},
     threads: {},
     turns: {},
@@ -199,6 +223,7 @@ export class DataProjection {
       ...node,
       online: node.online ?? current?.online ?? true,
       workspaceIds: [...(node.workspaceIds ?? current?.workspaceIds ?? [])],
+      agentInstanceIds: [...(node.agentInstanceIds ?? current?.agentInstanceIds ?? [])],
       lastEventSequence: node.lastEventSequence ?? current?.lastEventSequence ?? 0,
     };
     this.stateValue.nodes[node.nodeId] = next;
@@ -211,7 +236,7 @@ export class DataProjection {
     return next;
   }
 
-  applyServerControlResult(event: YuanshuMessage): void {
+  applyServerControlResult(event: RelayMessage): void {
     this.applyControlResultProjection(event);
     if (!Array.isArray(event.payload.notifications)) return;
     for (const raw of event.payload.notifications) {
@@ -228,7 +253,7 @@ export class DataProjection {
     if (current) current.read = true;
   }
 
-  apply(event: YuanshuMessage): void {
+  apply(event: RelayMessage): void {
     if (event.ownerId === "" || event.nodeId === "") return;
     const eventKey = `${event.ownerId}\u001f${event.nodeId}\u001f${event.streamId}\u001f${event.sequence}`;
     if (this.seenEvents.has(eventKey)) return;
@@ -239,73 +264,88 @@ export class DataProjection {
     node.lastSeen = event.sentAt;
     node.online = true;
 
-    switch (event.type) {
+    if (event.type === "agent.snapshot") {
+      this.applyAgentSnapshot(node, event);
+      this.appendEvent(event);
+      return;
+    }
+	if (event.type === "agent.status" && event.agentInstanceId) {
+	  const agent = this.stateValue.agents[agentKey(event.nodeId, event.agentInstanceId)];
+	  if (agent) {
+		agent.status = stringValue(event.payload.state) ?? stringValue(event.payload.status) ?? agent.status;
+		agent.updatedAt = event.sentAt;
+	  }
+	  this.appendEvent(event);
+	  return;
+	}
+    const normalized = normalizeAgentEvent(event);
+    switch (normalized.type) {
       case "device.status":
-        this.applyDeviceStatus(node, event);
+        this.applyDeviceStatus(node, normalized);
         break;
       case "runtime.status":
-        this.applyRuntimeStatus(node, event);
+        this.applyRuntimeStatus(node, normalized);
         break;
       case "thread.snapshot":
-        this.applyThreadSnapshot(event);
+        this.applyThreadSnapshot(normalized);
         break;
       case "thread.started":
-        this.applyThreadLifecycle(event, "running");
+        this.applyThreadLifecycle(normalized, "running");
         break;
       case "turn.started":
-        this.applyTurnLifecycle(event, "running");
+        this.applyTurnLifecycle(normalized, "running");
         break;
       case "turn.completed":
-        this.applyTurnLifecycle(event, "completed");
+        this.applyTurnLifecycle(normalized, "completed");
         break;
       case "turn.failed":
-        this.applyTurnLifecycle(event, "failed");
+        this.applyTurnLifecycle(normalized, "failed");
         break;
       case "turn.interrupted":
-        this.applyTurnLifecycle(event, "interrupted");
+        this.applyTurnLifecycle(normalized, "interrupted");
         break;
       case "agent.message.delta":
-        this.applyThreadItem(event, { id: event.itemId ?? `${event.turnId ?? "turn"}:agent`, kind: "agent_message", text: stringValue(event.payload.text) ?? "", status: "streaming", sequence: event.sequence });
+        this.applyThreadItem(normalized, { id: normalized.itemId ?? `${normalized.turnId ?? "turn"}:agent`, kind: "agent_message", text: stringValue(normalized.payload.text) ?? "", status: "streaming", sequence: normalized.sequence });
         break;
       case "agent.message.completed":
-        this.applyThreadItem(event, { id: event.itemId ?? `${event.turnId ?? "turn"}:agent`, kind: "agent_message", text: stringValue(event.payload.text) ?? "", status: "completed", sequence: event.sequence });
+        this.applyThreadItem(normalized, { id: normalized.itemId ?? `${normalized.turnId ?? "turn"}:agent`, kind: "agent_message", text: stringValue(normalized.payload.text) ?? "", status: "completed", sequence: normalized.sequence });
         break;
       case "command.started":
       case "command.completed":
-        this.applyThreadItem(event, { id: stringValue(event.payload.commandId) ?? event.itemId ?? `${event.sequence}`, kind: "command", command: stringValue(event.payload.displayText) ?? stringValue(event.payload.command), status: event.type === "command.completed" ? "completed" : "running", exitCode: numberValue(event.payload.exitCode), sequence: event.sequence });
+        this.applyThreadItem(normalized, { id: stringValue(normalized.payload.commandId) ?? normalized.itemId ?? `${normalized.sequence}`, kind: "command", command: stringValue(normalized.payload.displayText) ?? stringValue(normalized.payload.command), status: normalized.type === "command.completed" ? "completed" : "running", exitCode: numberValue(normalized.payload.exitCode), sequence: normalized.sequence });
         break;
       case "command.output.delta":
-        this.applyThreadItem(event, { id: stringValue(event.payload.commandId) ?? event.itemId ?? `${event.sequence}`, kind: "command_output", output: stringValue(event.payload.text) ?? "", status: "streaming", sequence: event.sequence });
+        this.applyThreadItem(normalized, { id: stringValue(normalized.payload.commandId) ?? normalized.itemId ?? `${normalized.sequence}`, kind: "command_output", output: stringValue(normalized.payload.text) ?? "", status: "streaming", sequence: normalized.sequence });
         break;
       case "tool.started":
       case "tool.completed":
-        this.applyThreadItem(event, { id: event.itemId ?? `${event.sequence}`, kind: "tool", toolName: stringValue(event.payload.toolName), status: event.type === "tool.completed" ? "completed" : "running", sequence: event.sequence });
+        this.applyThreadItem(normalized, { id: normalized.itemId ?? `${normalized.sequence}`, kind: "tool", toolName: stringValue(normalized.payload.toolName), status: normalized.type === "tool.completed" ? "completed" : "running", sequence: normalized.sequence });
         break;
       case "file.changed":
-        this.applyThreadItem(event, { id: event.itemId ?? `${event.sequence}`, kind: "file_change", path: stringValue(event.payload.path), changeType: stringValue(event.payload.changeType), status: "completed", sequence: event.sequence });
+        this.applyThreadItem(normalized, { id: normalized.itemId ?? `${normalized.sequence}`, kind: "file_change", path: stringValue(normalized.payload.path), changeType: stringValue(normalized.payload.changeType), status: "completed", sequence: normalized.sequence });
         break;
       case "diff.updated":
-        this.applyThreadItem(event, { id: event.itemId ?? stringValue(event.payload.path) ?? `${event.sequence}`, kind: "diff", path: stringValue(event.payload.path), diff: stringValue(event.payload.diff), status: "updated", sequence: event.sequence });
+        this.applyThreadItem(normalized, { id: normalized.itemId ?? stringValue(normalized.payload.path) ?? `${normalized.sequence}`, kind: "diff", path: stringValue(normalized.payload.path), diff: stringValue(normalized.payload.diff), status: "updated", sequence: normalized.sequence });
         break;
       case "error":
-        this.applyThreadItem(event, { id: event.itemId ?? `${event.sequence}`, kind: "error", errorCode: stringValue(event.payload.code), errorMessage: stringValue(event.payload.message), status: "failed", sequence: event.sequence });
+        this.applyThreadItem(normalized, { id: normalized.itemId ?? `${normalized.sequence}`, kind: "error", errorCode: stringValue(normalized.payload.code), errorMessage: stringValue(normalized.payload.message), status: "failed", sequence: normalized.sequence });
         break;
       case "approval.requested":
-        this.applyApprovalRequested(event);
+        this.applyApprovalRequested(normalized);
         break;
       case "approval.resolved":
-        this.applyApprovalResolved(event);
+        this.applyApprovalResolved(normalized);
         break;
       case "history.gap":
-        this.applyHistoryGap(event);
+        this.applyHistoryGap(normalized);
         break;
       case "control.result":
-        this.applyControlResult(event);
+        this.applyControlResult(normalized);
         break;
     }
 
-    if (event.type !== "device.status" && event.type !== "runtime.status" && event.type !== "control.result") {
-      this.appendEvent(event);
+    if (normalized.type !== "device.status" && normalized.type !== "runtime.status" && normalized.type !== "control.result") {
+      this.appendEvent(normalized);
     }
   }
 
@@ -314,8 +354,9 @@ export class DataProjection {
    * already on screen. The request intent is kept by WorkbenchSession and is
    * deliberately not represented on the protocol envelope.
    */
-  applyDiffSnapshot(event: YuanshuMessage, path: string): void {
-    if (event.type !== "thread.snapshot" || !event.workspaceId || !event.threadId || !path) return;
+  applyDiffSnapshot(event: RelayMessage, path: string): void {
+	event = normalizeAgentEvent(event);
+	if (event.type !== "thread.snapshot" || !event.workspaceId || !event.threadId || !path) return;
     const eventKey = `${event.ownerId}\u001f${event.nodeId}\u001f${event.streamId}\u001f${event.sequence}`;
     if (this.seenEvents.has(eventKey)) return;
     this.seenEvents.add(eventKey);
@@ -336,11 +377,47 @@ export class DataProjection {
     }
   }
 
-  private ensureNode(event: YuanshuMessage): NodeProjection {
+  private ensureNode(event: RelayMessage): NodeProjection {
     return this.registerNode({ ownerId: event.ownerId, nodeId: event.nodeId });
   }
 
-  private applyDeviceStatus(node: NodeProjection, event: YuanshuMessage): void {
+  private applyAgentSnapshot(node: NodeProjection, event: RelayMessage): void {
+    if (!Array.isArray(event.payload.agents)) return;
+    for (const raw of event.payload.agents) {
+      if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.adapterType !== "string" || typeof raw.displayName !== "string") continue;
+      const runtimeMode = isRuntimeMode(raw.runtimeMode) ? raw.runtimeMode : "detected-only";
+      const capabilities = Array.isArray(raw.capabilities)
+        ? raw.capabilities.flatMap((entry) => isRecord(entry) && typeof entry.id === "string" && isCapabilityLevel(entry.level)
+          ? [{ id: entry.id, level: entry.level, ...(typeof entry.reason === "string" ? { reason: entry.reason } : {}) }]
+          : [])
+        : [];
+      const key = agentKey(event.nodeId, raw.id);
+      const current = this.stateValue.agents[key];
+      this.stateValue.agents[key] = {
+        ...current,
+        key,
+        ownerId: event.ownerId,
+        nodeId: event.nodeId,
+        agentInstanceId: raw.id,
+        adapterType: raw.adapterType,
+        displayName: raw.displayName,
+        version: stringValue(raw.version),
+        runtimeMode,
+        status: stringValue(raw.status) ?? "unknown",
+        providerType: stringValue(raw.providerType),
+        customEndpoint: booleanValue(raw.customEndpoint),
+        authenticationAvailable: booleanValue(raw.authenticationAvailable),
+        configurationFingerprint: stringValue(raw.configurationFingerprint),
+        capabilities,
+        workspaceIds: [...(current?.workspaceIds ?? [])],
+        updatedAt: event.sentAt,
+      };
+      node.agentInstanceIds ??= [];
+      if (!node.agentInstanceIds.includes(raw.id)) node.agentInstanceIds.push(raw.id);
+    }
+  }
+
+  private applyDeviceStatus(node: NodeProjection, event: RelayMessage): void {
     const payload = event.payload;
     if (typeof payload.status === "string") {
       node.status = payload.status;
@@ -357,18 +434,29 @@ export class DataProjection {
         adapter: stringValue(raw.adapter),
         permissionProfile: stringValue(raw.permissionProfile),
         allowNetwork: booleanValue(raw.allowNetwork),
+        agentInstanceIds: [],
       });
+	  if (Array.isArray(raw.agents)) {
+		workspace.agentInstanceIds = [];
+		for (const link of raw.agents) {
+		  if (!isRecord(link) || typeof link.agentInstanceId !== "string") continue;
+		  workspace.agentInstanceIds.push(link.agentInstanceId);
+		  if (link.default === true) workspace.defaultAgentInstanceId = link.agentInstanceId;
+		  const agent = this.stateValue.agents[agentKey(node.nodeId, link.agentInstanceId)];
+		  if (agent && !agent.workspaceIds.includes(raw.id)) agent.workspaceIds.push(raw.id);
+		}
+	  }
       if (!node.workspaceIds.includes(workspace.workspaceId)) node.workspaceIds.push(workspace.workspaceId);
     }
   }
 
-  private applyRuntimeStatus(node: NodeProjection, event: YuanshuMessage): void {
+  private applyRuntimeStatus(node: NodeProjection, event: RelayMessage): void {
     const state = typeof event.payload.state === "string" ? event.payload.state : typeof event.payload.status === "string" ? event.payload.status : undefined;
     if (state) node.runtimeStatus = state;
     node.online = true;
   }
 
-  private applyThreadSnapshot(event: YuanshuMessage): void {
+  private applyThreadSnapshot(event: RelayMessage): void {
     const payload = event.payload;
     const workspaceId = event.workspaceId;
     if (!workspaceId) return;
@@ -376,6 +464,7 @@ export class DataProjection {
       for (const raw of payload.threads) {
         if (!isRecord(raw) || typeof raw.id !== "string") continue;
         const thread = this.upsertThread(event.nodeId, event.ownerId, workspaceId, raw.id, event.sequence);
+		thread.agentInstanceId = stringValue(raw.agentInstanceId) ?? event.agentInstanceId ?? thread.agentInstanceId;
         if (typeof raw.status === "string") thread.status = raw.status;
         this.applyThreadMetadata(thread, raw);
         if (raw.historyState === "complete" || raw.historyState === "partial" || raw.historyState === "unavailable") thread.historyState = raw.historyState;
@@ -388,6 +477,7 @@ export class DataProjection {
     }
     if (!event.threadId) return;
     const thread = this.upsertThread(event.nodeId, event.ownerId, workspaceId, event.threadId, event.sequence);
+	thread.agentInstanceId = event.agentInstanceId ?? stringValue(payload.agentInstanceId) ?? thread.agentInstanceId;
     if (typeof payload.status === "string") thread.status = payload.status;
     this.applyThreadMetadata(thread, payload);
     if (isRecord(payload.thread)) {
@@ -438,9 +528,10 @@ export class DataProjection {
     }
   }
 
-  private applyThreadLifecycle(event: YuanshuMessage, fallback: string): void {
+  private applyThreadLifecycle(event: RelayMessage, fallback: string): void {
     if (!event.workspaceId || !event.threadId) return;
     const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId, event.sequence);
+	thread.agentInstanceId = event.agentInstanceId ?? thread.agentInstanceId;
     thread.status = stringValue(event.payload.status) ?? fallback;
     this.applyThreadMetadata(thread, event.payload);
     thread.recovery = "none";
@@ -448,7 +539,7 @@ export class DataProjection {
     thread.updatedAt = event.sentAt;
   }
 
-  private applyTurnLifecycle(event: YuanshuMessage, fallback: string): void {
+  private applyTurnLifecycle(event: RelayMessage, fallback: string): void {
     if (!event.workspaceId || !event.threadId || !event.turnId) return;
     const turn = this.upsertTurn(event.nodeId, event.ownerId, event.workspaceId, event.threadId, event.turnId);
     turn.status = stringValue(event.payload.status) ?? fallback;
@@ -463,7 +554,7 @@ export class DataProjection {
     thread.updatedAt = event.sentAt;
   }
 
-  private applyHistoryGap(event: YuanshuMessage): void {
+  private applyHistoryGap(event: RelayMessage): void {
     if (!event.workspaceId || !event.threadId) return;
     const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId, event.sequence);
     thread.recovery = "history_gap";
@@ -479,7 +570,7 @@ export class DataProjection {
     if (typeof payload.updatedAt === "string") thread.updatedAt = payload.updatedAt;
   }
 
-  private applyThreadItem(event: YuanshuMessage, item: ThreadItemProjection): void {
+  private applyThreadItem(event: RelayMessage, item: ThreadItemProjection): void {
     if (!event.workspaceId || !event.threadId || !event.turnId) return;
     const turn = this.upsertTurn(event.nodeId, event.ownerId, event.workspaceId, event.threadId, event.turnId);
     const index = turn.items.findIndex((candidate) => candidate.id === item.id);
@@ -517,7 +608,7 @@ export class DataProjection {
     };
   }
 
-  private applyFileChange(event: YuanshuMessage, item: ThreadItemProjection, turnId = event.turnId ?? ""): void {
+  private applyFileChange(event: RelayMessage, item: ThreadItemProjection, turnId = event.turnId ?? ""): void {
     if (!event.workspaceId || !event.threadId || !turnId || !item.path) return;
     const key = fileChangeKey(event.nodeId, event.workspaceId, event.threadId, turnId, item.path);
     const current = this.stateValue.files[key];
@@ -535,7 +626,7 @@ export class DataProjection {
     };
   }
 
-  private applyApprovalRequested(event: YuanshuMessage): void {
+  private applyApprovalRequested(event: RelayMessage): void {
     if (!event.workspaceId || !event.threadId || !event.turnId) return;
     const approvalId = stringValue(event.payload.approvalId);
     if (!approvalId) return;
@@ -557,7 +648,7 @@ export class DataProjection {
     };
   }
 
-  private applyApprovalResolved(event: YuanshuMessage): void {
+  private applyApprovalResolved(event: RelayMessage): void {
     if (!event.workspaceId || !event.threadId || !event.turnId) return;
     const approvalId = stringValue(event.payload.approvalId);
     if (!approvalId) return;
@@ -577,11 +668,11 @@ export class DataProjection {
     this.stateValue.approvals[key] = current;
   }
 
-  private applyControlResult(event: YuanshuMessage): void {
+  private applyControlResult(event: RelayMessage): void {
     this.applyControlResultProjection(event);
   }
 
-  private applyControlResultProjection(event: YuanshuMessage): void {
+  private applyControlResultProjection(event: RelayMessage): void {
     const current = this.stateValue.actions[event.correlationId];
     const status = stringValue(event.payload.status);
     const mapped = status === "confirmed" || status === "rejected" || status === "ambiguous" ? status : current?.state ?? "sent";
@@ -593,7 +684,7 @@ export class DataProjection {
     };
   }
 
-  private appendEvent(event: YuanshuMessage): void {
+  private appendEvent(event: RelayMessage): void {
     const key = eventBucketKey(event);
     const bucket = this.stateValue.events[key] ?? [];
     if (bucket.some((item) => item.sequence === event.sequence && item.nodeId === event.nodeId)) return;
@@ -607,7 +698,7 @@ export class DataProjection {
     const key = workspaceKey(node.nodeId, workspaceId);
     const current = this.stateValue.workspaces[key];
     const { key: _key, ownerId: _ownerId, nodeId: _nodeId, workspaceId: _workspaceId, ...workspaceValues } = values;
-    const next: WorkspaceProjection = { ...current, key, ownerId: node.ownerId, nodeId: node.nodeId, workspaceId, ...workspaceValues };
+    const next: WorkspaceProjection = { ...current, key, ownerId: node.ownerId, nodeId: node.nodeId, workspaceId, agentInstanceIds: [...(current?.agentInstanceIds ?? [])], ...workspaceValues };
     this.stateValue.workspaces[key] = next;
     return next;
   }
@@ -637,6 +728,10 @@ export function workspaceKey(nodeId: string, workspaceId: string): string {
   return [nodeId, workspaceId].join("\u001f");
 }
 
+export function agentKey(nodeId: string, agentInstanceId: string): string {
+  return [nodeId, agentInstanceId].join("\u001f");
+}
+
 export function threadKey(nodeId: string, workspaceId: string, threadId: string): string {
   return [nodeId, workspaceId, threadId].join("\u001f");
 }
@@ -649,12 +744,69 @@ export function fileChangeKey(nodeId: string, workspaceId: string, threadId: str
   return [nodeId, workspaceId, threadId, turnId, path].join("\u001f");
 }
 
-export function eventBucketKey(event: Pick<YuanshuMessage, "nodeId" | "workspaceId" | "threadId" | "turnId">): string {
+export function eventBucketKey(event: Pick<RelayMessage, "nodeId" | "workspaceId" | "threadId" | "turnId">): string {
   return [event.nodeId, event.workspaceId ?? "", event.threadId ?? "", event.turnId ?? ""].join("\u001f");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeAgentEvent(event: RelayMessage): RelayMessage {
+  if (event.protocolVersion !== "1.1") return event;
+  const typeMap: Record<string, string> = {
+    "task.snapshot": "thread.snapshot",
+    "task.started": "thread.started",
+    "task.updated": "thread.started",
+    "run.started": "turn.started",
+    "run.completed": "turn.completed",
+    "run.failed": "turn.failed",
+    "run.interrupted": "turn.interrupted",
+    "message.delta": "agent.message.delta",
+    "message.completed": "agent.message.completed",
+    "interaction.requested": "approval.requested",
+    "interaction.resolved": "approval.resolved",
+  };
+  let type = typeMap[event.type] ?? event.type;
+  const payload: Record<string, unknown> = { ...event.payload };
+  if (event.type === "task.snapshot") {
+    if (Array.isArray(payload.tasks)) payload.threads = payload.tasks;
+    if (isRecord(payload.task)) Object.assign(payload, payload.task);
+    if (Array.isArray(payload.runs)) payload.turns = payload.runs;
+  }
+  if (event.type.startsWith("activity.")) {
+    const kind = stringValue(payload.kind) ?? "tool";
+    const completed = event.type === "activity.completed";
+    if (kind === "command") {
+      type = completed ? "command.completed" : event.type === "activity.updated" && typeof payload.output === "string" ? "command.output.delta" : "command.started";
+      if (payload.commandId === undefined) payload.commandId = event.activityId ?? stringValue(payload.id);
+      if (payload.text === undefined && typeof payload.output === "string") payload.text = payload.output;
+    } else {
+      type = completed ? "tool.completed" : "tool.started";
+      if (payload.toolName === undefined) payload.toolName = stringValue(payload.title) ?? kind;
+    }
+  }
+  if (event.type.startsWith("interaction.")) {
+    const kind = stringValue(payload.kind) ?? "";
+    if (kind === "question" || kind === "mcp_elicitation") return event;
+    if (payload.approvalId === undefined) payload.approvalId = event.interactionId ?? stringValue(payload.id);
+  }
+  return {
+    ...event,
+    type: type as RelayMessage["type"],
+    payload,
+    threadId: event.taskId,
+    turnId: event.runId,
+    itemId: event.activityId ?? event.interactionId,
+  };
+}
+
+function isRuntimeMode(value: unknown): value is AgentProjection["runtimeMode"] {
+  return value === "managed" || value === "attached" || value === "history-only" || value === "detected-only";
+}
+
+function isCapabilityLevel(value: unknown): value is "full" | "read-only" | "unavailable" {
+  return value === "full" || value === "read-only" || value === "unavailable";
 }
 
 function stringValue(value: unknown): string | undefined {

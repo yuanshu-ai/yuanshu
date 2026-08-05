@@ -26,7 +26,8 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   const files = Object.values(state.files).filter((file) => file.nodeId === selectedNodeId && file.workspaceId === selectedWorkspaceId && file.threadId === selectedThreadId).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const scope: LeaseScope | undefined = selectedThreadId && selectedWorkspaceId && selectedNodeId ? { nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, threadId: selectedThreadId } : undefined;
   const lease = scope ? session.getLease(scope) : { state: "none", epoch: 0 } as LeaseState;
-  const leaseHeld = Boolean(scope && session.canMutate(scope, "turn.start"));
+  const leaseHeld = Boolean(scope && session.canMutate(scope, "run.start"));
+	const agentInstanceId = thread?.agentInstanceId;
   const actions = Object.values(state.actions).filter((action) => action.nodeId === selectedNodeId && action.threadId === selectedThreadId).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -86,15 +87,16 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
 
   useEffect(() => () => onDraftChange?.(false), [onDraftChange]);
 
-  const run = async (type: "thread.resume" | "turn.start" | "turn.steer" | "turn.interrupt", payload: Record<string, unknown>, target: { threadId?: string; turnId?: string }, clearInput = false): Promise<boolean> => {
+  const run = async (type: "task.resume" | "run.start" | "run.steer" | "run.interrupt", payload: Record<string, unknown>, target: { taskId?: string; runId?: string }, clearInput = false): Promise<boolean> => {
     setBusy(true);
     setMessage("");
     try {
-      const result = await session.request(type, payload, { nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, ...target });
+	  if (!agentInstanceId) throw new Error("agent_instance_unavailable");
+      const result = await session.request(type, payload, { nodeId: selectedNodeId, agentInstanceId, workspaceId: selectedWorkspaceId, ...target });
       const status = typeof result.payload.status === "string" ? result.payload.status : "rejected";
       if (status !== "confirmed") throw new Error(typeof result.payload.errorCode === "string" ? result.payload.errorCode : status);
       if (clearInput) setInput("");
-      setMessage(type === "turn.interrupt" ? "停止请求已确认" : "设备已确认请求");
+      setMessage(type === "run.interrupt" ? "停止请求已确认" : "设备已确认请求");
       return true;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "操作结果不确定");
@@ -116,8 +118,8 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
       setMessage("该任务尚未载入设备，请先恢复任务再发送");
       return;
     }
-    if (activeTurn) await run("turn.steer", { input: value }, { threadId: selectedThreadId, turnId: activeTurn.turnId }, true);
-    else await run("turn.start", { input: value }, { threadId: selectedThreadId }, true);
+    if (activeTurn) await run("run.steer", { input: value }, { taskId: selectedThreadId, runId: activeTurn.turnId }, true);
+    else await run("run.start", { input: value }, { taskId: selectedThreadId }, true);
   };
 
   const changeLease = async (force: boolean) => {
@@ -143,7 +145,8 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
     setBusy(true);
     setConfirmation(undefined);
     try {
-      const result = await session.request("approval.resolve", { approvalId: approval.approvalId, decision, operationDigest: approval.operationDigest }, { nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, threadId: selectedThreadId, turnId: approval.turnId, itemId: approval.itemId });
+	  if (!agentInstanceId) throw new Error("agent_instance_unavailable");
+      const result = await session.request("interaction.resolve", { decision, operationDigest: approval.operationDigest }, { nodeId: selectedNodeId, agentInstanceId, workspaceId: selectedWorkspaceId, taskId: selectedThreadId, runId: approval.turnId, activityId: approval.itemId, interactionId: approval.approvalId });
       if (result.payload.status !== "confirmed") throw new Error(typeof result.payload.errorCode === "string" ? result.payload.errorCode : "approval_rejected");
       setMessage(decision === "accept" ? "批准已由设备确认" : "拒绝已由设备确认");
     } catch (error) { setMessage(error instanceof Error ? error.message : "审批结果不确定"); }
@@ -169,7 +172,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   const needsResume = !activeTurn && !resumeConfirmed && ["notLoaded", "unavailable"].includes(thread?.status ?? "");
 
   const resumeThread = async () => {
-    if (await run("thread.resume", {}, { threadId: selectedThreadId })) setResumeConfirmed(true);
+    if (await run("task.resume", {}, { taskId: selectedThreadId })) setResumeConfirmed(true);
   };
 
   if (!selectedThreadId) {
@@ -199,7 +202,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
           <form className="composer" onSubmit={(event) => void submit(event)}>
             <label className="sr-only" htmlFor="task-input">任务指令</label>
             <textarea ref={textarea} id="task-input" value={input} onChange={(event) => { setInput(event.target.value); onDraftChange?.(event.target.value.trim().length > 0); }} onKeyDown={onComposerKeyDown} placeholder={placeholder} disabled={busy || connectionState !== "connected" || !selectedWorkspaceId} rows={3} />
-            <div className="composer-actions"><span>{activeTurn ? "纠偏当前执行" : needsResume ? "恢复后可继续" : "追加执行"}<small>Cmd/Ctrl + Enter</small></span><div>{activeTurn && <button className="button danger" type="button" disabled={busy || !leaseHeld} onClick={() => void run("turn.interrupt", {}, { threadId: selectedThreadId, turnId: activeTurn.turnId })}><Icon name="stop" />{t("workbench.composer.stop")}</button>}<button className="button primary" type="submit" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId || !leaseHeld || needsResume}>{busy ? t("workbench.composer.sending") : !leaseHeld ? "需要控制权" : needsResume ? "先恢复任务" : t("workbench.composer.send")}<Icon name="send" /></button></div></div>
+            <div className="composer-actions"><span>{activeTurn ? "纠偏当前执行" : needsResume ? "恢复后可继续" : "追加执行"}<small>Cmd/Ctrl + Enter</small></span><div>{activeTurn && <button className="button danger" type="button" disabled={busy || !leaseHeld} onClick={() => void run("run.interrupt", {}, { taskId: selectedThreadId, runId: activeTurn.turnId })}><Icon name="stop" />{t("workbench.composer.stop")}</button>}<button className="button primary" type="submit" disabled={busy || !input.trim() || connectionState !== "connected" || !selectedWorkspaceId || !leaseHeld || needsResume}>{busy ? t("workbench.composer.sending") : !leaseHeld ? "需要控制权" : needsResume ? "先恢复任务" : t("workbench.composer.send")}<Icon name="send" /></button></div></div>
           </form>
         </div>
       </div>

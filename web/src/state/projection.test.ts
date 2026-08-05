@@ -110,6 +110,25 @@ describe("personal data projection", () => {
     expect(projection.state.turns[turnKey("node-a", "workspace", "thread", "turn")].items.find((item) => item.id === "agent")?.text).toBe("kept");
     expect(projection.state.files[fileChangeKey("node-a", "workspace", "thread", "turn", "app.go")]).toMatchObject({ diff: "+line", truncated: true, totalBytes: 70000, digest: "digest" });
   });
+
+  it("isolates Protocol 1.1 agents and tasks even when native identifiers overlap", () => {
+    const projection = new DataProjection();
+    projection.apply(messageV11("node-a", 1, "agent.snapshot", { agents: [
+      { id: "codex", adapterType: "codex", displayName: "Codex", runtimeMode: "managed", status: "ready", capabilities: [{ id: "task.start", level: "full" }] },
+      { id: "claude-detected", adapterType: "claude-code", displayName: "Claude Code", runtimeMode: "detected-only", status: "detected", capabilities: [] },
+    ] }));
+    projection.apply(messageV11("node-b", 1, "agent.snapshot", { agents: [
+      { id: "codex", adapterType: "codex", displayName: "Codex Home", runtimeMode: "managed", status: "ready", capabilities: [{ id: "task.start", level: "full" }] },
+    ] }));
+    projection.apply(messageV11("node-a", 2, "task.snapshot", { tasks: [{ id: "task", agentInstanceId: "codex", title: "Office task", status: "running" }] }, "workspace", "codex"));
+    projection.apply(messageV11("node-b", 2, "task.snapshot", { tasks: [{ id: "task", agentInstanceId: "codex", title: "Home task", status: "running" }] }, "workspace", "codex"));
+
+    expect(projection.state.agents["node-a\u001fcodex"].displayName).toBe("Codex");
+    expect(projection.state.agents["node-b\u001fcodex"].displayName).toBe("Codex Home");
+    expect(projection.state.agents["node-a\u001fclaude-detected"]).toMatchObject({ runtimeMode: "detected-only", status: "detected" });
+    expect(projection.state.threads[threadKey("node-a", "workspace", "task")]).toMatchObject({ title: "Office task", agentInstanceId: "codex" });
+    expect(projection.state.threads[threadKey("node-b", "workspace", "task")]).toMatchObject({ title: "Home task", agentInstanceId: "codex" });
+  });
 });
 
 function message(nodeId: string, sequence: number, type: string, payload: Record<string, unknown>, workspaceId?: string, threadId?: string, turnId?: string, itemId?: string): YuanshuMessage {
@@ -129,4 +148,12 @@ function message(nodeId: string, sequence: number, type: string, payload: Record
     ...(turnId ? { turnId } : {}),
     ...(itemId ? { itemId } : {}),
   };
+}
+
+function messageV11(nodeId: string, sequence: number, type: string, payload: Record<string, unknown>, workspaceId?: string, agentInstanceId?: string, taskId?: string, runId?: string): YuanshuMessage {
+  return {
+    protocolVersion: "1.1", messageId: `${nodeId}-v11-${sequence}`, type, ownerId: "owner", nodeId, streamId: "node-events-v1.1",
+    sequence, correlationId: `${nodeId}-v11-correlation-${sequence}`, sentAt: "2026-08-03T00:00:00Z", payload,
+    ...(workspaceId ? { workspaceId } : {}), ...(agentInstanceId ? { agentInstanceId } : {}), ...(taskId ? { taskId } : {}), ...(runId ? { runId } : {}),
+  } as unknown as YuanshuMessage;
 }
