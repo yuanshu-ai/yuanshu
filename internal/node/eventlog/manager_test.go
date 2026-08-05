@@ -15,6 +15,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 )
 
 var eventNow = time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)
@@ -142,6 +143,42 @@ func TestInvalidEventAndErrorsDoNotExposePayload(t *testing.T) {
 	_, err := manager.Publish(context.Background(), adapter.AgentEvent{Type: protocol.EventAgentMessageDelta, Payload: map[string]any{"unexpected": canary}})
 	if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), canary) {
 		t.Fatalf("unsafe invalid event error = %v", err)
+	}
+}
+
+func TestProtocolV11PersistsQuestionInteractionAndVisibleReasoning(t *testing.T) {
+	local, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "node.db"), store.Options{Clock: func() time.Time { return eventNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	manager, err := NewManager(local, Options{OwnerID: "owner", NodeID: "node", ProtocolVersion: protocolv11.CurrentVersion, MaxAge: time.Hour, MaxBytes: 16 << 20, Clock: func() time.Time { return eventNow }, Random: &incrementingReader{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested, err := manager.Publish(context.Background(), adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventInteractionRequested), AgentInstanceID: "codex-default", WorkspaceID: "workspace", ThreadID: "task", TurnID: "run", ItemID: "item", Payload: map[string]any{"id": "interaction", "kind": "question", "status": "pending", "summary": "Choose", "expiresAt": eventNow.Add(time.Minute).Format(time.RFC3339Nano), "questions": []any{map[string]any{"id": "q1", "header": "Target", "question": "Which target?", "options": []any{map[string]any{"id": "o1", "label": "Alpha"}}}}}})
+	if err != nil || len(requested) != 1 {
+		t.Fatalf("interaction Publish = %#v, %v", requested, err)
+	}
+	message, err := protocolv11.ParseEvent(requested[0].Frame)
+	if err != nil || message.InteractionID == nil || *message.InteractionID != "interaction" || message.Payload["operationDigest"] == "" {
+		t.Fatalf("interaction event = %#v, %v", message, err)
+	}
+	pending, err := local.PendingApprovals(context.Background(), "task")
+	if err != nil || len(pending) != 1 || pending[0].ApprovalID != "interaction" || pending[0].OperationDigest == "" {
+		t.Fatalf("pending interactions = %#v, %v", pending, err)
+	}
+	reasoning, err := manager.Publish(context.Background(), adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventReasoningSummaryDelta), AgentInstanceID: "codex-default", WorkspaceID: "workspace", ThreadID: "task", TurnID: "run", ItemID: "reasoning", Payload: map[string]any{"text": "Visible summary"}})
+	if err != nil || len(reasoning) != 1 {
+		t.Fatalf("reasoning Publish = %#v, %v", reasoning, err)
+	}
+	approval, err := manager.Publish(context.Background(), adapter.AgentEvent{Type: protocol.EventApprovalRequested, AgentInstanceID: "codex-default", WorkspaceID: "workspace", ThreadID: "task", TurnID: "run", ItemID: "file", Approval: &adapter.Approval{ID: "file-approval", Kind: "file-change", Summary: "Modify a file", Operation: map[string]any{"grantRoot": "."}, ExpiresAt: eventNow.Add(time.Minute)}})
+	if err != nil || len(approval) != 1 {
+		t.Fatalf("approval Publish = %#v, %v", approval, err)
+	}
+	approvalEvent, err := protocolv11.ParseEvent(approval[0].Frame)
+	if err != nil || approvalEvent.Payload["kind"] != "file_approval" || approvalEvent.Payload["details"] == nil || approvalEvent.Payload["operation"] != nil {
+		t.Fatalf("projected approval = %#v, %v", approvalEvent, err)
 	}
 }
 

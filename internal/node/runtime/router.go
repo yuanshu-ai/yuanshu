@@ -45,7 +45,10 @@ type Router struct {
 	workers           sync.WaitGroup
 }
 
-var _ adapter.Runtime = (*Router)(nil)
+var (
+	_ adapter.Runtime             = (*Router)(nil)
+	_ adapter.InteractionResolver = (*Router)(nil)
+)
 
 func NewRouter(options RouterOptions) (*Router, error) {
 	if options.Store == nil || options.DefaultInstanceID == "" || len(options.Sources) == 0 || options.EventCapacity < 0 {
@@ -226,6 +229,19 @@ func (r *Router) ResolveApproval(ctx context.Context, request adapter.ApprovalDe
 	}
 	request.ThreadID = binding.NativeSessionID
 	return source.Runtime.ResolveApproval(ctx, request)
+}
+
+func (r *Router) ResolveInteraction(ctx context.Context, request adapter.InteractionDecision) error {
+	binding, source, err := r.resolveTask(ctx, request.WorkspaceID, request.ThreadID, "")
+	if err != nil {
+		return err
+	}
+	resolver, ok := source.Runtime.(adapter.InteractionResolver)
+	if !ok {
+		return adapter.ErrUnsupported
+	}
+	request.ThreadID = binding.NativeSessionID
+	return resolver.ResolveInteraction(ctx, request)
 }
 
 func (r *Router) pump(source Source) {

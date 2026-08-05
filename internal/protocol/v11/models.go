@@ -36,10 +36,31 @@ type TaskSummary struct {
 }
 
 type RunSummary struct {
-	ID          string `json:"id"`
-	Status      string `json:"status"`
-	StartedAt   string `json:"startedAt,omitempty"`
-	CompletedAt string `json:"completedAt,omitempty"`
+	ID          string    `json:"id"`
+	Status      string    `json:"status"`
+	StartedAt   string    `json:"startedAt,omitempty"`
+	CompletedAt string    `json:"completedAt,omitempty"`
+	Items       []RunItem `json:"items,omitempty"`
+}
+
+type RunItem struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Status       string `json:"status,omitempty"`
+	Text         string `json:"text,omitempty"`
+	Command      string `json:"command,omitempty"`
+	Output       string `json:"output,omitempty"`
+	ToolName     string `json:"toolName,omitempty"`
+	Path         string `json:"path,omitempty"`
+	ChangeType   string `json:"changeType,omitempty"`
+	Diff         string `json:"diff,omitempty"`
+	ExitCode     *int   `json:"exitCode,omitempty"`
+	ErrorCode    string `json:"errorCode,omitempty"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
+	Partial      bool   `json:"partial,omitempty"`
+	Truncated    bool   `json:"truncated,omitempty"`
+	TotalBytes   int    `json:"totalBytes,omitempty"`
+	Digest       string `json:"digest,omitempty"`
 }
 
 type Activity struct {
@@ -55,19 +76,39 @@ type Activity struct {
 }
 
 type InteractionOption struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+type InteractionQuestion struct {
+	ID       string              `json:"id"`
+	Header   string              `json:"header"`
+	Question string              `json:"question"`
+	IsOther  bool                `json:"isOther,omitempty"`
+	IsSecret bool                `json:"isSecret,omitempty"`
+	Options  []InteractionOption `json:"options,omitempty"`
+}
+
+type InteractionAnswer struct {
+	QuestionID string   `json:"questionId"`
+	Answers    []string `json:"answers"`
 }
 
 type Interaction struct {
-	ID              string              `json:"id"`
-	Kind            string              `json:"kind"`
-	Status          string              `json:"status"`
-	Summary         string              `json:"summary,omitempty"`
-	Risk            string              `json:"risk,omitempty"`
-	OperationDigest string              `json:"operationDigest"`
-	ExpiresAt       string              `json:"expiresAt"`
-	Options         []InteractionOption `json:"options,omitempty"`
+	ID              string                `json:"id"`
+	Kind            string                `json:"kind"`
+	Status          string                `json:"status"`
+	Summary         string                `json:"summary,omitempty"`
+	Risk            string                `json:"risk,omitempty"`
+	RunID           string                `json:"runId,omitempty"`
+	ActivityID      string                `json:"activityId,omitempty"`
+	Details         map[string]any        `json:"details,omitempty"`
+	OperationDigest string                `json:"operationDigest"`
+	ExpiresAt       string                `json:"expiresAt"`
+	Options         []InteractionOption   `json:"options,omitempty"`
+	Questions       []InteractionQuestion `json:"questions,omitempty"`
+	Blocking        bool                  `json:"blocking,omitempty"`
 }
 
 type TaskSnapshotModel struct {

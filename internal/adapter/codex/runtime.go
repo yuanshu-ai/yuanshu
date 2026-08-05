@@ -22,14 +22,16 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 )
 
 var (
-	_ adapter.Runtime           = (*Runtime)(nil)
-	_ adapter.SessionReader     = (*Runtime)(nil)
-	_ adapter.SessionRunner     = (*Runtime)(nil)
-	_ adapter.LiveController    = (*Runtime)(nil)
-	_ adapter.RuntimeConnection = (*Runtime)(nil)
+	_ adapter.Runtime             = (*Runtime)(nil)
+	_ adapter.SessionReader       = (*Runtime)(nil)
+	_ adapter.SessionRunner       = (*Runtime)(nil)
+	_ adapter.LiveController      = (*Runtime)(nil)
+	_ adapter.RuntimeConnection   = (*Runtime)(nil)
+	_ adapter.InteractionResolver = (*Runtime)(nil)
 )
 
 type pendingApproval struct {
@@ -40,6 +42,23 @@ type pendingApproval struct {
 	turnID      string
 	itemID      string
 	kind        string
+	timer       *time.Timer
+}
+
+type pendingQuestion struct {
+	nativeID string
+	options  map[string]string
+	other    bool
+}
+
+type pendingUserInput struct {
+	id          string
+	requestID   appserver.RequestID
+	workspaceID string
+	threadID    string
+	turnID      string
+	itemID      string
+	questions   map[string]pendingQuestion
 	timer       *time.Timer
 }
 
@@ -55,6 +74,7 @@ type Runtime struct {
 	generation   uint64
 	loaded       map[string]uint64
 	pending      map[string]*pendingApproval
+	inputs       map[string]*pendingUserInput
 	activeThread string
 	activeTurn   string
 	health       adapter.HealthStatus
@@ -67,7 +87,7 @@ func newRuntime(options Options, installation adapter.Installation) *Runtime {
 	return &Runtime{
 		options: options, installation: installation,
 		events: make(chan adapter.AgentEvent, options.EventCapacity),
-		loaded: make(map[string]uint64), pending: make(map[string]*pendingApproval),
+		loaded: make(map[string]uint64), pending: make(map[string]*pendingApproval), inputs: make(map[string]*pendingUserInput),
 		health: adapter.HealthStatus{State: "starting", CodexVersion: installation.Version, Protocol: installation.Protocol},
 	}
 }
@@ -431,6 +451,81 @@ func (r *Runtime) ResolveApproval(ctx context.Context, decision adapter.Approval
 	return nil
 }
 
+func (r *Runtime) ResolveInteraction(ctx context.Context, decision adapter.InteractionDecision) error {
+	r.opMu.Lock()
+	defer r.opMu.Unlock()
+	r.mu.Lock()
+	pending, exists := r.inputs[decision.InteractionID]
+	if !exists || pending.workspaceID != decision.WorkspaceID || pending.threadID != decision.ThreadID || pending.turnID != decision.TurnID || pending.itemID != decision.ItemID {
+		exists = false
+	}
+	client := r.client
+	r.mu.Unlock()
+	if !exists {
+		return adapter.ErrConflict
+	}
+	if _, _, err := r.ownedThread(ctx, decision.WorkspaceID, decision.ThreadID); err != nil {
+		return err
+	}
+	if client == nil {
+		return adapter.ErrAmbiguous
+	}
+	answers, err := validateInteractionAnswers(pending, decision.Answers)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	if current, currentExists := r.inputs[decision.InteractionID]; !currentExists || current != pending {
+		r.mu.Unlock()
+		return adapter.ErrConflict
+	}
+	delete(r.inputs, decision.InteractionID)
+	pending.timer.Stop()
+	r.mu.Unlock()
+	result := map[string]any{"answers": answers}
+	if err := client.Respond(pending.requestID, result, nil); err != nil {
+		return mapCallError(err)
+	}
+	r.emit(adapter.AgentEvent{
+		Type: protocol.EventType(protocolv11.EventInteractionResolved), WorkspaceID: pending.workspaceID, ThreadID: pending.threadID, TurnID: pending.turnID, ItemID: pending.itemID,
+		Payload: map[string]any{"id": pending.id, "kind": "question", "status": "answered"},
+	})
+	return nil
+}
+
+func validateInteractionAnswers(pending *pendingUserInput, values []adapter.InteractionAnswer) (map[string]any, error) {
+	if pending == nil || len(values) != len(pending.questions) {
+		return nil, adapter.ErrInvalid
+	}
+	result := make(map[string]any, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		question, ok := pending.questions[value.QuestionID]
+		if !ok || len(value.Answers) == 0 || len(value.Answers) > 32 {
+			return nil, adapter.ErrInvalid
+		}
+		if _, duplicate := seen[value.QuestionID]; duplicate {
+			return nil, adapter.ErrInvalid
+		}
+		seen[value.QuestionID] = struct{}{}
+		answers := make([]string, 0, len(value.Answers))
+		for _, answer := range value.Answers {
+			answer = strings.TrimSpace(answer)
+			if answer == "" || len(answer) > 65536 {
+				return nil, adapter.ErrInvalid
+			}
+			if label, selected := question.options[answer]; selected {
+				answer = label
+			} else if len(question.options) > 0 && !question.other {
+				return nil, adapter.ErrInvalid
+			}
+			answers = append(answers, answer)
+		}
+		result[question.nativeID] = map[string]any{"answers": answers}
+	}
+	return result, nil
+}
+
 func (r *Runtime) Events() <-chan adapter.AgentEvent { return r.events }
 
 func (r *Runtime) Health() adapter.HealthStatus {
@@ -456,11 +551,20 @@ func (r *Runtime) Close(ctx context.Context) error {
 			pending = append(pending, item)
 		}
 		r.pending = make(map[string]*pendingApproval)
+		inputs := make([]*pendingUserInput, 0, len(r.inputs))
+		for _, item := range r.inputs {
+			item.timer.Stop()
+			inputs = append(inputs, item)
+		}
+		r.inputs = make(map[string]*pendingUserInput)
 		activeThread, activeTurn := r.activeThread, r.activeTurn
 		r.mu.Unlock()
 		if client != nil {
 			for _, item := range pending {
 				_ = client.Respond(item.requestID, map[string]string{"decision": "decline"}, nil)
+			}
+			for _, item := range inputs {
+				_ = client.Respond(item.requestID, nil, &appserver.RPCError{Code: -32001, Message: "Yuanshu closed before the interaction was answered"})
 			}
 			if activeThread != "" && activeTurn != "" {
 				_ = client.Call(ctx, "turn/interrupt", map[string]string{"threadId": activeThread, "turnId": activeTurn}, nil)
@@ -670,9 +774,16 @@ type codexThreadItem struct {
 	ExitCode         *int              `json:"exitCode"`
 	Tool             string            `json:"tool"`
 	Server           string            `json:"server"`
+	Namespace        string            `json:"namespace"`
+	Query            string            `json:"query"`
+	Path             string            `json:"path"`
+	Kind             string            `json:"kind"`
 	Content          []json.RawMessage `json:"content"`
-	Changes          []codexFileChange `json:"changes"`
-	Error            *codexItemError   `json:"error"`
+	Summary          []struct {
+		Text string `json:"text"`
+	} `json:"summary"`
+	Changes []codexFileChange `json:"changes"`
+	Error   *codexItemError   `json:"error"`
 }
 
 type codexFileChange struct {
@@ -768,12 +879,40 @@ func publicThreadItem(value codexThreadItem, root string) (adapter.ThreadItem, b
 			return item, true
 		}
 		item = publicFileChangeItem(value.ID, value.Status, value.Changes[0], root)
-	case "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch":
+	case "reasoning":
+		parts := make([]string, 0, len(value.Summary))
+		for _, part := range value.Summary {
+			if text := strings.TrimSpace(part.Text); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		item.Kind, item.Text = "reasoning_summary", boundedHistoryTextFlag(strings.Join(parts, "\n\n"), &item.Truncated)
+		if item.Text == "" {
+			// Never expose Reasoning.content. Older Codex versions that omit a
+			// public summary are represented as partial instead.
+			item.Partial = true
+		}
+	case "plan":
+		item.Kind, item.Text = "plan", boundedHistoryTextFlag(value.Text, &item.Truncated)
+	case "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "webSearch", "imageView", "imageGeneration", "sleep", "enteredReviewMode", "exitedReviewMode", "contextCompaction":
 		item.Kind, item.ToolName = "tool", boundedHistoryTextFlag(value.Tool, &item.Truncated)
 		if item.ToolName == "" {
 			item.ToolName = boundedHistoryTextFlag(value.Server, &item.Truncated)
 		}
-	case "plan", "reasoning", "hookPrompt":
+		if item.ToolName == "" {
+			item.ToolName = stableToolLabel(value.Type)
+		}
+		if value.Type == "webSearch" {
+			item.Text = boundedHistoryTextFlag(value.Query, &item.Truncated)
+		}
+		if value.Type == "imageView" && value.Path != "" {
+			if logical, valid := logicalExistingOrFuture(root, value.Path); valid {
+				item.Path = logical
+			} else {
+				item.Partial = true
+			}
+		}
+	case "hookPrompt":
 		item.Kind, item.Text, item.Partial = "unknown", boundedHistoryTextFlag(value.Text, &item.Truncated), true
 	default:
 		item.Kind, item.Partial = "unknown", true
@@ -782,6 +921,15 @@ func publicThreadItem(value codexThreadItem, root string) (adapter.ThreadItem, b
 		item.ErrorMessage, item.Partial = boundedHistoryTextFlag(value.Error.Message, &item.Truncated), true
 	}
 	return item, true
+}
+
+func stableToolLabel(kind string) string {
+	return map[string]string{
+		"mcpToolCall": "MCP tool", "dynamicToolCall": "Dynamic tool", "collabAgentToolCall": "Collaboration",
+		"subAgentActivity": "Sub-agent activity", "webSearch": "Web search", "imageView": "Image view",
+		"imageGeneration": "Image generation", "sleep": "Wait", "enteredReviewMode": "Review started",
+		"exitedReviewMode": "Review completed", "contextCompaction": "Context compaction",
+	}[kind]
 }
 
 func publicFileChangeItem(id, status string, change codexFileChange, root string) adapter.ThreadItem {

@@ -144,8 +144,8 @@ func (m *Manager) Publish(ctx context.Context, event adapter.AgentEvent) ([]Reco
 		records = append(records, record)
 		if m.protocolVersion == protocol.CurrentVersion {
 			_ = m.updateSnapshot(ctx, record, spec.payload)
-			_ = m.updateApproval(ctx, record, spec.payload)
 		}
+		_ = m.updateApproval(ctx, record, spec.payload)
 	}
 	return records, nil
 }

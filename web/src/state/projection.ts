@@ -65,6 +65,7 @@ export interface ThreadProjection {
   firstObservedSequence?: number;
   latestSequence: number;
   recovery: "none" | "pending" | "history_gap";
+  tokenUsage?: TokenUsageProjection;
 }
 
 export interface TurnProjection {
@@ -80,7 +81,52 @@ export interface TurnProjection {
   updatedAt?: string;
 }
 
-export type ThreadItemKind = "user_message" | "agent_message" | "command" | "command_output" | "tool" | "file_change" | "diff" | "error" | "unknown";
+export type ThreadItemKind = "user_message" | "agent_message" | "reasoning_summary" | "plan" | "command" | "command_output" | "tool" | "file_change" | "diff" | "error" | "unknown";
+
+export interface TokenUsageProjection {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+  modelContextWindow?: number;
+}
+
+export interface PlanProjection {
+  key: string;
+  nodeId: string;
+  workspaceId: string;
+  threadId: string;
+  turnId: string;
+  explanation?: string;
+  steps: Array<{ text: string; status: string }>;
+  updatedAt: string;
+}
+
+export interface InteractionQuestionProjection {
+  id: string;
+  header: string;
+  question: string;
+  isOther?: boolean;
+  options: Array<{ id: string; label: string; description?: string }>;
+}
+
+export interface InteractionProjection {
+  key: string;
+  nodeId: string;
+  workspaceId: string;
+  threadId: string;
+  turnId: string;
+  itemId?: string;
+  interactionId: string;
+  kind: string;
+  status: string;
+  summary?: string;
+  operationDigest?: string;
+  expiresAt?: string;
+  blocking?: boolean;
+  questions: InteractionQuestionProjection[];
+}
 
 export interface ThreadItemProjection {
   id: string;
@@ -171,6 +217,8 @@ export interface ProjectionState {
   turns: Record<string, TurnProjection>;
   events: Record<string, EventProjection[]>;
   approvals: Record<string, ApprovalProjection>;
+  interactions: Record<string, InteractionProjection>;
+  plans: Record<string, PlanProjection>;
   files: Record<string, FileChangeProjection>;
   notifications: Record<string, NotificationProjection>;
   actions: Record<string, ControlActionProjection>;
@@ -202,6 +250,8 @@ export class DataProjection {
     turns: {},
     events: {},
     approvals: {},
+    interactions: {},
+    plans: {},
     files: {},
     notifications: {},
     actions: {},
@@ -278,6 +328,28 @@ export class DataProjection {
 	  this.appendEvent(event);
 	  return;
 	}
+    if (event.protocolVersion === "1.1") {
+      if (event.type === "task.updated") {
+        this.applyTaskUpdated(event);
+        this.appendEvent(event);
+        return;
+      }
+      if (event.type === "reasoning.summary.delta" || event.type === "reasoning.summary.completed") {
+        this.applyThreadItem(event, { id: event.activityId ?? `${event.runId ?? "run"}:reasoning`, kind: "reasoning_summary", text: stringValue(event.payload.text) ?? "", status: event.type.endsWith("completed") ? "completed" : "streaming", partial: event.payload.partial === true, sequence: event.sequence });
+        this.appendEvent(event);
+        return;
+      }
+      if (event.type === "plan.updated") {
+        this.applyPlan(event);
+        this.appendEvent(event);
+        return;
+      }
+      if (event.type === "interaction.requested" || event.type === "interaction.resolved") {
+        this.applyInteraction(event);
+        this.appendEvent(event);
+        return;
+      }
+    }
     const normalized = normalizeAgentEvent(event);
     switch (normalized.type) {
       case "device.status":
@@ -305,10 +377,10 @@ export class DataProjection {
         this.applyTurnLifecycle(normalized, "interrupted");
         break;
       case "agent.message.delta":
-        this.applyThreadItem(normalized, { id: normalized.itemId ?? `${normalized.turnId ?? "turn"}:agent`, kind: "agent_message", text: stringValue(normalized.payload.text) ?? "", status: "streaming", sequence: normalized.sequence });
+        this.applyThreadItem(normalized, { id: normalized.itemId ?? `${normalized.turnId ?? "turn"}:agent`, kind: normalized.payload.role === "user" ? "user_message" : "agent_message", text: stringValue(normalized.payload.text) ?? "", status: "streaming", sequence: normalized.sequence });
         break;
       case "agent.message.completed":
-        this.applyThreadItem(normalized, { id: normalized.itemId ?? `${normalized.turnId ?? "turn"}:agent`, kind: "agent_message", text: stringValue(normalized.payload.text) ?? "", status: "completed", sequence: normalized.sequence });
+        this.applyThreadItem(normalized, { id: normalized.itemId ?? `${normalized.turnId ?? "turn"}:agent`, kind: normalized.payload.role === "user" ? "user_message" : "agent_message", text: stringValue(normalized.payload.text) ?? "", status: "completed", sequence: normalized.sequence });
         break;
       case "command.started":
       case "command.completed":
@@ -486,6 +558,10 @@ export class DataProjection {
     }
     if (payload.historyState === "complete" || payload.historyState === "partial" || payload.historyState === "unavailable") thread.historyState = payload.historyState;
     if (Array.isArray(payload.pendingApprovals)) thread.pendingApprovals = payload.pendingApprovals.length;
+	if (Array.isArray(payload.interactions)) {
+	  thread.pendingApprovals = payload.interactions.filter((value) => isRecord(value) && value.status === "pending").length;
+	  for (const interaction of payload.interactions) if (isRecord(interaction)) this.applyInteraction({ ...event, interactionId: stringValue(interaction.id), payload: interaction });
+	}
     if (Array.isArray(payload.pendingApprovals)) {
       for (const raw of payload.pendingApprovals) {
         if (!isRecord(raw)) continue;
@@ -526,6 +602,54 @@ export class DataProjection {
       turn.updatedAt = event.sentAt;
       if (!thread.turnIds.includes(turn.turnId)) thread.turnIds.push(turn.turnId);
     }
+  }
+
+  private applyTaskUpdated(event: RelayMessage): void {
+    if (!event.workspaceId || !event.taskId) return;
+    const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.taskId, event.sequence);
+    if (typeof event.payload.status === "string") thread.status = event.payload.status;
+    if (isRecord(event.payload.tokenUsage)) {
+      thread.tokenUsage = {
+        inputTokens: numberValue(event.payload.tokenUsage.inputTokens), cachedInputTokens: numberValue(event.payload.tokenUsage.cachedInputTokens),
+        outputTokens: numberValue(event.payload.tokenUsage.outputTokens), reasoningOutputTokens: numberValue(event.payload.tokenUsage.reasoningOutputTokens),
+        totalTokens: numberValue(event.payload.tokenUsage.totalTokens), modelContextWindow: numberValue(event.payload.tokenUsage.modelContextWindow),
+      };
+    }
+    thread.latestSequence = Math.max(thread.latestSequence, event.sequence);
+    thread.updatedAt = event.sentAt;
+  }
+
+  private applyPlan(event: RelayMessage): void {
+    if (!event.workspaceId || !event.taskId || !event.runId) return;
+    const steps = Array.isArray(event.payload.steps) ? event.payload.steps.flatMap((raw) => isRecord(raw) && typeof raw.text === "string" ? [{ text: raw.text, status: stringValue(raw.status) ?? "pending" }] : []) : [];
+    const key = [event.nodeId, event.workspaceId, event.taskId, event.runId].join("\u001f");
+    this.stateValue.plans[key] = { key, nodeId: event.nodeId, workspaceId: event.workspaceId, threadId: event.taskId, turnId: event.runId, explanation: stringValue(event.payload.explanation), steps, updatedAt: event.sentAt };
+    if (typeof event.payload.text === "string") {
+      this.applyThreadItem(event, { id: event.activityId ?? `${event.runId}:plan`, kind: "plan", text: event.payload.text, status: "updated", sequence: event.sequence });
+    }
+  }
+
+  private applyInteraction(event: RelayMessage): void {
+    const workspaceId = event.workspaceId;
+    const threadId = event.taskId ?? event.threadId;
+    const turnId = event.runId ?? event.turnId ?? stringValue(event.payload.runId);
+    const interactionId = event.interactionId ?? stringValue(event.payload.id);
+    if (!workspaceId || !threadId || !turnId || !interactionId) return;
+    const key = [event.nodeId, workspaceId, threadId, turnId, interactionId].join("\u001f");
+    const current = this.stateValue.interactions[key];
+    const questions = Array.isArray(event.payload.questions) ? event.payload.questions.flatMap((raw) => {
+      if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.header !== "string" || typeof raw.question !== "string") return [];
+      const options = Array.isArray(raw.options) ? raw.options.flatMap((option) => isRecord(option) && typeof option.id === "string" && typeof option.label === "string" ? [{ id: option.id, label: option.label, description: stringValue(option.description) }] : []) : [];
+      return [{ id: raw.id, header: raw.header, question: raw.question, isOther: raw.isOther === true, options }];
+    }) : current?.questions ?? [];
+    this.stateValue.interactions[key] = {
+      ...current, key, nodeId: event.nodeId, workspaceId, threadId, turnId, itemId: event.activityId ?? event.itemId ?? stringValue(event.payload.activityId) ?? current?.itemId,
+      interactionId, kind: stringValue(event.payload.kind) ?? current?.kind ?? "unknown", status: stringValue(event.payload.status) ?? current?.status ?? "pending",
+      summary: stringValue(event.payload.summary) ?? current?.summary, operationDigest: stringValue(event.payload.operationDigest) ?? current?.operationDigest,
+      expiresAt: stringValue(event.payload.expiresAt) ?? current?.expiresAt, blocking: booleanValue(event.payload.blocking) ?? current?.blocking, questions,
+    };
+    const thread = this.upsertThread(event.nodeId, event.ownerId, workspaceId, threadId, event.sequence);
+    thread.pendingApprovals = Object.values(this.stateValue.interactions).filter((item) => item.nodeId === event.nodeId && item.workspaceId === workspaceId && item.threadId === threadId && item.status === "pending").length + Object.values(this.stateValue.approvals).filter((item) => item.nodeId === event.nodeId && item.workspaceId === workspaceId && item.threadId === threadId && item.status === "pending").length;
   }
 
   private applyThreadLifecycle(event: RelayMessage, fallback: string): void {
@@ -571,12 +695,14 @@ export class DataProjection {
   }
 
   private applyThreadItem(event: RelayMessage, item: ThreadItemProjection): void {
-    if (!event.workspaceId || !event.threadId || !event.turnId) return;
-    const turn = this.upsertTurn(event.nodeId, event.ownerId, event.workspaceId, event.threadId, event.turnId);
+	const threadId = event.threadId ?? event.taskId;
+	const turnId = event.turnId ?? event.runId;
+	if (!event.workspaceId || !threadId || !turnId) return;
+	const turn = this.upsertTurn(event.nodeId, event.ownerId, event.workspaceId, threadId, turnId);
     const index = turn.items.findIndex((candidate) => candidate.id === item.id);
     if (index < 0) turn.items.push(item);
     else turn.items[index] = mergeItem(turn.items[index], item);
-    const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, event.threadId, event.sequence);
+	const thread = this.upsertThread(event.nodeId, event.ownerId, event.workspaceId, threadId, event.sequence);
     if (!thread.turnIds.includes(turn.turnId)) thread.turnIds.push(turn.turnId);
     turn.updatedAt = event.sentAt;
     if ((item.kind === "file_change" || item.kind === "diff") && item.path) this.applyFileChange(event, item);
@@ -584,7 +710,7 @@ export class DataProjection {
 
   private itemFromPayload(raw: unknown, sequence: number): ThreadItemProjection | undefined {
     if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.kind !== "string") return undefined;
-    const kinds = new Set<ThreadItemKind>(["user_message", "agent_message", "command", "command_output", "tool", "file_change", "diff", "error", "unknown"]);
+    const kinds = new Set<ThreadItemKind>(["user_message", "agent_message", "reasoning_summary", "plan", "command", "command_output", "tool", "file_change", "diff", "error", "unknown"]);
     const kind = kinds.has(raw.kind as ThreadItemKind) ? raw.kind as ThreadItemKind : "unknown";
     return {
       id: raw.id,
@@ -824,14 +950,26 @@ function numberValue(value: unknown): number | undefined {
 function mergeItem(current: ThreadItemProjection, incoming: ThreadItemProjection): ThreadItemProjection {
   const next = { ...current, ...incoming };
   if (current.kind === "agent_message" && incoming.kind === "agent_message" && incoming.sequence !== current.sequence) {
-    next.text = incoming.text === current.text ? current.text : `${current.text ?? ""}${incoming.text ?? ""}`;
+    if (incoming.text === current.text) next.text = current.text;
+    else [next.text, next.truncated] = appendBounded(current.text, incoming.text, current.truncated);
+  }
+  if (current.kind === "reasoning_summary" && incoming.kind === "reasoning_summary" && incoming.sequence !== current.sequence) {
+    if (incoming.text === current.text) next.text = current.text;
+    else [next.text, next.truncated] = appendBounded(current.text, incoming.text, current.truncated);
   }
   if (current.kind === "command_output" && incoming.kind === "command_output" && incoming.sequence !== current.sequence) {
-    next.output = `${current.output ?? ""}${incoming.output ?? ""}`;
+    [next.output, next.truncated] = appendBounded(current.output, incoming.output, current.truncated);
   }
   if (current.kind === "command" && incoming.kind === "command_output") {
     next.output = `${current.output ?? ""}${incoming.output ?? ""}`;
     next.kind = "command";
   }
   return next;
+}
+
+function appendBounded(current = "", incoming = "", alreadyTruncated = false): [string, boolean] {
+  const limit = 256 * 1024;
+  const combined = `${current}${incoming}`;
+  if (combined.length <= limit) return [combined, alreadyTruncated];
+  return [combined.slice(0, limit), true];
 }

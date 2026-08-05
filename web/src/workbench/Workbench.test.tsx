@@ -149,6 +149,19 @@ describe("personal workbench", () => {
     expect(screen.queryByRole("button", { name: "查看 1 条新内容" })).not.toBeInTheDocument();
   });
 
+  it("renders a Codex question above the composer and sends a structured answer", async () => {
+    sessionStorage.setItem("yuanshu-workbench-context", JSON.stringify({ nodeId: "node-a", workspaceId: "workspace-a", threadId: "thread-a" }));
+    const fake = new FakeSession();
+    fake.canMutate = () => true;
+    act(() => fake.push({ ...event(6, "interaction.requested", { id: "interaction", kind: "question", status: "pending", summary: "Choose a target", operationDigest: "A".repeat(43), expiresAt: "2099-01-01T00:00:00Z", blocking: true, questions: [{ id: "q1", header: "Target", question: "Which target?", options: [{ id: "o1", label: "Alpha" }] }] }, "workspace-a"), protocolVersion: "1.1", streamId: "node-events-v1.1", taskId: "thread-a", runId: "turn-a", interactionId: "interaction", activityId: "item-a", agentInstanceId: "codex-default", threadId: undefined } as never));
+    render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
+
+    expect(await screen.findByText("Choose a target")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: /Alpha/ }));
+    fireEvent.click(screen.getByRole("button", { name: "发送回答" }));
+    await waitFor(() => expect(fake.request).toHaveBeenCalledWith("interaction.resolve", { answers: [{ questionId: "q1", answers: ["o1"] }], operationDigest: "A".repeat(43) }, expect.objectContaining({ taskId: "thread-a", runId: "turn-a", interactionId: "interaction" })));
+  });
+
   it("seeds initial history as read and reports a newly observed Thread", async () => {
     const fake = new FakeSession();
     render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);

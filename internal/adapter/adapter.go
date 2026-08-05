@@ -106,6 +106,13 @@ type LiveController interface {
 	ResolveApproval(ctx context.Context, decision ApprovalDecision) error
 }
 
+// InteractionResolver is an optional capability for Agent-native questions and
+// elicitations. It is separate from Runtime so adapters without this feature
+// remain source-compatible and must not advertise a false capability.
+type InteractionResolver interface {
+	ResolveInteraction(ctx context.Context, decision InteractionDecision) error
+}
+
 type RuntimeConnection interface {
 	Events() <-chan AgentEvent
 	Health() HealthStatus
@@ -173,6 +180,20 @@ type ApprovalDecision struct {
 	ItemID      string
 	ApprovalID  string
 	Decision    string
+}
+
+type InteractionAnswer struct {
+	QuestionID string   `json:"questionId"`
+	Answers    []string `json:"answers"`
+}
+
+type InteractionDecision struct {
+	WorkspaceID   string
+	ThreadID      string
+	TurnID        string
+	ItemID        string
+	InteractionID string
+	Answers       []InteractionAnswer
 }
 
 type Thread struct {

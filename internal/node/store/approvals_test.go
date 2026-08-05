@@ -50,4 +50,14 @@ func TestApprovalClaimIsSingleUseAndExpires(t *testing.T) {
 	if err != nil || stored.Status != ApprovalExpired {
 		t.Fatalf("expired status=%+v err=%v", stored, err)
 	}
+
+	interaction := record
+	interaction.ApprovalID = "interaction"
+	if err := local.SaveApproval(context.Background(), interaction); err != nil {
+		t.Fatal(err)
+	}
+	claim = ApprovalClaim{ApprovalID: "interaction", WorkspaceID: "workspace", ThreadID: "thread", TurnID: "turn", ItemID: "item", OperationDigest: record.OperationDigest, Decision: "answer", Now: now}
+	if claimed, err := local.ClaimApproval(context.Background(), claim); err != nil || claimed.Status != ApprovalProcessing {
+		t.Fatalf("interaction claim=%+v err=%v", claimed, err)
+	}
 }

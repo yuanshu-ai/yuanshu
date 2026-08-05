@@ -232,7 +232,7 @@ func validApprovalRecord(record ApprovalRecord) bool {
 }
 
 func validApprovalClaim(claim ApprovalClaim) bool {
-	return validWorkspaceText(claim.ApprovalID, 128) && validWorkspaceText(claim.WorkspaceID, 128) && validWorkspaceText(claim.ThreadID, 128) && validWorkspaceText(claim.TurnID, 128) && validWorkspaceText(claim.ItemID, 128) && len(claim.OperationDigest) == 43 && (claim.Decision == "accept" || claim.Decision == "decline") && !claim.Now.IsZero()
+	return validWorkspaceText(claim.ApprovalID, 128) && validWorkspaceText(claim.WorkspaceID, 128) && validWorkspaceText(claim.ThreadID, 128) && validWorkspaceText(claim.TurnID, 128) && validWorkspaceText(claim.ItemID, 128) && len(claim.OperationDigest) == 43 && (claim.Decision == "accept" || claim.Decision == "decline" || claim.Decision == "answer") && !claim.Now.IsZero()
 }
 
 func nullTime(value time.Time) any {

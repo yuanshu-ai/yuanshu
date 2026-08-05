@@ -8,17 +8,20 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	adapterpkg "github.com/yuanshu-ai/yuanshu/internal/adapter"
+	"github.com/yuanshu-ai/yuanshu/internal/adapter/codex/appserver"
 	"github.com/yuanshu-ai/yuanshu/internal/config"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
 	"github.com/yuanshu-ai/yuanshu/internal/platform/fake"
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 )
 
 func TestFormalAdapterThreadTurnApprovalAndEvents(t *testing.T) {
@@ -100,6 +103,10 @@ func TestPublicSnapshotMapsStableHistoryItems(t *testing.T) {
 				{ID: "command", Type: "commandExecution", Status: "completed", Command: "go test", AggregatedOutput: "ok", ExitCode: &exitCode},
 				{ID: "file", Type: "fileChange", Status: "completed", Changes: []codexFileChange{{Path: filepath.Join(root, "internal", "app.go"), Kind: "add", Diff: "+new"}}},
 				{ID: "tool", Type: "mcpToolCall", Status: "completed", Tool: "search"},
+				{ID: "reasoning", Type: "reasoning", Content: []json.RawMessage{json.RawMessage(`{"type":"reasoning_text","text":"hidden chain"}`)}, Summary: []struct {
+					Text string `json:"text"`
+				}{{Text: "Checked the public API."}}},
+				{ID: "plan", Type: "plan", Text: "Run the tests"},
 				{ID: "unknown", Type: "futureItem", Status: "completed"},
 			},
 		}},
@@ -107,12 +114,74 @@ func TestPublicSnapshotMapsStableHistoryItems(t *testing.T) {
 	if snapshot.Thread.HistoryState != "partial" || snapshot.Thread.Preview != "ship the feature" {
 		t.Fatalf("snapshot metadata = %#v", snapshot.Thread)
 	}
-	if len(snapshot.Turns) != 1 || len(snapshot.Turns[0].Items) != 6 {
+	if len(snapshot.Turns) != 1 || len(snapshot.Turns[0].Items) != 8 {
 		t.Fatalf("snapshot items = %#v", snapshot.Turns)
 	}
 	items := snapshot.Turns[0].Items
-	if items[0].Kind != "user_message" || items[0].Text != "ship it" || items[2].Output != "ok" || items[3].Path != "internal/app.go" || items[4].ToolName != "search" || !items[5].Partial {
+	if items[0].Kind != "user_message" || items[0].Text != "ship it" || items[2].Output != "ok" || items[3].Path != "internal/app.go" || items[4].ToolName != "search" || items[5].Kind != "reasoning_summary" || items[5].Text != "Checked the public API." || strings.Contains(items[5].Text, "hidden") || items[6].Kind != "plan" || !items[7].Partial {
 		t.Fatalf("mapped items = %#v", items)
+	}
+}
+
+func TestCodexProjectsVisibleReasoningPlanAndTokenUsage(t *testing.T) {
+	threads := newMemoryThreadStore()
+	_ = threads.SaveRuntimeThread(context.Background(), store.RuntimeThreadRecord{ThreadID: "thread-1", WorkspaceID: "workspace-1", Adapter: AdapterID, State: store.RuntimeThreadActive, ActiveTurnID: "turn-1"})
+	runtime := newRuntime(Options{Threads: threads, EventCapacity: 8}, adapterpkg.Installation{})
+	runtime.handleNotification(appserver.Message{Method: "item/reasoning/textDelta", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","itemId":"reasoning-1","delta":"hidden chain"}`)})
+	select {
+	case event := <-runtime.Events():
+		t.Fatalf("raw reasoning escaped as %#v", event)
+	default:
+	}
+	runtime.handleNotification(appserver.Message{Method: "item/reasoning/summaryTextDelta", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","itemId":"reasoning-1","summaryIndex":0,"delta":"Public summary"}`)})
+	reasoning := waitForEvent(t, runtime.Events(), protocol.EventType(protocolv11.EventReasoningSummaryDelta))
+	if reasoning.Payload.(map[string]any)["text"] != "Public summary" {
+		t.Fatalf("reasoning event = %#v", reasoning)
+	}
+	runtime.handleNotification(appserver.Message{Method: "turn/plan/updated", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","explanation":"Next steps","plan":[{"step":"Run tests","status":"inProgress"}]}`)})
+	plan := waitForEvent(t, runtime.Events(), protocol.EventType(protocolv11.EventPlanUpdated))
+	if len(plan.Payload.(map[string]any)["steps"].([]map[string]any)) != 1 {
+		t.Fatalf("plan event = %#v", plan)
+	}
+	runtime.handleNotification(appserver.Message{Method: "thread/tokenUsage/updated", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"modelContextWindow":200000,"last":{"inputTokens":1,"cachedInputTokens":0,"outputTokens":2,"reasoningOutputTokens":1,"totalTokens":4},"total":{"inputTokens":10,"cachedInputTokens":2,"outputTokens":5,"reasoningOutputTokens":3,"totalTokens":18}}}`)})
+	usage := waitForEvent(t, runtime.Events(), protocol.EventType(protocolv11.EventTaskUpdated))
+	if usage.Payload.(map[string]any)["tokenUsage"].(map[string]any)["totalTokens"] != int64(18) {
+		t.Fatalf("usage event = %#v", usage)
+	}
+}
+
+func TestCodexUserInputInteractionRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	workspaces := &fakeWorkspaceResolver{resolved: workspace.ResolvedWorkspace{Descriptor: workspace.Descriptor{ID: "workspace-1", Adapter: "codex", PermissionProfile: config.PermissionWorkspaceWrite}, CanonicalPath: root, FilesystemRoot: filepath.VolumeName(root) + string(filepath.Separator), FileIdentity: "synthetic-file-id"}}
+	server := &syntheticServer{workspace: root, approvalMethod: "input"}
+	formal, err := New(Options{Config: config.CodexAdapterConfig{Enabled: true, Binary: "synthetic-codex", RuntimeMode: "stdio"}, Processes: newScriptedProcessManager(server.serve), Workspaces: workspaces, Threads: newMemoryThreadStore(), ApprovalTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeValue, err := formal.StartRuntime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := runtimeValue.(*Runtime)
+	defer runtime.Close(context.Background())
+	thread, err := runtime.StartThread(context.Background(), adapterpkg.StartThreadRequest{WorkspaceID: "workspace-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := runtime.StartTurn(context.Background(), adapterpkg.StartTurnRequest{WorkspaceID: "workspace-1", ThreadID: thread.ID, Input: "ask me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested := waitForEvent(t, runtime.Events(), protocol.EventType(protocolv11.EventInteractionRequested))
+	payload := requested.Payload.(map[string]any)
+	questions := payload["questions"].([]map[string]any)
+	options := questions[0]["options"].([]map[string]any)
+	if err := runtime.ResolveInteraction(context.Background(), adapterpkg.InteractionDecision{WorkspaceID: "workspace-1", ThreadID: thread.ID, TurnID: turn.ID, ItemID: "item-1", InteractionID: payload["id"].(string), Answers: []adapterpkg.InteractionAnswer{{QuestionID: questions[0]["id"].(string), Answers: []string{options[0]["id"].(string)}}}}); err != nil {
+		t.Fatal(err)
+	}
+	resolved := waitForEvent(t, runtime.Events(), protocol.EventType(protocolv11.EventInteractionResolved))
+	if resolved.Payload.(map[string]any)["status"] != "answered" || server.waitInputAnswer(time.Second) != "Option A" {
+		t.Fatalf("resolved=%#v answer=%q", resolved, server.waitInputAnswer(time.Millisecond))
 	}
 }
 
@@ -339,6 +408,7 @@ type syntheticServer struct {
 	sawWorkspaceWrite bool
 	sawCwd            string
 	approvalDecision  string
+	inputAnswer       string
 }
 
 func (s *syntheticServer) serve(spec platform.ProcessSpec, process *fake.Process) {
@@ -394,20 +464,38 @@ func (s *syntheticServer) serve(spec platform.ProcessSpec, process *fake.Process
 			s.write(process, `{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
 			if s.approvalMethod == "file" {
 				s.write(process, `{"id":"approval-1","method":"item/fileChange/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1,"grantRoot":%q}}`, s.workspace)
+			} else if s.approvalMethod == "input" {
+				s.write(process, `{"id":"question-1","method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","isBlocking":true,"questions":[{"id":"native-question","header":"Choice","question":"Choose one","isOther":false,"isSecret":false,"options":[{"label":"Option A","description":"Recommended"}]}]}}`)
 			} else {
 				s.write(process, `{"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1,"command":"synthetic-command","cwd":%q}}`, s.workspace)
 			}
 		case "":
 			if len(request.Result) > 0 {
-				var response struct {
-					Result struct {
-						Decision string `json:"decision"`
-					} `json:"result"`
+				if s.approvalMethod == "input" {
+					var response struct {
+						Result struct {
+							Answers map[string]struct {
+								Answers []string `json:"answers"`
+							} `json:"answers"`
+						} `json:"result"`
+					}
+					_ = json.Unmarshal(scanner.Bytes(), &response)
+					s.mu.Lock()
+					if answer := response.Result.Answers["native-question"].Answers; len(answer) > 0 {
+						s.inputAnswer = answer[0]
+					}
+					s.mu.Unlock()
+				} else {
+					var response struct {
+						Result struct {
+							Decision string `json:"decision"`
+						} `json:"result"`
+					}
+					_ = json.Unmarshal(scanner.Bytes(), &response)
+					s.mu.Lock()
+					s.approvalDecision = response.Result.Decision
+					s.mu.Unlock()
 				}
-				_ = json.Unmarshal(scanner.Bytes(), &response)
-				s.mu.Lock()
-				s.approvalDecision = response.Result.Decision
-				s.mu.Unlock()
 				s.write(process, `{"method":"serverRequest/resolved","params":{"threadId":"thread-1","requestId":"approval-1"}}`)
 				s.write(process, `{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}}`)
 			}
@@ -435,6 +523,19 @@ func (s *syntheticServer) waitDecision(timeout time.Duration) string {
 		_, _, decision := s.observations()
 		if decision != "" || time.Now().After(deadline) {
 			return decision
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func (s *syntheticServer) waitInputAnswer(timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	for {
+		s.mu.Lock()
+		answer := s.inputAnswer
+		s.mu.Unlock()
+		if answer != "" || time.Now().After(deadline) {
+			return answer
 		}
 		time.Sleep(time.Millisecond)
 	}

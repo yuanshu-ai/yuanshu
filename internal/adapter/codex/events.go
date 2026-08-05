@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/adapter/codex/appserver"
@@ -15,6 +17,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 )
 
 func (r *Runtime) consume(client *appserver.Client, generation uint64) {
@@ -42,6 +45,10 @@ func (r *Runtime) handleClientLoss(client *appserver.Client, generation uint64) 
 		pending.timer.Stop()
 		delete(r.pending, id)
 	}
+	for id, pending := range r.inputs {
+		pending.timer.Stop()
+		delete(r.inputs, id)
+	}
 	r.mu.Unlock()
 	if activeThread != "" {
 		if record, err := r.options.Threads.RuntimeThread(context.Background(), activeThread); err == nil {
@@ -65,9 +72,147 @@ func (r *Runtime) handleServerRequest(client *appserver.Client, message appserve
 		r.handleCommandApproval(client, message)
 	case "item/fileChange/requestApproval":
 		r.handleFileApproval(client, message)
+	case "item/tool/requestUserInput":
+		r.handleUserInput(client, message)
 	default:
 		_ = client.Respond(*message.ID, nil, &appserver.RPCError{Code: -32601, Message: "unsupported by Yuanshu"})
 	}
+}
+
+type userInputOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+type userInputQuestion struct {
+	ID       string            `json:"id"`
+	Header   string            `json:"header"`
+	Question string            `json:"question"`
+	IsOther  bool              `json:"isOther"`
+	IsSecret bool              `json:"isSecret"`
+	Options  []userInputOption `json:"options"`
+}
+
+func (r *Runtime) handleUserInput(client *appserver.Client, message appserver.Message) {
+	var params struct {
+		approvalScope
+		Questions        []userInputQuestion `json:"questions"`
+		IsBlocking       bool                `json:"isBlocking"`
+		AutoResolutionMS int64               `json:"autoResolutionMs"`
+	}
+	if json.Unmarshal(message.Params, &params) != nil || !validID(params.ThreadID) || !validID(params.TurnID) || !validID(params.ItemID) || len(params.Questions) == 0 || len(params.Questions) > 3 {
+		_ = client.Respond(*message.ID, nil, &appserver.RPCError{Code: -32602, Message: "invalid user input request"})
+		return
+	}
+	resolved, ok := r.approvalWorkspace(params.approvalScope)
+	if !ok {
+		_ = client.Respond(*message.ID, nil, &appserver.RPCError{Code: -32001, Message: "task is unavailable"})
+		return
+	}
+	id, err := randomInteractionID()
+	if err != nil {
+		_ = client.Respond(*message.ID, nil, &appserver.RPCError{Code: -32603, Message: "interaction unavailable"})
+		return
+	}
+	publicQuestions := make([]map[string]any, 0, len(params.Questions))
+	pendingQuestions := make(map[string]pendingQuestion, len(params.Questions))
+	for index, question := range params.Questions {
+		if question.ID == "" || question.IsSecret {
+			_ = client.Respond(*message.ID, nil, &appserver.RPCError{Code: -32002, Message: "secret or invalid remote input is not supported"})
+			return
+		}
+		publicID := "q" + strconv.Itoa(index+1)
+		publicOptions := make([]map[string]any, 0, len(question.Options))
+		optionMap := make(map[string]string, len(question.Options))
+		for optionIndex, option := range question.Options {
+			label := boundedPublicText(option.Label, 512)
+			if label == "" {
+				continue
+			}
+			optionID := "o" + strconv.Itoa(index+1) + "-" + strconv.Itoa(optionIndex+1)
+			optionMap[optionID] = label
+			entry := map[string]any{"id": optionID, "label": label}
+			if description := boundedPublicText(option.Description, 2048); description != "" {
+				entry["description"] = description
+			}
+			publicOptions = append(publicOptions, entry)
+		}
+		entry := map[string]any{
+			"id": publicID, "header": boundedPublicText(question.Header, 128), "question": boundedPublicText(question.Question, 4096),
+			"isOther": question.IsOther, "isSecret": false,
+		}
+		if entry["header"] == "" || entry["question"] == "" {
+			_ = client.Respond(*message.ID, nil, &appserver.RPCError{Code: -32602, Message: "invalid user input request"})
+			return
+		}
+		if len(publicOptions) > 0 {
+			entry["options"] = publicOptions
+		}
+		publicQuestions = append(publicQuestions, entry)
+		pendingQuestions[publicID] = pendingQuestion{nativeID: question.ID, options: optionMap, other: question.IsOther}
+	}
+	timeout := r.options.ApprovalTimeout
+	if params.AutoResolutionMS > 0 {
+		requested := time.Duration(params.AutoResolutionMS) * time.Millisecond
+		if requested < timeout {
+			timeout = requested
+		}
+	}
+	pending := &pendingUserInput{id: id, requestID: *message.ID, workspaceID: resolved.ID, threadID: params.ThreadID, turnID: params.TurnID, itemID: params.ItemID, questions: pendingQuestions}
+	pending.timer = time.AfterFunc(timeout, func() { r.expireUserInput(id) })
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		pending.timer.Stop()
+		_ = client.Respond(*message.ID, nil, &appserver.RPCError{Code: -32001, Message: "Yuanshu is closed"})
+		return
+	}
+	r.inputs[id] = pending
+	r.mu.Unlock()
+	r.emit(adapter.AgentEvent{
+		Type: protocol.EventType(protocolv11.EventInteractionRequested), WorkspaceID: resolved.ID, ThreadID: params.ThreadID, TurnID: params.TurnID, ItemID: params.ItemID,
+		Payload: map[string]any{
+			"id": id, "kind": "question", "status": "pending", "summary": "Codex is waiting for your answer",
+			"expiresAt": time.Now().Add(timeout).UTC().Format(time.RFC3339Nano), "questions": publicQuestions, "blocking": params.IsBlocking,
+		},
+	})
+}
+
+func (r *Runtime) expireUserInput(id string) {
+	r.mu.Lock()
+	pending, ok := r.inputs[id]
+	if ok {
+		delete(r.inputs, id)
+	}
+	client := r.client
+	r.mu.Unlock()
+	if !ok || client == nil {
+		return
+	}
+	_ = client.Respond(pending.requestID, nil, &appserver.RPCError{Code: -32001, Message: "Yuanshu interaction expired"})
+	r.emit(adapter.AgentEvent{
+		Type: protocol.EventType(protocolv11.EventInteractionResolved), WorkspaceID: pending.workspaceID, ThreadID: pending.threadID, TurnID: pending.turnID, ItemID: pending.itemID,
+		Payload: map[string]any{"id": id, "kind": "question", "status": "expired"},
+	})
+}
+
+func randomInteractionID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return "int_" + base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func boundedPublicText(value string, limit int) string {
+	value, _ = boundedHistory(value)
+	if len(value) <= limit {
+		return value
+	}
+	for limit > 0 && !utf8.ValidString(value[:limit]) {
+		limit--
+	}
+	return value[:limit]
 }
 
 type approvalScope struct {
@@ -246,9 +391,97 @@ func (r *Runtime) handleNotification(message appserver.Message) {
 		r.handleDelta(message, protocol.EventDiffUpdated, "diff")
 	case "item/started", "item/completed":
 		r.handleItem(message)
+	case "item/reasoning/summaryTextDelta":
+		r.handleReasoningSummaryDelta(message)
+	case "item/reasoning/textDelta":
+		// Raw reasoning is intentionally not exposed or persisted. Only the
+		// Agent-authored user-visible summary is part of the public model.
+	case "turn/plan/updated":
+		r.handlePlanUpdated(message)
+	case "thread/tokenUsage/updated":
+		r.handleTokenUsage(message)
 	case "thread/started":
 		r.handleThreadStarted(message)
 	}
+}
+
+func (r *Runtime) handleReasoningSummaryDelta(message appserver.Message) {
+	var params struct {
+		ThreadID string `json:"threadId"`
+		TurnID   string `json:"turnId"`
+		ItemID   string `json:"itemId"`
+		Delta    string `json:"delta"`
+	}
+	if json.Unmarshal(message.Params, &params) != nil || params.Delta == "" {
+		return
+	}
+	record, ok := r.eventRecord(params.ThreadID)
+	if !ok {
+		return
+	}
+	r.emit(adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventReasoningSummaryDelta), WorkspaceID: record.WorkspaceID, ThreadID: params.ThreadID, TurnID: params.TurnID, ItemID: params.ItemID, Payload: map[string]any{"text": boundedHistoryText(params.Delta)}})
+}
+
+func (r *Runtime) handlePlanUpdated(message appserver.Message) {
+	var params struct {
+		ThreadID    string  `json:"threadId"`
+		TurnID      string  `json:"turnId"`
+		Explanation *string `json:"explanation"`
+		Plan        []struct {
+			Step   string `json:"step"`
+			Status string `json:"status"`
+		} `json:"plan"`
+	}
+	if json.Unmarshal(message.Params, &params) != nil {
+		return
+	}
+	record, ok := r.eventRecord(params.ThreadID)
+	if !ok {
+		return
+	}
+	steps := make([]map[string]any, 0, len(params.Plan))
+	for _, step := range params.Plan {
+		if text := boundedHistoryText(step.Step); text != "" {
+			steps = append(steps, map[string]any{"text": text, "status": step.Status})
+		}
+	}
+	payload := map[string]any{"steps": steps}
+	if params.Explanation != nil {
+		payload["explanation"] = boundedHistoryText(*params.Explanation)
+	}
+	r.emit(adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventPlanUpdated), WorkspaceID: record.WorkspaceID, ThreadID: params.ThreadID, TurnID: params.TurnID, Payload: payload})
+}
+
+func (r *Runtime) handleTokenUsage(message appserver.Message) {
+	var params struct {
+		ThreadID   string `json:"threadId"`
+		TurnID     string `json:"turnId"`
+		TokenUsage struct {
+			ModelContextWindow *int64 `json:"modelContextWindow"`
+			Total              struct {
+				InputTokens           int64 `json:"inputTokens"`
+				CachedInputTokens     int64 `json:"cachedInputTokens"`
+				OutputTokens          int64 `json:"outputTokens"`
+				ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
+				TotalTokens           int64 `json:"totalTokens"`
+			} `json:"total"`
+		} `json:"tokenUsage"`
+	}
+	if json.Unmarshal(message.Params, &params) != nil {
+		return
+	}
+	record, ok := r.eventRecord(params.ThreadID)
+	if !ok {
+		return
+	}
+	usage := map[string]any{
+		"inputTokens": params.TokenUsage.Total.InputTokens, "cachedInputTokens": params.TokenUsage.Total.CachedInputTokens,
+		"outputTokens": params.TokenUsage.Total.OutputTokens, "reasoningOutputTokens": params.TokenUsage.Total.ReasoningOutputTokens, "totalTokens": params.TokenUsage.Total.TotalTokens,
+	}
+	if params.TokenUsage.ModelContextWindow != nil {
+		usage["modelContextWindow"] = *params.TokenUsage.ModelContextWindow
+	}
+	r.emit(adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventTaskUpdated), WorkspaceID: record.WorkspaceID, ThreadID: params.ThreadID, TurnID: params.TurnID, Payload: map[string]any{"tokenUsage": usage}})
 }
 
 func (r *Runtime) eventRecord(threadID string) (store.RuntimeThreadRecord, bool) {
@@ -338,20 +571,9 @@ func (r *Runtime) handleDelta(message appserver.Message, eventType protocol.Even
 
 func (r *Runtime) handleItem(message appserver.Message) {
 	var params struct {
-		ThreadID string `json:"threadId"`
-		TurnID   string `json:"turnId"`
-		Item     struct {
-			ID      string `json:"id"`
-			Type    string `json:"type"`
-			Status  string `json:"status"`
-			Text    string `json:"text"`
-			Command string `json:"command"`
-			Changes []struct {
-				Path string `json:"path"`
-				Kind string `json:"kind"`
-				Diff string `json:"diff"`
-			} `json:"changes"`
-		} `json:"item"`
+		ThreadID string          `json:"threadId"`
+		TurnID   string          `json:"turnId"`
+		Item     codexThreadItem `json:"item"`
 	}
 	if json.Unmarshal(message.Params, &params) != nil {
 		return
@@ -364,12 +586,32 @@ func (r *Runtime) handleItem(message appserver.Message) {
 	eventType := protocol.EventToolStarted
 	payload := map[string]any{"status": params.Item.Status, "kind": params.Item.Type}
 	switch params.Item.Type {
+	case "userMessage":
+		if !completed {
+			return
+		}
+		item, _ := publicThreadItem(params.Item, "")
+		r.emit(adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventMessageCompleted), WorkspaceID: record.WorkspaceID, ThreadID: params.ThreadID, TurnID: params.TurnID, ItemID: params.Item.ID, Payload: map[string]any{"role": "user", "text": item.Text}})
+		return
 	case "agentMessage":
 		if !completed {
 			return
 		}
 		eventType = protocol.EventAgentMessageCompleted
 		payload = map[string]any{"text": params.Item.Text}
+	case "reasoning":
+		if !completed {
+			return
+		}
+		item, _ := publicThreadItem(params.Item, "")
+		r.emit(adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventReasoningSummaryCompleted), WorkspaceID: record.WorkspaceID, ThreadID: params.ThreadID, TurnID: params.TurnID, ItemID: params.Item.ID, Payload: map[string]any{"text": item.Text, "partial": item.Partial}})
+		return
+	case "plan":
+		if !completed {
+			return
+		}
+		r.emit(adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventPlanUpdated), WorkspaceID: record.WorkspaceID, ThreadID: params.ThreadID, TurnID: params.TurnID, ItemID: params.Item.ID, Payload: map[string]any{"text": boundedHistoryText(params.Item.Text)}})
+		return
 	case "commandExecution":
 		if completed {
 			eventType = protocol.EventCommandCompleted
@@ -401,8 +643,20 @@ func (r *Runtime) handleItem(message appserver.Message) {
 		if completed {
 			eventType = protocol.EventToolCompleted
 		}
+		item, _ := publicThreadItem(params.Item, "")
+		payload["toolName"], payload["text"] = item.ToolName, item.Text
+		payload["activityKind"] = stableActivityKind(params.Item.Type)
 	}
 	r.emit(adapter.AgentEvent{Type: eventType, WorkspaceID: record.WorkspaceID, ThreadID: params.ThreadID, TurnID: params.TurnID, ItemID: params.Item.ID, Payload: payload})
+}
+
+func stableActivityKind(kind string) string {
+	return map[string]string{
+		"mcpToolCall": "mcp", "dynamicToolCall": "tool", "collabAgentToolCall": "collaboration",
+		"subAgentActivity": "collaboration", "webSearch": "web_search", "imageView": "image",
+		"imageGeneration": "image", "enteredReviewMode": "review", "exitedReviewMode": "review",
+		"contextCompaction": "compaction",
+	}[kind]
 }
 
 func (r *Runtime) handleRequestResolved(message appserver.Message) {
@@ -415,6 +669,7 @@ func (r *Runtime) handleRequestResolved(message appserver.Message) {
 	}
 	r.mu.Lock()
 	var resolved *pendingApproval
+	var answered *pendingUserInput
 	for id, pending := range r.pending {
 		if pending.threadID == params.ThreadID && pending.requestID.Matches(params.RequestID) {
 			resolved = pending
@@ -423,9 +678,22 @@ func (r *Runtime) handleRequestResolved(message appserver.Message) {
 			break
 		}
 	}
+	if resolved == nil {
+		for id, pending := range r.inputs {
+			if pending.threadID == params.ThreadID && pending.requestID.Matches(params.RequestID) {
+				answered = pending
+				pending.timer.Stop()
+				delete(r.inputs, id)
+				break
+			}
+		}
+	}
 	r.mu.Unlock()
 	if resolved != nil {
 		r.emit(adapter.AgentEvent{Type: protocol.EventApprovalResolved, WorkspaceID: resolved.workspaceID, ThreadID: resolved.threadID, TurnID: resolved.turnID, ItemID: resolved.itemID, Payload: map[string]any{"approvalId": resolved.id, "reason": "runtime_resolved"}})
+	}
+	if answered != nil {
+		r.emit(adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventInteractionResolved), WorkspaceID: answered.workspaceID, ThreadID: answered.threadID, TurnID: answered.turnID, ItemID: answered.itemID, Payload: map[string]any{"id": answered.id, "kind": "question", "status": "answered"}})
 	}
 }
 
@@ -435,6 +703,12 @@ func (r *Runtime) clearApprovals(threadID, turnID string) {
 		if pending.threadID == threadID && pending.turnID == turnID {
 			pending.timer.Stop()
 			delete(r.pending, id)
+		}
+	}
+	for id, pending := range r.inputs {
+		if pending.threadID == threadID && pending.turnID == turnID {
+			pending.timer.Stop()
+			delete(r.inputs, id)
 		}
 	}
 	r.mu.Unlock()

@@ -80,9 +80,9 @@ func projectLegacyEventV11(kind string, payload map[string]any, event adapter.Ag
 	case protocolv1.EventCommandCompleted:
 		return string(protocolv11.EventActivityCompleted), activityPayloadV11("command", "completed", payload, event.ItemID), nil
 	case protocolv1.EventToolStarted:
-		return string(protocolv11.EventActivityStarted), activityPayloadV11("tool", "running", payload, event.ItemID), nil
+		return string(protocolv11.EventActivityStarted), activityPayloadV11(firstString(payload, "activityKind", "tool"), "running", payload, event.ItemID), nil
 	case protocolv1.EventToolCompleted:
-		return string(protocolv11.EventActivityCompleted), activityPayloadV11("tool", "completed", payload, event.ItemID), nil
+		return string(protocolv11.EventActivityCompleted), activityPayloadV11(firstString(payload, "activityKind", "tool"), "completed", payload, event.ItemID), nil
 	case protocolv1.EventFileChanged:
 		return string(protocolv11.EventFileChanged), payload, nil
 	case protocolv1.EventDiffUpdated:
@@ -137,11 +137,37 @@ func taskSnapshotPayloadV11(payload map[string]any, event adapter.AgentEvent) ma
 		result["runs"] = turns
 		delete(result, "turns")
 	}
+	if pending, ok := result["pendingApprovals"].([]any); ok {
+		interactions := make([]any, 0, len(pending))
+		for _, value := range pending {
+			entry, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			entry = clonePayload(entry)
+			runID, activityID := firstString(entry, "turnId", ""), firstString(entry, "itemId", "")
+			delete(entry, "turnId")
+			delete(entry, "itemId")
+			if _, modern := entry["id"]; !modern {
+				entry = interactionPayloadV11(entry, adapter.AgentEvent{ItemID: activityID})
+			}
+			if runID != "" {
+				entry["runId"] = runID
+			}
+			if activityID != "" {
+				entry["activityId"] = activityID
+			}
+			interactions = append(interactions, entry)
+		}
+		result["interactions"] = interactions
+		delete(result, "pendingApprovals")
+	}
 	return result
 }
 
 func activityPayloadV11(kind, status string, payload map[string]any, itemID string) map[string]any {
 	result := clonePayload(payload)
+	delete(result, "activityKind")
 	result["id"], result["kind"], result["status"] = itemID, kind, status
 	if title := firstString(result, "displayText", firstString(result, "toolName", "")); title != "" {
 		result["title"] = title
@@ -163,10 +189,14 @@ func interactionPayloadV11(payload map[string]any, event adapter.AgentEvent) map
 	switch kind {
 	case "command", "command_execution":
 		kind = "command_approval"
-	case "file", "file_change":
+	case "file", "file_change", "file-change":
 		kind = "file_approval"
 	}
 	result["kind"] = kind
+	if operation, exists := result["operation"]; exists {
+		result["details"] = operation
+		delete(result, "operation")
+	}
 	if _, exists := result["status"]; !exists {
 		if _, resolved := result["decision"]; resolved {
 			result["status"] = map[string]string{"accept": "accepted", "decline": "declined"}[firstString(result, "decision", "decline")]

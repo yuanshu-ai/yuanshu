@@ -57,6 +57,7 @@ function state(): ProjectionState {
     approvals: {
       approval: { key: "approval", nodeId: "node-a", workspaceId: "workspace-a", threadId: "thread-a", turnId: "turn-a", approvalId: "approval", status: "pending" },
     },
+    interactions: {}, plans: {},
     files: {}, events: {}, notifications: {}, actions: {},
   };
 }

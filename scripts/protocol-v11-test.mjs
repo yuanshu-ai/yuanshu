@@ -31,7 +31,7 @@ const control = (type, index) => {
   if (type === "task.start") value.payload = { input: "Inspect the project" };
   if (["run.start", "run.steer"].includes(type)) value.payload = { input: "Continue", lease };
   if (["task.resume", "run.interrupt"].includes(type)) value.payload = { lease };
-  if (type === "interaction.resolve") value.payload = { answer: "Use option A", operationDigest: "A".repeat(43), lease };
+  if (type === "interaction.resolve") value.payload = { answers: [{ questionId: "q1", answers: ["o1"] }], operationDigest: "A".repeat(43), lease };
   if (type === "events.replay") value.payload = { afterSequence: 0 };
   if (type === "lease.acquire") value.payload = { force: false };
   if (["lease.renew", "lease.release"].includes(type)) value.payload = { leaseId: "lease", epoch: 1 };
@@ -43,8 +43,8 @@ const event = (type, index) => {
   const { expiresAt, nonce, signer, signature, ...eventBase } = base;
   const value = { ...eventBase, type, messageId: `event-${index}`, sequence: index + 1, streamId: "node-events-v1.1", payload: {} };
   if (type === "agent.snapshot") value.payload = { agents: [{ id: "codex-default", adapterType: "codex", displayName: "Codex", runtimeMode: "managed", status: "ready", capabilities: [{ id: "task.start", level: "full" }] }] };
-  if (type === "task.snapshot") value.payload = { task: { id: "task", agentInstanceId: "codex-default", workspaceId: "workspace", status: "idle" }, runs: [], activities: [], interactions: [] };
-  if (type === "interaction.requested") value.payload = { id: "interaction", kind: "question", status: "pending", operationDigest: "A".repeat(43), expiresAt: "2026-08-05T08:05:00Z" };
+  if (type === "task.snapshot") value.payload = { task: { id: "task", agentInstanceId: "codex-default", workspaceId: "workspace", status: "idle" }, runs: [{ id: "run", status: "completed", items: [{ id: "summary", kind: "reasoning_summary", text: "Checked the API." }] }], activities: [], interactions: [] };
+  if (type === "interaction.requested") value.payload = { id: "interaction", kind: "question", status: "pending", runId: "run", activityId: "item", operationDigest: "A".repeat(43), expiresAt: "2026-08-05T08:05:00Z", blocking: true, questions: [{ id: "q1", header: "Target", question: "Which target?", options: [{ id: "o1", label: "Alpha", description: "Recommended" }] }] };
   if (type === "control.result") value.payload = { status: "confirmed" };
   return value;
 };

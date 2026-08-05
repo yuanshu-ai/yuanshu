@@ -129,6 +129,22 @@ describe("personal data projection", () => {
     expect(projection.state.threads[threadKey("node-a", "workspace", "task")]).toMatchObject({ title: "Office task", agentInstanceId: "codex" });
     expect(projection.state.threads[threadKey("node-b", "workspace", "task")]).toMatchObject({ title: "Home task", agentInstanceId: "codex" });
   });
+
+  it("projects Protocol 1.1 reasoning summaries, plans, questions, and token usage", () => {
+    const projection = new DataProjection();
+    projection.apply(messageV11("node-a", 1, "task.snapshot", { task: { id: "task", agentInstanceId: "codex", workspaceId: "workspace", status: "running" }, runs: [{ id: "run", status: "inProgress", items: [{ id: "history-summary", kind: "reasoning_summary", text: "Checked history" }] }] }, "workspace", "codex", "task"));
+    projection.apply({ ...messageV11("node-a", 2, "reasoning.summary.delta", { text: "Checking tests" }, "workspace", "codex", "task", "run"), activityId: "summary" } as never);
+    projection.apply(messageV11("node-a", 3, "plan.updated", { explanation: "Verify safely", steps: [{ text: "Run tests", status: "inProgress" }] }, "workspace", "codex", "task", "run"));
+    projection.apply({ ...messageV11("node-a", 4, "interaction.requested", { id: "interaction", kind: "question", status: "pending", summary: "Choose target", operationDigest: "digest", expiresAt: "2026-08-03T00:10:00Z", blocking: true, questions: [{ id: "q1", header: "Target", question: "Which target?", options: [{ id: "o1", label: "Alpha" }] }] }, "workspace", "codex", "task", "run"), interactionId: "interaction", activityId: "item" } as never);
+    projection.apply(messageV11("node-a", 5, "task.updated", { tokenUsage: { totalTokens: 18, modelContextWindow: 200000 } }, "workspace", "codex", "task", "run"));
+
+    const turn = projection.state.turns[turnKey("node-a", "workspace", "task", "run")];
+    expect(turn.items.find((item) => item.id === "history-summary")?.text).toBe("Checked history");
+    expect(turn.items.find((item) => item.id === "summary")).toMatchObject({ kind: "reasoning_summary", text: "Checking tests" });
+    expect(Object.values(projection.state.plans)[0]?.steps[0]).toEqual({ text: "Run tests", status: "inProgress" });
+    expect(Object.values(projection.state.interactions)[0]).toMatchObject({ kind: "question", blocking: true, status: "pending" });
+    expect(projection.state.threads[threadKey("node-a", "workspace", "task")].tokenUsage).toMatchObject({ totalTokens: 18, modelContextWindow: 200000 });
+  });
 });
 
 function message(nodeId: string, sequence: number, type: string, payload: Record<string, unknown>, workspaceId?: string, threadId?: string, turnId?: string, itemId?: string): YuanshuMessage {

@@ -2,7 +2,7 @@ import { forwardRef, lazy, Suspense, useEffect, useMemo, useRef, useState, type 
 
 import type { LeaseScope, LeaseState } from "../relay/control-client";
 import { useI18n } from "../i18n";
-import { threadKey, turnKey, type ApprovalProjection, type ControlActionProjection, type FileChangeProjection, type ThreadItemProjection, type TurnProjection } from "../state/projection";
+import { threadKey, turnKey, type ApprovalProjection, type ControlActionProjection, type FileChangeProjection, type InteractionProjection, type PlanProjection, type ThreadItemProjection, type TurnProjection } from "../state/projection";
 import { Dialog } from "./Dialog";
 import { Icon } from "./Icon";
 import { selectThreadApprovals } from "./selectors";
@@ -23,6 +23,8 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   const turns = useMemo(() => thread ? thread.turnIds.map((turnId) => state.turns[turnKey(selectedNodeId, selectedWorkspaceId, selectedThreadId, turnId)]).filter((turn): turn is TurnProjection => Boolean(turn)) : [], [state, thread, selectedNodeId, selectedWorkspaceId, selectedThreadId, snapshotRevision]);
   const activeTurn = [...turns].reverse().find((turn) => ["running", "inProgress", "active"].includes(turn.status ?? ""));
   const approvals = selectThreadApprovals(state, selectedNodeId, selectedWorkspaceId, selectedThreadId);
+  const interactions = Object.values(state.interactions).filter((interaction) => interaction.nodeId === selectedNodeId && interaction.workspaceId === selectedWorkspaceId && interaction.threadId === selectedThreadId && interaction.status === "pending");
+  const plans = Object.values(state.plans).filter((plan) => plan.nodeId === selectedNodeId && plan.workspaceId === selectedWorkspaceId && plan.threadId === selectedThreadId).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const files = Object.values(state.files).filter((file) => file.nodeId === selectedNodeId && file.workspaceId === selectedWorkspaceId && file.threadId === selectedThreadId).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const scope: LeaseScope | undefined = selectedThreadId && selectedWorkspaceId && selectedNodeId ? { nodeId: selectedNodeId, workspaceId: selectedWorkspaceId, threadId: selectedThreadId } : undefined;
   const lease = scope ? session.getLease(scope) : { state: "none", epoch: 0 } as LeaseState;
@@ -153,6 +155,17 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
     finally { setBusy(false); }
   };
 
+  const resolveInteraction = async (interaction: InteractionProjection, answers: Array<{ questionId: string; answers: string[] }>) => {
+    if (!interaction.operationDigest || !scope || !agentInstanceId) { setMessage(t("workbench.interaction.missingDigest")); return; }
+    setBusy(true);
+    try {
+      const result = await session.request("interaction.resolve", { answers, operationDigest: interaction.operationDigest }, { nodeId: selectedNodeId, agentInstanceId, workspaceId: selectedWorkspaceId, taskId: selectedThreadId, runId: interaction.turnId, activityId: interaction.itemId, interactionId: interaction.interactionId });
+      if (result.payload.status !== "confirmed") throw new Error(typeof result.payload.errorCode === "string" ? result.payload.errorCode : "interaction_rejected");
+      setMessage(t("workbench.interaction.confirmed"));
+    } catch (error) { setMessage(error instanceof Error ? error.message : t("workbench.interaction.unknown")); }
+    finally { setBusy(false); }
+  };
+
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void submit(); }
   };
@@ -196,6 +209,7 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
         <div className="thread-footer">
           <div className="composer-context"><span><Icon name="node" />{node?.name ?? "未命名设备"}</span><span><Icon name="folder" />{workspace?.name ?? "工作区"}</span><em>{leaseHeld ? "可操作" : "只读"}</em></div>
           <div className="mobile-lease-control"><LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => scope && void session.releaseLease(scope).catch(() => undefined)} /></div>
+          {interactions.map((interaction) => <InteractionQuestionPanel key={interaction.key} interaction={interaction} leaseHeld={leaseHeld} busy={busy} onResolve={(answers) => void resolveInteraction(interaction, answers)} />)}
           {approvals.length > 0 && <button className="mobile-approval-action" type="button" onClick={() => { setInspectorTab("approvals"); setInspectorOpen(true); }}><Icon name="warning" />{t("workbench.approval.review", { count: approvals.length })}</button>}
           {actions[0] && <div className={`action-status ${actions[0].state}`} aria-live="polite"><span className="semantic-state" /><b>{actionLabel(actions[0].state)}</b><span>{controlTypeLabel(actions[0].type)}</span>{actions[0].errorCode && <code>{actions[0].errorCode}</code>}</div>}
           {message && <div className="operation-message" role="status">{message}</div>}
@@ -211,10 +225,10 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
         <div className="inspector-heading"><strong>{t("workbench.inspector.title")}</strong><button type="button" onClick={() => setInspectorOpen(false)} aria-label={t("common.close")}><Icon name="close" /></button></div>
         <div className="inspector-tabs" role="tablist">{(["activity", "files", "approvals", "details"] as const).map((tab) => <button type="button" role="tab" aria-selected={inspectorTab === tab} className={inspectorTab === tab ? "active" : ""} onClick={() => setInspectorTab(tab)} key={tab}>{inspectorLabels[tab]}{tab === "files" && files.length > 0 ? ` ${files.length}` : tab === "approvals" && approvals.length > 0 ? ` ${approvals.length}` : ""}</button>)}</div>
         <div className="inspector-content">
-          {inspectorTab === "activity" && <InspectorActivity turns={turns} actions={actions} />}
+          {inspectorTab === "activity" && <InspectorActivity turns={turns} actions={actions} plans={plans} />}
           {inspectorTab === "files" && (files.length ? <FileChanges files={files} session={session} /> : <EmptyState icon="file" title={t("workbench.inspector.noFiles")} detail="Codex 产生的文件与 Diff 会显示在这里。" />)}
           {inspectorTab === "approvals" && (approvals.length ? <ApprovalPanel approvals={approvals} leaseHeld={leaseHeld} busy={busy} onResolve={(approval, decision) => setConfirmation({ kind: "approval", approval, decision, step: 1 })} /> : <EmptyState icon="check" title={t("workbench.inspector.noApprovals")} detail="审批请求会固定显示在输入区上方。" />)}
-          {inspectorTab === "details" && <dl className="inspector-details"><dt>设备</dt><dd>{node?.name ?? "未命名设备"}</dd><dt>工作区</dt><dd>{workspace?.name ?? "工作区"}</dd><dt>任务状态</dt><dd>{statusLabel(taskStatus)}</dd><dt>历史状态</dt><dd>{thread?.historyState ?? "unknown"}</dd><dt>最新 sequence</dt><dd>{latestSequence}</dd><dt>控制状态</dt><dd>{leaseHeld ? "当前浏览器可操作" : lease.state === "occupied" ? "由其他控制端操作" : "只读"}</dd></dl>}
+          {inspectorTab === "details" && <dl className="inspector-details"><dt>设备</dt><dd>{node?.name ?? "未命名设备"}</dd><dt>工作区</dt><dd>{workspace?.name ?? "工作区"}</dd><dt>任务状态</dt><dd>{statusLabel(taskStatus)}</dd><dt>历史状态</dt><dd>{thread?.historyState ?? "unknown"}</dd><dt>最新 sequence</dt><dd>{latestSequence}</dd><dt>{t("workbench.details.tokenUsage")}</dt><dd>{thread?.tokenUsage?.totalTokens?.toLocaleString() ?? t("workbench.details.unavailable")}{thread?.tokenUsage?.modelContextWindow ? ` / ${thread.tokenUsage.modelContextWindow.toLocaleString()} context` : ""}</dd><dt>控制状态</dt><dd>{leaseHeld ? "当前浏览器可操作" : lease.state === "occupied" ? "由其他控制端操作" : "只读"}</dd></dl>}
         </div>
       </aside>
       {inspectorOpen && <button className="inspector-scrim" type="button" onClick={() => setInspectorOpen(false)} aria-label="关闭 Inspector" />}
@@ -230,21 +244,36 @@ function TurnCard({ turn }: { turn: TurnProjection }) {
 }
 
 function ItemCard({ item }: { item: ThreadItemProjection }) {
+  const { t } = useI18n();
   if (item.kind === "agent_message" || item.kind === "user_message") return <div className={`message-item ${item.kind}`}><span>{item.kind === "user_message" ? "你" : "Codex"}</span><Suspense fallback={<p className="plain-message">{item.text || "（空消息）"}</p>}><MarkdownContent value={item.text || "（空消息）"} /></Suspense></div>;
   if (item.kind === "command" || item.kind === "command_output") return <details className="activity-item" open={item.status === "running"}><summary><Icon name="terminal" /><span><b>{item.command || "命令输出"}</b><small>{item.status ?? "执行中"}{item.exitCode !== undefined ? ` / exit ${item.exitCode}` : ""}{item.truncated ? " / 已截断" : ""}</small></span></summary>{item.output && <CodePanel value={item.output} label="复制命令输出" />}</details>;
   if (item.kind === "tool") return <div className="activity-item compact"><Icon name="tool" /><span><b>{item.toolName || "工具调用"}</b><small>{item.status ?? "已记录"}</small></span></div>;
+  if (item.kind === "reasoning_summary") return <details className="activity-item reasoning-summary" open={item.status === "streaming"}><summary><Icon name="details" /><span><b>{t("workbench.reasoning.title")}</b><small>{item.partial ? t("workbench.reasoning.partial") : item.status ?? t("workbench.plan.updated")}</small></span></summary><Suspense fallback={<p className="plain-message">{item.text}</p>}><MarkdownContent value={item.text || `（${t("workbench.reasoning.empty")}）`} /></Suspense></details>;
+  if (item.kind === "plan") return <div className="activity-item compact"><Icon name="check" /><span><b>{t("workbench.plan.title")}</b><small>{item.text || t("workbench.plan.updated")}</small></span></div>;
   if (item.kind === "file_change" || item.kind === "diff") return <div className="activity-item compact"><Icon name="file" /><span><b>{item.path || "文件变更"}</b><small>{item.changeType || "Diff 已更新"}{item.truncated ? " / 已截断" : ""}</small></span></div>;
   return <div className="activity-item compact error"><Icon name="warning" /><span><b>{item.errorCode || "未识别活动"}</b><small>{item.errorMessage || "Codex 返回了当前版本无法识别的历史项。"}</small></span></div>;
 }
 
-function InspectorActivity({ turns, actions }: { turns: TurnProjection[]; actions: ControlActionProjection[] }) {
+function InspectorActivity({ turns, actions, plans }: { turns: TurnProjection[]; actions: ControlActionProjection[]; plans: PlanProjection[] }) {
   const { t } = useI18n();
   const items = turns.flatMap((turn) => turn.items).filter((item) => item.kind !== "agent_message" && item.kind !== "user_message").slice(-80).reverse();
   return <div className="inspector-activity">
+    {plans.slice(0, 1).map((plan) => <section className="plan-panel" key={plan.key}><strong>{t("workbench.plan.title")}</strong>{plan.explanation && <p>{plan.explanation}</p>}<ol>{plan.steps.map((step, index) => <li className={step.status} key={`${index}-${step.text}`}><span className="semantic-state" /><span>{step.text}</span><small>{statusLabel(step.status)}</small></li>)}</ol></section>)}
     {actions.slice(0, 6).map((action) => <article className={`inspector-action ${action.state}`} key={action.messageId}><span className="semantic-state" /><div><b>{controlTypeLabel(action.type)}</b><small>{actionLabel(action.state)} · {formatTime(action.updatedAt)}</small>{action.errorCode && <code>{action.errorCode}</code>}</div></article>)}
     {items.map((item) => <ItemCard item={item} key={item.id} />)}
     {!actions.length && !items.length && <EmptyState icon="tool" title={t("workbench.inspector.noActivity")} detail="命令、工具与控制结果会显示在这里。" />}
   </div>;
+}
+
+function InteractionQuestionPanel({ interaction, leaseHeld, busy, onResolve }: { interaction: InteractionProjection; leaseHeld: boolean; busy: boolean; onResolve: (answers: Array<{ questionId: string; answers: string[] }>) => void }) {
+  const { t } = useI18n();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const complete = interaction.questions.length > 0 && interaction.questions.every((question) => (values[question.id] ?? "").trim() !== "");
+  return <section className="interaction-question" aria-label="Codex 问题">
+    <header><Icon name="details" /><div><b>{interaction.summary || t("workbench.interaction.title")}</b><small>{interaction.blocking ? t("workbench.interaction.waiting") : t("workbench.interaction.optional")}{interaction.expiresAt ? ` · ${formatTime(interaction.expiresAt)}` : ""}</small></div></header>
+    {interaction.questions.map((question) => <fieldset key={question.id}><legend><span>{question.header}</span>{question.question}</legend>{question.options.map((option) => <label className="question-option" key={option.id}><input type="radio" name={`${interaction.interactionId}-${question.id}`} value={option.id} checked={values[question.id] === option.id} onChange={() => setValues((current) => ({ ...current, [question.id]: option.id }))} /><span><b>{option.label}</b>{option.description && <small>{option.description}</small>}</span></label>)}{(question.isOther || question.options.length === 0) && <input className="question-answer" type="text" value={question.options.some((option) => option.id === values[question.id]) ? "" : values[question.id] ?? ""} placeholder={question.options.length ? t("workbench.interaction.other") : t("workbench.interaction.input")} onChange={(event) => setValues((current) => ({ ...current, [question.id]: event.target.value }))} />}</fieldset>)}
+    <footer><span>{leaseHeld ? t("workbench.interaction.verified") : t("workbench.interaction.needControl")}</span><button className="button primary" type="button" disabled={!leaseHeld || busy || !complete || !interaction.operationDigest} onClick={() => onResolve(interaction.questions.map((question) => ({ questionId: question.id, answers: [values[question.id].trim()] })))}>{t("workbench.interaction.send")}</button></footer>
+  </section>;
 }
 
 function FileChanges({ files, session }: { files: FileChangeProjection[]; session: WorkbenchSession }) {

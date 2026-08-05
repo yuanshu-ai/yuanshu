@@ -242,6 +242,26 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .approval-panel b { font-size: 11px; }
 .approval-panel p { margin: 4px 0; color: var(--muted); font-size: 10px; }
 .approval-panel small { color: var(--quiet); font: 9px ui-monospace, monospace; }
+.interaction-question { margin: 0 0 8px; padding: 12px; border: 1px solid rgba(111, 207, 151, .28); border-radius: var(--radius); background: color-mix(in srgb, var(--surface) 90%, var(--accent) 10%); }
+.interaction-question header { display: flex; gap: 9px; align-items: flex-start; margin-bottom: 10px; }
+.interaction-question header div { display: grid; gap: 2px; }
+.interaction-question header small, .interaction-question footer span { color: var(--muted); font-size: 10px; }
+.interaction-question fieldset { display: grid; gap: 6px; margin: 8px 0; padding: 0; border: 0; }
+.interaction-question legend { display: grid; gap: 2px; margin-bottom: 6px; color: var(--text); font-size: 12px; }
+.interaction-question legend span { color: var(--accent); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.question-option { display: flex; gap: 8px; align-items: flex-start; min-height: 44px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
+.question-option input { margin-top: 3px; }
+.question-option span { display: grid; gap: 2px; }
+.question-option small { color: var(--muted); }
+.question-answer { min-height: 44px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--bg); }
+.interaction-question footer { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-top: 10px; }
+.plan-panel { padding: 10px 2px 14px; border-bottom: 1px solid var(--line); }
+.plan-panel > p { margin: 5px 0 10px; color: var(--muted); font-size: 11px; }
+.plan-panel ol { display: grid; gap: 7px; margin: 9px 0 0; padding: 0; list-style: none; }
+.plan-panel li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 8px; align-items: center; color: var(--muted); font-size: 11px; }
+.plan-panel li.completed { color: var(--quiet); text-decoration: line-through; }
+.plan-panel li small { color: var(--quiet); font-size: 9px; }
+.reasoning-summary .markdown-content { padding: 9px 12px 12px 34px; color: var(--muted); }
 .file-changes details { border-bottom: 1px solid var(--line); }
 .file-changes details:last-child { border-bottom: 0; }
 .file-changes summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; cursor: pointer; list-style: none; }

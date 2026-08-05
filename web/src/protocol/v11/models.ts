@@ -38,6 +38,27 @@ export interface RunSummary {
   readonly status: string;
   readonly startedAt?: string;
   readonly completedAt?: string;
+  readonly items?: readonly RunItem[];
+}
+
+export interface RunItem {
+  readonly id: string;
+  readonly kind: "user_message" | "agent_message" | "reasoning_summary" | "plan" | "command" | "command_output" | "tool" | "file_change" | "diff" | "error" | "unknown";
+  readonly status?: string;
+  readonly text?: string;
+  readonly command?: string;
+  readonly output?: string;
+  readonly toolName?: string;
+  readonly path?: string;
+  readonly changeType?: string;
+  readonly diff?: string;
+  readonly exitCode?: number;
+  readonly errorCode?: string;
+  readonly errorMessage?: string;
+  readonly partial?: boolean;
+  readonly truncated?: boolean;
+  readonly totalBytes?: number;
+  readonly digest?: string;
 }
 
 export interface Activity {
@@ -58,10 +79,19 @@ export interface Interaction {
   readonly status: "pending" | "processing" | "accepted" | "declined" | "answered" | "expired" | "ambiguous";
   readonly summary?: string;
   readonly risk?: "normal" | "high" | "unknown";
+  readonly runId?: string;
+  readonly activityId?: string;
+  readonly details?: Readonly<Record<string, unknown>>;
   readonly operationDigest: string;
   readonly expiresAt: string;
-  readonly options?: readonly { readonly id: string; readonly label: string }[];
+  readonly options?: readonly InteractionOption[];
+  readonly questions?: readonly InteractionQuestion[];
+  readonly blocking?: boolean;
 }
+
+export interface InteractionOption { readonly id: string; readonly label: string; readonly description?: string }
+export interface InteractionQuestion { readonly id: string; readonly header: string; readonly question: string; readonly isOther?: boolean; readonly isSecret?: boolean; readonly options?: readonly InteractionOption[] }
+export interface InteractionAnswer { readonly questionId: string; readonly answers: readonly string[] }
 
 export interface TaskSnapshot {
   readonly task: TaskSummary;

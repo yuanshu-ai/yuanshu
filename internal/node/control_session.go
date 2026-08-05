@@ -657,15 +657,31 @@ func (s *ControlSession) dispatchV11(ctx context.Context, message protocolv11.Yu
 		return s.runtime.InterruptTurn(ctx, adapter.InterruptTurnRequest{WorkspaceID: workspaceID, ThreadID: taskID, TurnID: runID})
 	case protocolv11.ControlInteractionResolve:
 		decision := stringPayload(message.Payload, "decision")
-		if decision == "" {
-			return adapter.ErrUnsupported
-		}
 		approval, err := s.store.Approval(ctx, interactionID)
 		if err != nil || approval.WorkspaceID != workspaceID || approval.ThreadID != taskID || approval.TurnID != runID {
 			if err != nil {
 				return err
 			}
 			return adapter.ErrForbidden
+		}
+		if decision == "" {
+			answers, parseErr := interactionAnswers(message.Payload, approval.Payload)
+			if parseErr != nil {
+				return parseErr
+			}
+			resolver, ok := s.runtime.(adapter.InteractionResolver)
+			if !ok {
+				return adapter.ErrUnsupported
+			}
+			claimed, claimErr := s.store.ClaimApproval(ctx, store.ApprovalClaim{ApprovalID: interactionID, WorkspaceID: workspaceID, ThreadID: taskID, TurnID: runID, ItemID: approval.ItemID, OperationDigest: stringPayload(message.Payload, "operationDigest"), Decision: "answer", Now: s.now().UTC()})
+			if claimErr != nil {
+				return claimErr
+			}
+			resolveErr := resolver.ResolveInteraction(ctx, adapter.InteractionDecision{WorkspaceID: workspaceID, ThreadID: taskID, TurnID: runID, ItemID: approval.ItemID, InteractionID: interactionID, Answers: answers})
+			if resolveErr != nil {
+				_ = s.store.MarkApprovalAmbiguous(ctx, claimed.ApprovalID)
+			}
+			return resolveErr
 		}
 		claimed, err := s.store.ClaimApproval(ctx, store.ApprovalClaim{ApprovalID: interactionID, WorkspaceID: workspaceID, ThreadID: taskID, TurnID: runID, ItemID: approval.ItemID, OperationDigest: stringPayload(message.Payload, "operationDigest"), Decision: decision, Now: s.now().UTC()})
 		if err != nil {
@@ -712,6 +728,81 @@ func (s *ControlSession) dispatchV11(ctx context.Context, message protocolv11.Yu
 	}
 }
 
+func interactionAnswers(payload map[string]any, stored []byte) ([]adapter.InteractionAnswer, error) {
+	var requested struct {
+		Questions []struct {
+			ID      string `json:"id"`
+			IsOther bool   `json:"isOther"`
+			Options []struct {
+				ID string `json:"id"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if json.Unmarshal(stored, &requested) != nil || len(requested.Questions) == 0 {
+		return nil, adapter.ErrInvalid
+	}
+	known := make(map[string]struct {
+		other   bool
+		options map[string]struct{}
+	}, len(requested.Questions))
+	for _, question := range requested.Questions {
+		options := make(map[string]struct{}, len(question.Options))
+		for _, option := range question.Options {
+			options[option.ID] = struct{}{}
+		}
+		known[question.ID] = struct {
+			other   bool
+			options map[string]struct{}
+		}{other: question.IsOther, options: options}
+	}
+	var answers []adapter.InteractionAnswer
+	if raw, ok := payload["answers"]; ok {
+		bytes, err := json.Marshal(raw)
+		if err != nil || json.Unmarshal(bytes, &answers) != nil {
+			return nil, adapter.ErrInvalid
+		}
+	} else if answer := stringPayload(payload, "answer"); answer != "" && len(requested.Questions) == 1 {
+		answers = []adapter.InteractionAnswer{{QuestionID: requested.Questions[0].ID, Answers: []string{answer}}}
+	} else if raw, ok := payload["selectedOptionIds"].([]any); ok && len(requested.Questions) == 1 {
+		values := make([]string, 0, len(raw))
+		for _, value := range raw {
+			text, ok := value.(string)
+			if !ok || text == "" {
+				return nil, adapter.ErrInvalid
+			}
+			values = append(values, text)
+		}
+		answers = []adapter.InteractionAnswer{{QuestionID: requested.Questions[0].ID, Answers: values}}
+	} else {
+		return nil, adapter.ErrInvalid
+	}
+	if len(answers) != len(requested.Questions) {
+		return nil, adapter.ErrInvalid
+	}
+	seen := make(map[string]struct{}, len(answers))
+	for _, answer := range answers {
+		question, ok := known[answer.QuestionID]
+		if !ok || len(answer.Answers) == 0 || len(answer.Answers) > 32 {
+			return nil, adapter.ErrInvalid
+		}
+		for _, value := range answer.Answers {
+			if value == "" || len(value) > 65536 {
+				return nil, adapter.ErrInvalid
+			}
+			if len(question.options) > 0 {
+				if _, selected := question.options[value]; !selected && !question.other {
+					return nil, adapter.ErrInvalid
+				}
+			}
+		}
+		if _, duplicate := seen[answer.QuestionID]; duplicate {
+			return nil, adapter.ErrInvalid
+		}
+		seen[answer.QuestionID] = struct{}{}
+	}
+	return answers, nil
+}
+
 func (s *ControlSession) publishAgentSnapshotV11(ctx context.Context, correlationID, requestedID string) error {
 	resources, ok := s.store.(controlAgentStore)
 	if !ok {
@@ -746,7 +837,13 @@ func (s *ControlSession) publishAgentSnapshotV11(ctx context.Context, correlatio
 		capabilities := []any{
 			capabilityPayload("task.read", instance.RuntimeMode == store.AgentRuntimeManaged, "runtime_not_managed"),
 			capabilityPayload("task.start", controllable, "runtime_not_ready"),
-			capabilityPayload("run.control", controllable, "runtime_not_ready"),
+			capabilityPayload("run.start", controllable, "runtime_not_ready"),
+			capabilityPayload("run.steer", controllable, "runtime_not_ready"),
+			capabilityPayload("run.interrupt", controllable, "runtime_not_ready"),
+			capabilityPayload("interaction.resolve", controllable, "runtime_not_ready"),
+			capabilityPayload("reasoning.summary", instance.RuntimeMode == store.AgentRuntimeManaged, "runtime_not_managed"),
+			capabilityPayload("plan", instance.RuntimeMode == store.AgentRuntimeManaged, "runtime_not_managed"),
+			capabilityPayload("activity", instance.RuntimeMode == store.AgentRuntimeManaged, "runtime_not_managed"),
 		}
 		agents = append(agents, map[string]any{
 			"id": instance.InstanceID, "adapterType": instance.AdapterType, "displayName": instance.DisplayName,
@@ -873,9 +970,13 @@ func threadItemPayload(item adapter.ThreadItem) map[string]any {
 }
 
 func (s *ControlSession) publish(ctx context.Context, event adapter.AgentEvent) error {
-	records, err := s.events.Publish(ctx, event)
-	if err != nil {
-		return errors.New("node event persistence failed")
+	var records []eventlog.Record
+	var err error
+	if !protocolv11.IsKnownEvent(string(event.Type)) || protocol.IsKnownEvent(string(event.Type)) {
+		records, err = s.events.Publish(ctx, event)
+		if err != nil {
+			return errors.New("node event persistence failed")
+		}
 	}
 	var recordsV11 []eventlog.Record
 	if s.eventsV11 != nil {
