@@ -41,6 +41,9 @@ The implementation is usable for development and self-hosting evaluation. Automa
 - The Server embeds the workbench, pairing page, Relay, and same-origin administration console in one process.
 - Four self-hosting modes cover loopback, managed LAN certificates, public-IP ACME, and existing certificates or a same-host reverse proxy.
 - The Node now uses a static Adapter Registry, a redacted local Agent Inventory, and an isolated multi-runtime manager; the production path remains `codex-default` managed stdio.
+- Node Config v2 and SQLite v8 persist typed Agent Instances, managed/detected-only Runtime Endpoints, Workspace-Agent authorization, and Yuanshu Task Bindings; Native Session IDs remain Node-local.
+- Protocol 1.1 runs alongside frozen Protocol 1.0, and the Web workbench exposes the device → Agent → workspace → task resource path with capability-aware controls.
+- Codex reasoning summaries, plans, activities, token summaries, and structured user questions are projected without recording hidden reasoning or Agent-private JSON.
 - Evidence-only Claude Code and OpenCode probes are present for architecture validation, but they are not registered as production Adapters or exposed as remote task controls.
 
 Yuanshu currently integrates Codex first. Its Server does not proxy model API calls or require the Agent to use a vendor-owned mobile-account path. It does not provide hosted compute, remote desktop, a general-purpose browser terminal, permanent Server-side task-content storage, team ACLs, or additional production Agent adapters yet.
@@ -176,10 +179,11 @@ Report security vulnerabilities privately through [GitHub Private Vulnerability 
 - Public-IP ACME requires a globally routable fixed IP and public TCP 443.
 - Linux Node, installable PWA, Web Push, team roles, multi-tenant hosting, and additional Agent adapters are later work.
 - External Codex CLI/Desktop session attachment is not available: the current evidence did not prove reliable cross-process session discovery and history reading.
-- Persisted Agent instances, runtime endpoints, stable Yuanshu Task bindings, remote Agent navigation, and Protocol capability negotiation are not implemented yet.
+- Persisted Agent instances, managed/detected-only runtime endpoints, stable Yuanshu Task bindings, remote Agent navigation, and the Protocol 1.1 capability envelope are implemented, but remain in `verifying` status and are not a release claim.
+- External Codex CLI/Desktop attachment and history-only discovery remain unavailable after a negative evidence gate.
 - The Server remains a personal single-Owner control plane and does not permanently store task bodies.
 
-The project will finish the personal remote Codex loop before expanding to small-team permissions or commercial multi-tenancy. The Registry, Inventory, and Runtime Manager foundations are implemented; persistence and public Protocol/Web resources remain blocked by explicit evidence gates. A detected process or an evidence probe must never be presented as a remotely controllable Agent.
+The project will finish the personal remote Codex loop before expanding to small-team permissions or commercial multi-tenancy. The Registry, Inventory, Runtime Manager, persistence, Protocol 1.1, and Agent resource Web foundations are implemented; real-device acceptance and a second production Adapter remain separate gates. A detected process or an evidence probe must never be presented as a remotely controllable Agent.
 
 <!-- readme-section: documentation -->
 ## Documentation
@@ -216,7 +220,11 @@ go vet ./...
 go build ./...
 ```
 
-Protocol v1 Schema is the wire source of truth. Platform-specific security storage, IPC, process ownership, autostart, and path inspection remain isolated behind the Platform abstraction. Read [CONTRIBUTING.md](./CONTRIBUTING.md) before changing Protocol, persistence, trust boundaries, or generated assets.
+Protocol 1.0 remains the frozen compatibility wire source, while Protocol 1.1 has its own
+versioned schema and event stream. Platform-specific security storage, IPC, process ownership,
+autostart, and path inspection remain isolated behind the Platform abstraction. Read
+[CONTRIBUTING.md](./CONTRIBUTING.md) before changing Protocol, persistence, trust boundaries,
+or generated assets.
 
 <!-- readme-section: community -->
 ## Community

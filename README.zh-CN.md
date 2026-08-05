@@ -41,6 +41,9 @@ Codex 是第一个完整集成。长期产品是面向本地 Coding Agent 的开
 - Server 在一个进程中内嵌工作台、配对页、Relay 和同源管理后台。
 - 四种自托管模式覆盖本机 loopback、局域网托管证书、公网 IP ACME，以及已有证书或同机反向代理。
 - Node 已使用静态 Adapter Registry、脱敏本地 Agent Inventory 和相互隔离的多 Runtime Manager；正式运行路径仍是 `codex-default` managed stdio。
+- Node Config v2 与 SQLite v8 已持久化带类型的 Agent Instance、managed/detected-only Runtime Endpoint、Workspace-Agent 授权关系和 Yuanshu Task Binding；Native Session ID 仍只保留在 Node。
+- Protocol 1.1 与冻结的 Protocol 1.0 并行运行，Web 工作台已提供“设备 → Agent → 工作区 → 任务”资源路径，并按能力显示可用操作。
+- Codex 的 reasoning summary、计划、活动、Token 摘要和结构化用户问题已投影；隐藏 reasoning 和 Agent 私有 JSON 不记录、不展示。
 - 仓库包含仅用于架构验证的 Claude Code 与 OpenCode Probe，但它们没有注册为正式 Adapter，也没有开放远程任务控制。
 
 远枢当前首先集成 Codex。Server 不代理模型 API，也不要求 Agent 必须使用某个厂商移动端账户链路。当前不提供托管算力、远程桌面、通用 Web Terminal、Server 永久任务正文存储、团队 ACL 或其它正式 Agent Adapter。
@@ -176,10 +179,11 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 - 公网 IP ACME 需要全局可路由固定 IP 和公网 TCP 443。
 - Linux Node、可安装 PWA、Web Push、团队角色、多租户托管和其他 Agent Adapter 属于后续能力。
 - 当前不能附着外部 Codex CLI/Desktop 会话：现有证据没有证明可靠的跨进程会话发现和历史读取。
-- 持久化 Agent Instance、Runtime Endpoint、稳定 Yuanshu Task Binding、远程 Agent 导航和 Protocol 能力协商尚未实现。
+- 持久化 Agent Instance、managed/detected-only Runtime Endpoint、稳定 Yuanshu Task Binding、远程 Agent 导航和 Protocol 1.1 能力外壳已经实现，但仍处于 `verifying`，不能视为发布承诺。
+- 外部 Codex CLI/Desktop 会话的发现、历史读取和附着未通过证据 Gate，当前不可用。
 - Server 仍是个人单 Owner 控制面，不永久保存任务正文。
 
-项目会先完成个人远程 Codex 闭环，再扩展小团队权限或商业多租户。Registry、Inventory 和 Runtime Manager 基础已经实现；持久化与公开 Protocol/Web 资源仍受明确证据 Gate 阻塞。检测到进程或存在 Probe 证据，绝不能被展示为可远程控制的 Agent。
+项目会先完成个人远程 Codex 闭环，再扩展小团队权限或商业多租户。Registry、Inventory、Runtime Manager、持久化、Protocol 1.1 和 Agent 资源 Web 基础已经实现；真实设备验收和第二个正式 Adapter 仍是独立 Gate。检测到进程或存在 Probe 证据，绝不能被展示为可远程控制的 Agent。
 
 <!-- readme-section: documentation -->
 ## 文档
@@ -216,7 +220,7 @@ go vet ./...
 go build ./...
 ```
 
-Protocol v1 Schema 是 wire format 的唯一事实来源。平台专属的安全存储、IPC、进程所有权、自启动和路径检查都封装在 Platform 抽象之后。修改 Protocol、持久化、信任边界或生成产物前，请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+Protocol 1.0 继续作为冻结的兼容 wire source，Protocol 1.1 使用独立的版本化 Schema 和事件流。平台专属的安全存储、IPC、进程所有权、自启动和路径检查都封装在 Platform 抽象之后。修改 Protocol、持久化、信任边界或生成产物前，请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 <!-- readme-section: community -->
 ## 社区

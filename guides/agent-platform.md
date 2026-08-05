@@ -21,12 +21,13 @@ and the browser do not become a model proxy or credential store.
   credentials.
 - A Runtime Manager keys managed runtimes by Instance and Endpoint, with isolated event
   pumps, health, backpressure, and reverse-order process cleanup.
-- Codex managed stdio remains the only production runtime path. Existing Protocol 1.0,
-  Node configuration, SQLite state, Thread/Turn behavior, and recovery semantics remain
-  unchanged.
+- Codex managed stdio remains the only production runtime path. Protocol 1.0 remains
+  compatible, while Node configuration and SQLite now have typed Agent resources and
+  Task Bindings; existing Thread/Turn and recovery semantics remain compatible.
 
-These foundations are internal today. They do not make Claude Code or OpenCode remotely
-controllable, and they do not yet add an Agent selector to the Web workbench.
+The persisted managed/detected-only resources are now projected through Protocol 1.1 and
+the Web workbench. They do not make Claude Code or OpenCode remotely controllable: only
+the Codex managed instance exposes task controls.
 
 ## Target resource model
 
@@ -36,17 +37,17 @@ controllable, and they do not yet add an Agent selector to the Web workbench.
   `codex-default`.
 - **Runtime endpoint** is one managed, attached, history-only, or detected-only access
   path for an instance.
-- **Yuanshu task** is the future stable remote task resource used by leases and
+- **Yuanshu task** is the stable remote task resource used by leases, notifications, and
   recovery.
 - **Native session** is the Agent's own Thread, Session, or Conversation identifier and
   must remain on the Node.
-- **Task binding** is the future Node-local mapping between a Yuanshu task, Agent
-  instance, runtime endpoint, native session, and workspace.
+- **Task binding** is the Node-local mapping between a Yuanshu task, Agent instance,
+  runtime endpoint, native session, and workspace.
 
-The Registry, Inventory, and managed Runtime Manager exist now. Persisted Agent
-instances, endpoints, and Task Bindings do not. Protocol 1.0 still uses the current
-Codex Thread identity, so the public configuration must not be extended with unofficial
-multi-Agent fields.
+The Registry, Inventory, managed Runtime Manager, Config v2, SQLite v8, and Task Binding
+store exist now. Protocol 1.0 remains compatible while Protocol 1.1 carries the typed
+Agent/Task/Run/Activity/Interaction envelope. Native Session IDs and attached locators
+remain Node-local.
 
 ## Runtime modes and evidence
 
@@ -83,15 +84,15 @@ complete task content.
 
 ## Current gates
 
-1. Finish PF-052 real-device acceptance for the personal Codex workbench.
-2. Keep persisted Agent Instance, Endpoint, and Task Binding migration blocked until a
-   separately authorized persistent-session gate supplies the required history evidence.
+1. Finish PF-052 real-device acceptance for the personal Codex workbench and the new
+   Agent/Task resource path.
+2. Keep external attached/history-only discovery blocked after the negative PF-084 gate;
+   managed/detected-only persistence is already implemented and must be tested on the
+   supported platforms.
 3. Require a bounded real-model gate before promoting OpenCode or Claude Code beyond an
    evidence-only probe.
-4. Add the device → Agent → workspace/task Web path only after Node persistence provides
-   authoritative resources.
-5. Version Protocol capability negotiation only after at least two structured Agent
-   surfaces provide enough evidence to define honest shared semantics.
+4. Treat Protocol 1.1 as an implemented, verifying compatibility layer and only expand
+   its shared semantics when additional structured Agent evidence supports them.
 
 Yuanshu will not load arbitrary remote plugins, scan arbitrary local ports, expose Agent
 debug endpoints, or rely on terminal-color parsing as the only basis of a production

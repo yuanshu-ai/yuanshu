@@ -41,11 +41,15 @@ yuanshu node ui
 yuanshu node doctor --json
 ```
 
-The code now contains a static Adapter Registry, local Agent Inventory, and a multi-runtime
-manager, but the public schema still exposes only the production `codex-default` managed
-runtime. Persisted Agent instances, runtime endpoints, and workspace/task bindings require
-an explicit future migration; users should not add arbitrary unofficial TOML fields in
-anticipation of that format.
+The public Node schema is Config v2. It exposes typed Agent Instances with explicit
+`managed` or `detected-only` modes, Codex stdio settings, and Workspace allowed/default
+instance relationships. The current builtin production instance is `codex-default`; a
+detected-only entry cannot create or control tasks. Config v1 is migrated in memory to v2
+and future versions are rejected rather than silently downgraded.
+
+Node SQLite v8 mirrors the validated resources and keeps the Native Session ID only on
+the Node. Do not add arbitrary Agent-specific TOML fields, attached endpoints, sockets,
+ports, credentials, or paths: those remain outside the supported schema.
 
 When automatic browser opening or the native directory picker is unavailable, keep the setup local by printing the one-minute loopback URL and preselecting the workspace from the CLI:
 
@@ -76,4 +80,5 @@ Remote Web settings return a redacted view only. Safe display and retention chan
 - Secure Store failure is fail-closed and never falls back to plaintext.
 - Node event and SQLite continuity is preserved when a Relay-only setting safely reloads.
 
-The machine-readable contracts are in [`schemas/config/v1`](../schemas/config/v1).
+The machine-readable contracts are in [`schemas/config/v2`](../schemas/config/v2); v1 is
+retained only for strict migration fixtures and compatibility tests.

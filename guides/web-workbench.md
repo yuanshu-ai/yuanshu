@@ -6,7 +6,7 @@ Yuanshu Server exposes three separate products through one process and certifica
 - `/admin` — same-origin Server administration;
 - `/pair` — browser pairing.
 
-The workbench is task-first. On phones it provides Home, Tasks, Notifications, and Settings navigation; Thread details open full-screen. Desktop uses Node/workspace context, task summaries, and Thread detail columns. Codex is the current production Adapter. The Node's internal Inventory and Runtime Manager are not yet remote Agent resources, so detected Claude Code or OpenCode installations do not appear as controllable workbench entries.
+The workbench is task-first. On phones it provides Home, Tasks, Notifications, and Settings navigation; Thread details open full-screen. Desktop uses Node/workspace context, task summaries, and Thread detail columns. Codex is the current production Adapter. Protocol 1.1 now projects Node Agent Instances, Runtime Endpoints, Workspaces, and Yuanshu Tasks into the resource path; detected Claude Code or OpenCode installations remain visible only as non-controllable `detected-only` resources.
 
 ## Task flow
 
@@ -22,8 +22,11 @@ The Timeline renders user/Agent messages, commands, tools, errors, file changes,
 
 Browser connection settings, non-exportable control identity, Node bindings, event cursors, and control sequences live in IndexedDB. Prompt text, Thread bodies, command output, Diffs, and drafts do not persist there, in localStorage, or in URLs.
 
-Node events are replayed from a cursor after reconnect. Duplicates are ignored, gaps trigger snapshot recovery, and side-effecting controls are never resent automatically. `unknown` and `ambiguous` results remain visible.
+Node events are replayed from a cursor after reconnect. Protocol 1.0 and the independent
+`node-events-v1.1` stream keep separate cursors while sharing control sequence rules.
+Duplicates are ignored, gaps trigger snapshot recovery, and side-effecting controls are
+never resent automatically. `unknown` and `ambiguous` results remain visible.
 
 ## Current boundary
 
-The current interface is a responsive Web application, not yet an installable PWA. Web Push, system notifications, attachments, archival, favorites, team ACLs, and additional production Agent adapters are later work. The static Registry, local Inventory, and managed Runtime Manager are implemented; persisted Agent instances, stable Yuanshu task bindings, remote Agent navigation, and versioned capability negotiation remain gated. Automated Chromium/WebKit viewport tests do not replace PF-052 real Safari, Android Chrome, iPad, and network-switching acceptance.
+The current interface is a responsive Web application, not yet an installable PWA. Web Push, system notifications, attachments, archival, favorites, team ACLs, and additional production Agent adapters are later work. The static Registry, local Inventory, managed Runtime Manager, persisted managed/detected-only resources, stable Yuanshu Task bindings, remote Agent navigation, and Protocol 1.1 envelope are implemented but remain in verification. Automated Chromium/WebKit viewport tests do not replace PF-052 real Safari, Android Chrome, iPad, and network-switching acceptance.
