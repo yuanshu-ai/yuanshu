@@ -27,17 +27,20 @@ export function NewTaskFlow({ session, connectionState, nodes, agents, workspace
   onDraftChange?: (dirty: boolean) => void;
 }) {
   const initial = validInitialTarget(initialTarget, nodes, agents, workspaces);
-  const [step, setStep] = useState<Step>(initial ? "compose" : "target");
-  const [nodeId, setNodeId] = useState(initial?.nodeId ?? "");
-  const [agentInstanceId, setAgentInstanceId] = useState(initial?.agentInstanceId ?? "");
-  const [workspaceId, setWorkspaceId] = useState(initial?.workspaceId ?? "");
+  const candidates = useMemo(() => taskTargets(nodes, agents, workspaces), [agents, nodes, workspaces]);
+  const automaticTarget = initial ?? (candidates.length === 1 ? candidates[0] : undefined);
+  const [step, setStep] = useState<Step>(automaticTarget ? "compose" : "target");
+  const [targetWasAutomatic, setTargetWasAutomatic] = useState(Boolean(automaticTarget));
+  const [nodeId, setNodeId] = useState(automaticTarget?.nodeId ?? "");
+  const [agentInstanceId, setAgentInstanceId] = useState(automaticTarget?.agentInstanceId ?? "");
+  const [workspaceId, setWorkspaceId] = useState(automaticTarget?.workspaceId ?? "");
   const [input, setInput] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const node = nodes.find((candidate) => candidate.nodeId === nodeId);
   const agent = agents.find((candidate) => candidate.nodeId === nodeId && candidate.agentInstanceId === agentInstanceId);
   const workspace = workspaces.find((candidate) => candidate.nodeId === nodeId && candidate.workspaceId === workspaceId && (!candidate.agentInstanceIds?.length || candidate.agentInstanceIds.includes(agentInstanceId)));
-  const availableAgents = useMemo(() => agents.filter((candidate) => candidate.nodeId === nodeId), [agentInstanceId, agents, nodeId]);
+  const availableAgents = useMemo(() => agents.filter((candidate) => candidate.nodeId === nodeId && candidate.runtimeMode !== "detected-only"), [agents, nodeId]);
   const availableWorkspaces = useMemo(() => workspaces.filter((candidate) => candidate.nodeId === nodeId && (!candidate.agentInstanceIds?.length || candidate.agentInstanceIds.includes(agentInstanceId))), [agentInstanceId, nodeId, workspaces]);
   const targetReady = canStartTask(node) && canCreateTask(agent) && Boolean(workspace);
   const startReady = targetReady && input.trim().length > 0 && connectionState === "connected";
@@ -46,6 +49,16 @@ export function NewTaskFlow({ session, connectionState, nodes, agents, workspace
   useEffect(() => {
     return () => onDraftChange?.(false);
   }, [onDraftChange]);
+
+  useEffect(() => {
+    if (initialTarget || targetWasAutomatic || step !== "target" || nodeId || agentInstanceId || workspaceId || candidates.length !== 1) return;
+    const target = candidates[0];
+    setNodeId(target.nodeId);
+    setAgentInstanceId(target.agentInstanceId);
+    setWorkspaceId(target.workspaceId);
+    setTargetWasAutomatic(true);
+    setStep("compose");
+  }, [agentInstanceId, candidates, initialTarget, nodeId, step, targetWasAutomatic, workspaceId]);
 
   const requestClose = () => {
     if (busy) return;
@@ -74,11 +87,12 @@ export function NewTaskFlow({ session, connectionState, nodes, agents, workspace
     }
   };
 
-  return <Dialog className="new-task-dialog" title="开始新任务" onClose={requestClose} actions={<FlowActions step={step} busy={busy} canContinue={step === "target" ? targetReady : step === "compose" ? targetReady && Boolean(input.trim()) : startReady} onBack={() => setStep(step === "review" ? "compose" : "target")} onNext={() => setStep(step === "target" ? "compose" : "review")} onClose={requestClose} onSubmit={() => void submit()} />}>
+  const canContinue = step === "target" ? targetReady : step === "compose" ? targetReady && Boolean(input.trim()) : startReady;
+  return <Dialog className="new-task-dialog" title="开始新任务" onClose={requestClose} actions={<FlowActions step={step} direct={targetWasAutomatic} busy={busy} canContinue={canContinue} onBack={() => setStep(step === "review" ? "compose" : "target")} onNext={() => setStep(step === "target" ? "compose" : "review")} onClose={requestClose} onSubmit={() => void submit()} />}>
     <div className="new-task-flow">
-      <ol className="new-task-steps" aria-label="新任务步骤"><li className={step === "target" ? "active" : "done"}>1 选择位置</li><li className={step === "compose" ? "active" : step === "review" ? "done" : ""}>2 输入任务</li><li className={step === "review" ? "active" : ""}>3 确认执行</li></ol>
+      {targetWasAutomatic ? <ol className="new-task-steps" aria-label="新任务步骤"><li className="done">目标已选择</li><li className={step === "compose" ? "active" : ""}>输入任务</li></ol> : <ol className="new-task-steps" aria-label="新任务步骤"><li className={step === "target" ? "active" : "done"}>1 选择位置</li><li className={step === "compose" ? "active" : step === "review" ? "done" : ""}>2 输入任务</li><li className={step === "review" ? "active" : ""}>3 确认执行</li></ol>}
       {step === "target" && <TargetStep nodes={nodes} agents={availableAgents} workspaces={availableWorkspaces} nodeId={nodeId} agentInstanceId={agentInstanceId} workspaceId={workspaceId} onNode={(value) => { setNodeId(value); setAgentInstanceId(""); setWorkspaceId(""); setMessage(""); }} onAgent={(value) => { setAgentInstanceId(value); setWorkspaceId(""); setMessage(""); }} onWorkspace={(value) => { setWorkspaceId(value); setMessage(""); }} />}
-      {step === "compose" && <form className="new-task-compose" onSubmit={(event) => { event.preventDefault(); if (targetReady && input.trim()) setStep("review"); }}><TargetSummary node={node} agent={agent} workspace={workspace} compact /><label htmlFor="new-task-input">你希望 {agent?.displayName ?? "Agent"} 完成什么？</label><textarea id="new-task-input" autoFocus value={input} onChange={(event) => { setInput(event.target.value); onDraftChange?.(event.target.value.trim().length > 0); }} placeholder="描述目标、约束和完成标准" rows={8} disabled={busy} /></form>}
+      {step === "compose" && <form className="new-task-compose" onSubmit={(event) => { event.preventDefault(); if (!targetReady || !input.trim()) return; if (targetWasAutomatic) void submit(event); else setStep("review"); }}><TargetSummary node={node} agent={agent} workspace={workspace} compact /><label htmlFor="new-task-input">你希望 {agent?.displayName ?? "Agent"} 完成什么？</label><textarea id="new-task-input" autoFocus value={input} onChange={(event) => { setInput(event.target.value); onDraftChange?.(event.target.value.trim().length > 0); }} placeholder="描述目标、约束和完成标准" rows={8} disabled={busy} /></form>}
       {step === "review" && <div className="new-task-review"><TargetSummary node={node} agent={agent} workspace={workspace} /><section><span>任务要求</span><p>{input.trim()}</p></section><div className="new-task-notice"><Icon name="lock" /><p>浏览器只发送已登记的设备、Agent 和工作区标识；实际路径、Provider 配置与凭据仍留在设备。</p></div></div>}
       {!startReady && step !== "target" && availabilityMessage && <div className="operation-message" role="status">{availabilityMessage}</div>}
       {message && <div className="operation-message" role="alert">{friendlyStartError(message)}</div>}
@@ -107,8 +121,9 @@ function TargetSummary({ node, agent, workspace, compact = false }: { node?: Nod
   return <section className={`target-summary ${compact ? "compact" : ""}`} aria-label="执行目标"><div><span>设备</span><b>{node?.name ?? "未选择"}</b><StatusPill tone={canStartTask(node) ? "accent" : "warning"}>{canStartTask(node) ? "在线" : "不可用"}</StatusPill></div><div><span>Agent</span><b>{agent?.displayName ?? "未选择"}</b></div><div><span>工作区</span><b>{workspace?.name ?? "未选择"}</b></div><div><span>权限</span><b>{permissionLabel(workspace?.permissionProfile)}</b></div><div><span>网络</span><b>{networkLabel(workspace?.allowNetwork)}</b></div></section>;
 }
 
-function FlowActions({ step, busy, canContinue, onBack, onNext, onClose, onSubmit }: { step: Step; busy: boolean; canContinue: boolean; onBack: () => void; onNext: () => void; onClose: () => void; onSubmit: () => void }) {
-  return <><button className="button quiet" type="button" disabled={busy} onClick={onClose}>取消</button>{step !== "target" && <button className="button secondary" type="button" disabled={busy} onClick={onBack}>上一步</button>}{step === "review" ? <button className="button primary" type="button" disabled={busy || !canContinue} onClick={onSubmit}>{busy ? "正在启动" : "确认并启动"}</button> : <button className="button primary" type="button" disabled={!canContinue} onClick={onNext}>下一步</button>}</>;
+function FlowActions({ step, direct, busy, canContinue, onBack, onNext, onClose, onSubmit }: { step: Step; direct: boolean; busy: boolean; canContinue: boolean; onBack: () => void; onNext: () => void; onClose: () => void; onSubmit: () => void }) {
+  const submitStep = step === "review" || (step === "compose" && direct);
+  return <><button className="button quiet" type="button" disabled={busy} onClick={onClose}>取消</button>{step !== "target" && !(direct && step === "compose") && <button className="button secondary" type="button" disabled={busy} onClick={onBack}>上一步</button>}{submitStep ? <button className="button primary" type="button" disabled={busy || !canContinue} onClick={onSubmit}>{busy ? "正在启动" : "确认并启动"}</button> : <button className="button primary" type="button" disabled={!canContinue} onClick={onNext}>下一步</button>}</>;
 }
 
 function validInitialTarget(target: NewTaskTarget | undefined, nodes: NodeProjection[], agents: AgentProjection[], workspaces: WorkspaceProjection[]): NewTaskTarget | undefined {
@@ -118,6 +133,20 @@ function validInitialTarget(target: NewTaskTarget | undefined, nodes: NodeProjec
 	const agentInstanceId = target.agentInstanceId ?? workspace?.defaultAgentInstanceId;
 	const agent = agents.find((candidate) => candidate.nodeId === target.nodeId && candidate.agentInstanceId === agentInstanceId);
   return canStartTask(node) && canCreateTask(agent) && workspace && agentInstanceId ? { ...target, agentInstanceId } : undefined;
+}
+
+function taskTargets(nodes: NodeProjection[], agents: AgentProjection[], workspaces: WorkspaceProjection[]): NewTaskTarget[] {
+  const result: NewTaskTarget[] = [];
+  for (const node of nodes) {
+    if (!canStartTask(node)) continue;
+    for (const agent of agents.filter((candidate) => candidate.nodeId === node.nodeId && canCreateTask(candidate))) {
+      for (const workspace of workspaces) {
+        if (workspace.nodeId !== node.nodeId || workspace.agentInstanceIds?.length && !workspace.agentInstanceIds.includes(agent.agentInstanceId)) continue;
+        result.push({ nodeId: node.nodeId, agentInstanceId: agent.agentInstanceId, workspaceId: workspace.workspaceId });
+      }
+    }
+  }
+  return result;
 }
 
 function canCreateTask(agent?: AgentProjection): boolean {

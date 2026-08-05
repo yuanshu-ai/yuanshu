@@ -27,12 +27,10 @@ describe("new task flow", () => {
     const input = screen.getByLabelText("你希望 Codex 完成什么？");
     fireEvent.change(input, { target: { value: "Keep this draft" } });
     await waitFor(() => expect(onDraftChange).toHaveBeenCalledWith(true));
-    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(screen.getByRole("button", { name: "确认并启动" }));
 
     await screen.findByText(/创建结果不确定/);
     expect(startThread).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "上一步" }));
     expect(screen.getByLabelText("你希望 Codex 完成什么？")).toHaveValue("Keep this draft");
   });
 
@@ -46,7 +44,7 @@ describe("new task flow", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
-  it("disables review immediately when the selected Node becomes unavailable", () => {
+  it("disables direct confirmation immediately when the selected Node becomes unavailable", () => {
     const props = {
       session: { startThread: vi.fn() } as unknown as WorkbenchSession,
       connectionState: "connected",
@@ -58,32 +56,42 @@ describe("new task flow", () => {
     };
     const view = render(<NewTaskFlow {...props} nodes={[node("office", true, "ready")]} />);
     fireEvent.change(screen.getByLabelText("你希望 Codex 完成什么？"), { target: { value: "Run checks" } });
-    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("button", { name: "确认并启动" })).toBeEnabled();
     view.rerender(<NewTaskFlow {...props} nodes={[node("office", false, "ready")]} />);
     expect(screen.getByRole("button", { name: "确认并启动" })).toBeDisabled();
     expect(screen.getByText("设备当前离线")).toBeInTheDocument();
   });
 
-  it("advances only after a confirmed result", async () => {
+  it("starts directly after a confirmed result", async () => {
     const onConfirmed = vi.fn();
     const startThread = vi.fn(() => Promise.resolve({ messageId: "start-confirmed", result: Promise.resolve({ payload: { status: "confirmed" } }) }));
     renderFlow({ startThread, onConfirmed, initialTarget: { nodeId: "office", workspaceId: "repo" } });
     fireEvent.change(screen.getByLabelText("你希望 Codex 完成什么？"), { target: { value: "Ship the task" } });
-    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(screen.getByRole("button", { name: "确认并启动" }));
     await waitFor(() => expect(onConfirmed).toHaveBeenCalledWith("start-confirmed"));
   });
 
-  it("shows detected-only agents without offering a control path", () => {
+  it("hides detected-only agents from the new task target list", () => {
     renderFlow({
       nodes: [node("office", true, "ready")],
       agents: [{ ...agent("office"), agentInstanceId: "external-codex", key: "office:external-codex", displayName: "External Codex", runtimeMode: "detected-only", status: "detected", capabilities: [] }],
       workspaces: [workspace("office", "repo")],
     });
     fireEvent.click(screen.getByRole("button", { name: /office.*Codex 可用/i }));
-    expect(screen.getByRole("button", { name: /External Codex.*仅检测到/ })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /External Codex/ })).not.toBeInTheDocument();
+    expect(screen.getByText("该设备还没有可控 Agent。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
+  });
+
+  it("keeps target selection when more than one managed target is available", () => {
+    renderFlow({
+      nodes: [node("office", true, "ready")],
+      workspaces: [workspace("office", "repo"), workspace("office", "docs")],
+    });
+
+    expect(screen.queryByLabelText("你希望 Codex 完成什么？")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /office.*Codex 可用/i })).toBeInTheDocument();
   });
 });
 
