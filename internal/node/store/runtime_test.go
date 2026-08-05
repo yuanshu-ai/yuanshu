@@ -8,7 +8,7 @@ import (
 
 func TestRuntimeThreadStoreLifecycle(t *testing.T) {
 	database, _ := openTestStore(t)
-	record := RuntimeThreadRecord{Adapter: "codex", ThreadID: "thread-1", WorkspaceID: "workspace-1", Ownership: "created", State: RuntimeThreadIdle}
+	record := RuntimeThreadRecord{AgentInstanceID: "codex-default", Adapter: "codex", ThreadID: "thread-1", WorkspaceID: "workspace-1", Ownership: "created", State: RuntimeThreadIdle}
 	if err := database.SaveRuntimeThread(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
@@ -63,5 +63,25 @@ func TestRuntimeThreadValidationAndWorkspaceCleanup(t *testing.T) {
 	}
 	if _, err := database.RuntimeThread(context.Background(), "thread"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("removed workspace retained ownership: %v", err)
+	}
+}
+
+func TestRuntimeThreadsAreScopedByAgentInstance(t *testing.T) {
+	database, _ := openTestStore(t)
+	for _, instanceID := range []string{"codex-office", "codex-home"} {
+		record := RuntimeThreadRecord{AgentInstanceID: instanceID, Adapter: "codex", ThreadID: "same-native-session", WorkspaceID: "workspace", Ownership: "created", State: RuntimeThreadIdle}
+		if err := database.SaveRuntimeThread(context.Background(), record); err != nil {
+			t.Fatalf("SaveRuntimeThread(%s): %v", instanceID, err)
+		}
+	}
+	for _, instanceID := range []string{"codex-office", "codex-home"} {
+		record, err := database.RuntimeThreadForInstance(context.Background(), instanceID, "same-native-session")
+		if err != nil || record.AgentInstanceID != instanceID {
+			t.Fatalf("RuntimeThreadForInstance(%s) = %#v, %v", instanceID, record, err)
+		}
+	}
+	records, err := database.RuntimeThreads(context.Background())
+	if err != nil || len(records) != 2 {
+		t.Fatalf("RuntimeThreads() = %#v, %v", records, err)
 	}
 }

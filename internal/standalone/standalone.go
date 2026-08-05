@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/adapter/builtin"
 	"github.com/yuanshu-ai/yuanshu/internal/config"
 	"github.com/yuanshu-ai/yuanshu/internal/node"
@@ -353,14 +352,10 @@ func Run(ctx context.Context, options Options) error {
 		return errors.Join(ErrUnavailable, errors.New("Codex adapter is unavailable"))
 	}
 	registry, err := builtin.NewRegistry(builtin.Options{
-		CodexConfig: codexConfig, Processes: options.Platform.Processes(),
+		CodexConfig: codexConfig, AgentInstances: loaded.Config.AgentInstances, Processes: options.Platform.Processes(),
 		Inspector:  options.Platform.ProcessInspector(),
 		Workspaces: workspaceManager, Threads: local,
 	})
-	if err != nil {
-		return errors.Join(ErrUnavailable, errors.New("Codex adapter is unavailable"))
-	}
-	handle, err := registry.CreateDefault()
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("Codex adapter is unavailable"))
 	}
@@ -369,12 +364,13 @@ func Run(ctx context.Context, options Options) error {
 		return errors.Join(ErrUnavailable, errors.New("Codex runtime manager is unavailable"))
 	}
 	defer closeRuntimeManager(runtimeManager)
-	runtime, err := runtimeManager.Open(ctx, noderuntime.OpenRequest{
-		Key:  noderuntime.RuntimeKey{InstanceID: builtin.CodexDefaultInstanceID, EndpointID: builtin.CodexDefaultEndpointID},
-		Mode: adapter.RuntimeManaged, Factory: handle.Adapter.StartRuntime,
-	})
+	sources, defaultInstanceID, err := noderuntime.OpenConfiguredManaged(ctx, runtimeManager, registry, loaded.Config)
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("Codex runtime is unavailable"))
+	}
+	runtime, err := noderuntime.NewRouter(noderuntime.RouterOptions{Store: local, Sources: sources, DefaultInstanceID: defaultInstanceID})
+	if err != nil {
+		return errors.Join(ErrUnavailable, errors.New("Agent runtime router is unavailable"))
 	}
 	events, err := eventlog.NewManager(local, eventlog.Options{
 		OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID,

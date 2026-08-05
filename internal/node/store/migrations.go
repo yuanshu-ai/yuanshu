@@ -285,6 +285,29 @@ var nodeMigrations = []migration{
 				PRIMARY KEY(workspace_id, instance_id)
 			) STRICT`,
 			`CREATE UNIQUE INDEX workspace_agents_single_default ON workspace_agents(workspace_id) WHERE is_default = 1`,
+			`INSERT INTO agent_instances(instance_id,adapter_type,display_name,enabled,is_default,runtime_mode,config_revision,updated_at)
+				VALUES ('codex-default','codex','Codex',1,1,'managed','legacy-v1',CURRENT_TIMESTAMP)`,
+			`INSERT INTO runtime_endpoints(endpoint_id,instance_id,mode,ownership,updated_at)
+				VALUES ('codex-default-managed','codex-default','managed','node',CURRENT_TIMESTAMP)`,
+			`INSERT INTO workspace_agents(workspace_id,instance_id,is_default,updated_at)
+				SELECT id,'codex-default',1,CURRENT_TIMESTAMP FROM workspaces`,
+			`ALTER TABLE runtime_threads RENAME TO runtime_threads_v7`,
+			`CREATE TABLE runtime_threads (
+				agent_instance_id TEXT NOT NULL CHECK (length(agent_instance_id) BETWEEN 1 AND 128),
+				adapter TEXT NOT NULL CHECK (adapter IN ('codex')),
+				thread_id TEXT NOT NULL CHECK (length(thread_id) BETWEEN 1 AND 256),
+				workspace_id TEXT NOT NULL CHECK (length(workspace_id) BETWEEN 1 AND 128),
+				ownership TEXT NOT NULL CHECK (ownership IN ('created', 'resumed')),
+				state TEXT NOT NULL CHECK (state IN ('idle', 'starting', 'active', 'needs_reconcile')),
+				active_turn_id TEXT CHECK (active_turn_id IS NULL OR length(active_turn_id) BETWEEN 1 AND 128),
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY(agent_instance_id, thread_id),
+				CHECK ((state = 'active' AND active_turn_id IS NOT NULL) OR state != 'active')
+			) STRICT`,
+			`INSERT INTO runtime_threads(agent_instance_id,adapter,thread_id,workspace_id,ownership,state,active_turn_id,updated_at)
+				SELECT 'codex-default',adapter,thread_id,workspace_id,ownership,state,active_turn_id,updated_at FROM runtime_threads_v7`,
+			`DROP TABLE runtime_threads_v7`,
+			`CREATE INDEX runtime_threads_workspace ON runtime_threads(workspace_id, agent_instance_id, thread_id)`,
 			`CREATE TABLE task_bindings (
 				task_id TEXT PRIMARY KEY CHECK (length(task_id) BETWEEN 1 AND 128),
 				instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id) ON DELETE CASCADE,
@@ -300,12 +323,6 @@ var nodeMigrations = []migration{
 				CHECK ((state = 'active' AND active_run_id IS NOT NULL) OR state != 'active')
 			) STRICT`,
 			`CREATE INDEX task_bindings_workspace ON task_bindings(workspace_id, instance_id, task_id)`,
-			`INSERT INTO agent_instances(instance_id,adapter_type,display_name,enabled,is_default,runtime_mode,config_revision,updated_at)
-				VALUES ('codex-default','codex','Codex',1,1,'managed','legacy-v1',CURRENT_TIMESTAMP)`,
-			`INSERT INTO runtime_endpoints(endpoint_id,instance_id,mode,ownership,updated_at)
-				VALUES ('codex-default-managed','codex-default','managed','node',CURRENT_TIMESTAMP)`,
-			`INSERT INTO workspace_agents(workspace_id,instance_id,is_default,updated_at)
-				SELECT id,'codex-default',1,CURRENT_TIMESTAMP FROM workspaces`,
 			`INSERT INTO task_bindings(task_id,instance_id,endpoint_id,workspace_id,native_session_id,ownership,state,active_run_id,legacy_native_id_exposed,updated_at)
 				SELECT r.thread_id,'codex-default','codex-default-managed',r.workspace_id,r.thread_id,r.ownership,r.state,r.active_turn_id,1,r.updated_at
 				FROM runtime_threads r JOIN workspaces w ON w.id = r.workspace_id`,

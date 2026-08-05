@@ -256,27 +256,34 @@ func (m *Manager) Reconcile(ctx context.Context, runtime adapter.Runtime) (Recon
 		if record.State == store.RuntimeThreadIdle {
 			continue
 		}
-		snapshot, readErr := runtime.ReadThread(ctx, adapter.ReadThreadRequest{WorkspaceID: record.WorkspaceID, ThreadID: record.ThreadID, IncludeTurns: true})
+		snapshot, readErr := runtime.ReadThread(ctx, adapter.ReadThreadRequest{
+			WorkspaceID: record.WorkspaceID, AgentInstanceID: record.AgentInstanceID,
+			ThreadID: record.ThreadID, IncludeTurns: true,
+		})
 		if readErr != nil || snapshot.Thread.Status == "active" || snapshot.Thread.Status == "systemError" {
 			report.Deferred++
 			continue
 		}
 		status := terminalStatus(snapshot.Turns, record.ActiveTurnID)
+		taskID := snapshot.Thread.ID
+		if taskID == "" {
+			taskID = record.ThreadID
+		}
 		if status != "" {
 			eventType := terminalEvent(status)
-			if !m.snapshotHasTerminal(ctx, record.ThreadID, record.ActiveTurnID, string(eventType)) {
-				_, err = m.Publish(ctx, adapter.AgentEvent{Type: eventType, WorkspaceID: record.WorkspaceID, ThreadID: record.ThreadID, TurnID: record.ActiveTurnID, Payload: map[string]any{"status": status, "reconciled": true}})
+			if !m.snapshotHasTerminal(ctx, taskID, record.ActiveTurnID, string(eventType)) {
+				_, err = m.Publish(ctx, adapter.AgentEvent{Type: eventType, AgentInstanceID: record.AgentInstanceID, WorkspaceID: record.WorkspaceID, ThreadID: taskID, TurnID: record.ActiveTurnID, Payload: map[string]any{"status": status, "reconciled": true}})
 				if err != nil {
 					return report, err
 				}
 			}
 			report.Confirmed++
 		} else {
-			_ = m.store.MarkThreadApprovalsAmbiguous(ctx, record.ThreadID)
+			_ = m.store.MarkThreadApprovalsAmbiguous(ctx, taskID)
 			payload := snapshotPayload(snapshot, "ambiguous")
 			payload["pendingApprovals"] = []any{}
 			payload["reason"] = "runtime_confirmation_lost"
-			_, err = m.Publish(ctx, adapter.AgentEvent{Type: protocol.EventThreadSnapshot, WorkspaceID: record.WorkspaceID, ThreadID: record.ThreadID, TurnID: record.ActiveTurnID, Payload: payload, Ambiguous: true})
+			_, err = m.Publish(ctx, adapter.AgentEvent{Type: protocol.EventThreadSnapshot, AgentInstanceID: record.AgentInstanceID, WorkspaceID: record.WorkspaceID, ThreadID: taskID, TurnID: record.ActiveTurnID, Payload: payload, Ambiguous: true})
 			if err != nil {
 				return report, err
 			}

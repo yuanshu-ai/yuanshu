@@ -248,24 +248,13 @@ func (h *host) reload(ctx context.Context) error {
 		return h.fail("codex_unavailable")
 	}
 	registry, err := builtin.NewRegistry(builtin.Options{
-		CodexConfig: codexConfig, Processes: h.options.platform.Processes(),
+		CodexConfig: codexConfig, AgentInstances: loaded.Config.AgentInstances, Processes: h.options.platform.Processes(),
 		Inspector:  h.options.platform.ProcessInspector(),
 		Workspaces: workspaceManager, Threads: local,
 	})
 	if err != nil {
 		return h.fail("codex_unavailable")
 	}
-	handle, err := registry.CreateDefault()
-	if err != nil {
-		return h.fail("codex_unavailable")
-	}
-	if _, err := handle.Detect(ctx); err != nil {
-		if errors.Is(err, adapter.ErrUnsupported) {
-			return h.fail("codex_unsupported")
-		}
-		return h.fail("codex_unavailable")
-	}
-	adapterInstance := handle.Adapter
 	runtimeManager, err := noderuntime.NewManager(noderuntime.Options{})
 	if err != nil {
 		return h.fail("codex_unavailable")
@@ -291,44 +280,19 @@ func (h *host) reload(ctx context.Context) error {
 	}
 	if needsRecovery && bound {
 		h.status.update(func(value *Status) { value.Recovery = "recovering" })
-		runtime, err := runtimeManager.Open(ctx, noderuntime.OpenRequest{
-			Key:  noderuntime.RuntimeKey{InstanceID: builtin.CodexDefaultInstanceID, EndpointID: builtin.CodexDefaultEndpointID},
-			Mode: adapter.RuntimeManaged, Factory: adapterInstance.StartRuntime,
-		})
-		if err != nil {
-			return h.fail("recovery_unavailable")
-		}
-		h.runtime = runtime
-		manager, err := eventlog.NewManager(local, eventlog.Options{
-			OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID,
-			MaxAge:   time.Duration(loaded.Config.Events.MaxAgeHours) * time.Hour,
-			MaxBytes: int64(loaded.Config.Events.MaxSizeMiB) << 20,
-		})
-		if err != nil {
-			return h.fail("recovery_unavailable")
-		}
-		report, err := manager.Reconcile(ctx, runtime)
-		if err != nil {
-			return h.fail("recovery_unavailable")
-		}
-		if err := runtime.Close(ctx); err != nil {
-			return h.fail("recovery_unavailable")
-		}
-		h.runtime = nil
-		h.status.update(func(value *Status) {
-			if report.Ambiguous > 0 || report.Deferred > 0 {
-				value.Recovery = "ambiguous"
-			} else {
-				value.Recovery = "reconciled"
-			}
-		})
 	} else if needsRecovery {
 		h.status.update(func(value *Status) { value.Recovery = "deferred_unpaired" })
 	}
-	if bound && loaded.Config.Transport.Mode == config.TransportRelay {
-		runtime, err := runtimeManager.Open(ctx, noderuntime.OpenRequest{
-			Key:  noderuntime.RuntimeKey{InstanceID: builtin.CodexDefaultInstanceID, EndpointID: builtin.CodexDefaultEndpointID},
-			Mode: adapter.RuntimeManaged, Factory: adapterInstance.StartRuntime,
+	if bound && (needsRecovery || loaded.Config.Transport.Mode == config.TransportRelay) {
+		sources, defaultInstanceID, err := noderuntime.OpenConfiguredManaged(ctx, runtimeManager, registry, loaded.Config)
+		if err != nil {
+			if errors.Is(err, adapter.ErrUnsupported) {
+				return h.fail("codex_unsupported")
+			}
+			return h.fail("codex_unavailable")
+		}
+		runtime, err := noderuntime.NewRouter(noderuntime.RouterOptions{
+			Store: local, Sources: sources, DefaultInstanceID: defaultInstanceID,
 		})
 		if err != nil {
 			return h.fail("codex_unavailable")
@@ -339,24 +303,46 @@ func (h *host) reload(ctx context.Context) error {
 			MaxBytes: int64(loaded.Config.Events.MaxSizeMiB) << 20,
 		})
 		if err != nil {
-			_ = runtime.Close(context.Background())
-			return h.fail("recovery_unavailable")
-		}
-		validator, err := protocolv1.NewValidator(protocolv1.Options{TrustStore: local, ReplayStore: local})
-		if err != nil {
-			_ = runtime.Close(context.Background())
 			return h.fail("recovery_unavailable")
 		}
 		h.runtime = runtime
-		h.controlEvents, h.controlValidator = manager, validator
-		h.controlTarget = protocolv1.Target{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID}
-		h.controlName = loaded.Config.Host.Name
-		if h.pairing != nil {
-			if err := h.startControlSessionLocked(); err != nil {
+		if needsRecovery {
+			report, reconcileErr := manager.Reconcile(ctx, runtime)
+			if reconcileErr != nil {
 				return h.fail("recovery_unavailable")
 			}
-		} else {
-			h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
+			h.status.update(func(value *Status) {
+				if report.Ambiguous > 0 || report.Deferred > 0 {
+					value.Recovery = "ambiguous"
+				} else {
+					value.Recovery = "reconciled"
+				}
+			})
+		}
+		if loaded.Config.Transport.Mode != config.TransportRelay {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			closeErr := runtimeManager.Close(closeCtx)
+			cancel()
+			if closeErr != nil {
+				return h.fail("recovery_unavailable")
+			}
+			h.runtimeManager, h.runtime = nil, nil
+		}
+		if loaded.Config.Transport.Mode == config.TransportRelay {
+			validator, err := protocolv1.NewValidator(protocolv1.Options{TrustStore: local, ReplayStore: local})
+			if err != nil {
+				return h.fail("recovery_unavailable")
+			}
+			h.controlEvents, h.controlValidator = manager, validator
+			h.controlTarget = protocolv1.Target{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID}
+			h.controlName = loaded.Config.Host.Name
+			if h.pairing != nil {
+				if err := h.startControlSessionLocked(); err != nil {
+					return h.fail("recovery_unavailable")
+				}
+			} else {
+				h.status.update(func(value *Status) { value.RemoteControl = "unavailable" })
+			}
 		}
 	}
 	state := "ready"

@@ -120,25 +120,31 @@ type Runtime interface {
 }
 
 type ListThreadsRequest struct {
-	WorkspaceID string
-	Cursor      string
-	Limit       int
+	WorkspaceID     string
+	AgentInstanceID string
+	Cursor          string
+	Limit           int
 }
 
 type ReadThreadRequest struct {
-	WorkspaceID  string
-	ThreadID     string
-	IncludeTurns bool
-	IncludeDiffs bool
-	DiffPath     string
-	MaxDiffBytes int
+	WorkspaceID     string
+	AgentInstanceID string
+	ThreadID        string
+	IncludeTurns    bool
+	IncludeDiffs    bool
+	DiffPath        string
+	MaxDiffBytes    int
 }
 
-type StartThreadRequest struct{ WorkspaceID string }
+type StartThreadRequest struct {
+	WorkspaceID     string
+	AgentInstanceID string
+}
 
 type ResumeThreadRequest struct {
-	WorkspaceID string
-	ThreadID    string
+	WorkspaceID     string
+	AgentInstanceID string
+	ThreadID        string
 }
 
 type StartTurnRequest struct {
@@ -170,14 +176,15 @@ type ApprovalDecision struct {
 }
 
 type Thread struct {
-	ID           string
-	WorkspaceID  string
-	Status       string
-	Title        string
-	Preview      string
-	HistoryState string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID              string
+	AgentInstanceID string
+	WorkspaceID     string
+	Status          string
+	Title           string
+	Preview         string
+	HistoryState    string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type ThreadPage struct {
@@ -229,15 +236,16 @@ type Approval struct {
 }
 
 type AgentEvent struct {
-	Type          protocol.EventType
-	CorrelationID string
-	WorkspaceID   string
-	ThreadID      string
-	TurnID        string
-	ItemID        string
-	Payload       any
-	Approval      *Approval
-	Ambiguous     bool
+	Type            protocol.EventType
+	AgentInstanceID string
+	CorrelationID   string
+	WorkspaceID     string
+	ThreadID        string
+	TurnID          string
+	ItemID          string
+	Payload         any
+	Approval        *Approval
+	Ambiguous       bool
 }
 
 type HealthStatus struct {

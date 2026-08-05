@@ -36,6 +36,32 @@ func TestBuiltinRegistryProvidesCodexDefault(t *testing.T) {
 	}
 }
 
+func TestBuiltinRegistryProvidesConfiguredManagedCodexInstances(t *testing.T) {
+	registry, err := builtin.NewRegistry(builtin.Options{
+		AgentInstances: []config.AgentInstanceConfig{
+			{ID: "codex-office", AdapterType: "codex", DisplayName: "Office Codex", Enabled: true, IsDefault: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: "codex-office", RuntimeMode: "stdio"}},
+			{ID: "codex-home", AdapterType: "codex", DisplayName: "Home Codex", Enabled: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: "codex-home", RuntimeMode: "stdio"}},
+			{ID: "opencode-detected", AdapterType: "opencode", DisplayName: "OpenCode", Enabled: true, RuntimeMode: config.AgentRuntimeDetectedOnly},
+		},
+		Processes: platformfake.NewProcessManager(), Workspaces: workspaceResolver{}, Threads: threadStore{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instances := registry.Instances()
+	if len(instances) != 2 || instances[0].ID != "codex-home" || instances[1].ID != "codex-office" {
+		t.Fatalf("Instances() = %+v", instances)
+	}
+	defaultHandle, err := registry.CreateDefault()
+	if err != nil || defaultHandle.Instance.ID != "codex-office" {
+		t.Fatalf("CreateDefault() = %+v, %v", defaultHandle, err)
+	}
+	homeHandle, err := registry.Create("codex-home")
+	if err != nil || homeHandle.Instance.DisplayName != "Home Codex" {
+		t.Fatalf("Create(codex-home) = %+v, %v", homeHandle, err)
+	}
+}
+
 type workspaceResolver struct{}
 
 func (workspaceResolver) Resolve(context.Context, string) (workspace.ResolvedWorkspace, error) {
