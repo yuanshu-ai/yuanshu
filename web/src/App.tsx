@@ -7,6 +7,7 @@ import { loadRuntimeSettings, type RuntimeSettings } from "./relay/runtime-confi
 import { ConnectionSettings } from "./workbench/Settings";
 import { Workbench } from "./workbench/Workbench";
 import { WorkbenchSession } from "./workbench/session";
+import { ThemeToggle } from "./theme/ThemeToggle";
 
 type BootState =
   | { status: "loading" }
@@ -66,10 +67,10 @@ export const App = WorkbenchApp;
 
 function LoadingScreen() {
   const { t } = useI18n();
-  return <main className="loading-screen"><LanguageSwitch /><BrandMark className="brand-mark-large" /><h1>{t("workbench.loading.title")}</h1><p>{t("workbench.loading.description")}</p><div className="loading-line" /></main>;
+  return <main className="loading-screen"><div className="page-tools"><LanguageSwitch /><ThemeToggle /></div><BrandMark className="brand-mark-large" /><h1>{t("workbench.loading.title")}</h1><p>{t("workbench.loading.description")}</p><div className="loading-line" /></main>;
 }
 
 function PairingScreen({ pairingURL, settings, storage, reason, configured, onRestart }: { pairingURL: string; settings: RuntimeSettings; storage?: ControlStorage; reason?: string; configured: boolean; onRestart: () => void }) {
   const { t } = useI18n();
-  return <main className="pairing-screen"><LanguageSwitch /><div className="pairing-card"><BrandMark className="brand-mark-large" /><p className="pairing-kicker">{t("workbench.pairing.kicker")}</p><h1>{t("workbench.pairing.title")}</h1><p>{configured ? t("setup.node.serverURL.help") : t("workbench.pairing.description")}</p>{reason && <small className="form-error">{reason}</small>}{!configured && pairingURL && <a className="button primary pairing-link" href={pairingURL}>{t("workbench.openPairing")}</a>}{storage ? <ConnectionSettings initial={settings} storage={storage} compact onSaved={onRestart} /> : <small className="form-error">{t("error.indexedDBUnavailable")}</small>}<div className="trust-note">{t("workbench.securityNote")}</div></div></main>;
+  return <main className="pairing-screen"><div className="page-tools"><LanguageSwitch /><ThemeToggle /></div><div className="pairing-card"><BrandMark className="brand-mark-large" /><p className="pairing-kicker">{t("workbench.pairing.kicker")}</p><h1>{t("workbench.pairing.title")}</h1><p>{configured ? t("setup.node.serverURL.help") : t("workbench.pairing.description")}</p>{reason && <small className="form-error">{reason}</small>}{!configured && pairingURL && <a className="button primary pairing-link" href={pairingURL}>{t("workbench.openPairing")}</a>}{storage ? <ConnectionSettings initial={settings} storage={storage} compact onSaved={onRestart} /> : <small className="form-error">{t("error.indexedDBUnavailable")}</small>}<div className="trust-note">{t("workbench.securityNote")}</div></div></main>;
 }

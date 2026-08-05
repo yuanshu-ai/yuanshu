@@ -4,12 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Yuanshu personal Codex control workbench" />
-    <meta name="theme-color" content="#0B100F" />
+    <meta name="theme-color" content="#F4F4F2" />
     <link rel="icon" href="/brand/yuanshu-app-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/brand/yuanshu-app-icon-512.png" />
     <title>Yuanshu · 远枢</title>
-    <script type="module" crossorigin src="/assets/index-CKqo5ocT.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CyDiumjL.css">
+    <script>
+      (() => {
+        try {
+          const mode = localStorage.getItem("yuanshu.theme");
+          const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          const theme = mode === "dark" || (mode !== "light" && dark) ? "dark" : "light";
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+          document.querySelector('meta[name="theme-color"]').content = theme === "dark" ? "#151515" : "#F4F4F2";
+        } catch {}
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-BZl9ENfZ.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DSs--A1z.css">
   </head>
   <body>
     <div id="root"></div>

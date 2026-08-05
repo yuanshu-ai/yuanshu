@@ -5,6 +5,7 @@ import { LanguageSwitch, useI18n } from "../i18n";
 import { IndexedDBControlStorage } from "../relay/storage";
 import { AdminClient, type AdminAccessRequest, type AdminAudit, type AdminConfig, type AdminControlClient, type AdminLease, type AdminNode, type AdminNodeDetail, type AdminNodeInvitation, type AdminOverview, type IssuedNodeInvitation } from "./admin-client";
 import { machineStatus } from "../status/catalog.generated";
+import { ThemeToggle } from "../theme/ThemeToggle";
 import "./admin.css";
 
 type Section = "overview" | "nodes" | "clients" | "access" | "security";
@@ -142,7 +143,7 @@ export function AdminApp() {
       <div className="admin-nav-foot"><a href="/">{t("admin.backWorkbench")}</a><button onClick={() => void client?.close().then(() => window.location.reload())}>退出管理会话</button></div>
     </aside>
     <section className="admin-main">
-      <header className="admin-topbar"><div><h1>{sectionLabel(section)}</h1><p>{sectionDescription(section)}</p></div><div className="admin-live"><span className={`semantic-dot ${data.overview?.status === "ready" ? "ok" : "warn"}`} />{data.overview?.status === "ready" ? "Server 正常" : "需要检查"}</div></header>
+      <header className="admin-topbar"><div><h1>{sectionLabel(section)}</h1><p>{sectionDescription(section)}</p></div><div className="admin-topbar-actions"><ThemeToggle /><div className="admin-live"><span className={`semantic-dot ${data.overview?.status === "ready" ? "ok" : "warn"}`} />{data.overview?.status === "ready" ? "Server 正常" : "需要检查"}</div></div></header>
       {message && <div className="admin-message" role="status">{message}<button onClick={() => setMessage("")} aria-label="关闭提示">关闭</button></div>}
       {section === "overview" && <Overview data={data} />}
       {section === "nodes" && <Nodes items={data.nodes} invitations={data.invitations} details={data.nodeDetails} onAdd={() => setInviteDialog(true)} onCancelInvitation={cancelInvitation} onReissueInvitation={reissueInvitation} onInspect={inspectNode} onRevoke={revokeNode} />}

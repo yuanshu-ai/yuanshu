@@ -4,11 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#0b0d10" />
+    <meta name="theme-color" content="#F4F4F2" />
     <link rel="icon" href="/brand/yuanshu-app-icon.svg" type="image/svg+xml" />
     <title>Yuanshu Node</title>
-    <script type="module" crossorigin src="/assets/index-mxZTzxM-.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CufzfPTN.css">
+    <script>
+      (() => {
+        try {
+          const mode = localStorage.getItem("yuanshu.theme");
+          const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          const theme = mode === "dark" || (mode !== "light" && dark) ? "dark" : "light";
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+          document.querySelector('meta[name="theme-color"]').content = theme === "dark" ? "#151515" : "#F4F4F2";
+        } catch {}
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-BB7oI_SM.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Nc-OYjkn.css">
   </head>
   <body>
     <div id="root"></div>

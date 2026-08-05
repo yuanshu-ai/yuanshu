@@ -13,6 +13,7 @@ import { resourceKey, type ResourceState, type WorkbenchSession } from "./sessio
 import { DevicesView, HomeView, TaskContextBar, TasksView } from "./TaskViews";
 import { ThreadDetail } from "./ThreadDetail";
 import { connectionLabel, EmptyState, formatTime, ResourceMessage, SkeletonRows } from "./WorkbenchPrimitives";
+import { ThemeToggle } from "../theme/ThemeToggle";
 
 type Screen = "home" | "tasks" | "devices" | "notifications" | "settings";
 type Selection = { nodeId: string; workspaceId: string; threadId: string };
@@ -282,6 +283,7 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
       <div className="brand-lockup"><BrandMark /><div><strong>远枢</strong><span>{t("workbench.brand.subtitle")}</span></div></div>
       <nav className="desktop-nav" aria-label="工作台导航"><button type="button" className={screen === "home" ? "active" : ""} onClick={() => selectScreen("home")}>{t("workbench.nav.home")}</button><button type="button" className={screen === "tasks" ? "active" : ""} onClick={() => selectScreen("tasks")}>{t("workbench.nav.tasks")}</button><button type="button" className={screen === "notifications" ? "active" : ""} onClick={() => selectScreen("notifications")}>{t("workbench.nav.notifications")}{unread > 0 && <span className="nav-count">{unread}</span>}</button><button type="button" className={screen === "settings" ? "active" : ""} onClick={() => selectScreen("settings")}>{t("workbench.nav.settings")}</button></nav>
       <LanguageSwitch compact />
+      <ThemeToggle />
       <button className={`connection-state ${snapshot.connectionState}`} type="button" onClick={() => void session.refreshAll()} aria-label="刷新连接状态"><span className="semantic-state" />{connectionLabel(snapshot.connectionState)}</button>
     </header>
 
