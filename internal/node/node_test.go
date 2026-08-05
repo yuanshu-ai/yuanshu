@@ -81,14 +81,14 @@ func TestHostAssemblesFormalUnpairedNode(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "config.toml")
 	configuration := config.Config{
-		ConfigVersion: config.CurrentVersion,
-		Host:          config.HostConfig{Name: "synthetic-node"},
-		Transport:     config.TransportConfig{Mode: config.TransportStandalone},
-		Relay:         config.RelayConfig{ConnectTimeoutSeconds: 15},
-		Identity:      config.IdentityConfig{PrivateKeyRef: "identity/synthetic"},
-		Adapters:      config.AdaptersConfig{Codex: config.CodexAdapterConfig{Enabled: true, Binary: "codex", RuntimeMode: "stdio"}},
-		Events:        config.EventsConfig{MaxAgeHours: 24, MaxSizeMiB: 16},
-		Workspaces:    []config.WorkspaceConfig{},
+		ConfigVersion:  config.CurrentVersion,
+		Host:           config.HostConfig{Name: "synthetic-node"},
+		Transport:      config.TransportConfig{Mode: config.TransportStandalone},
+		Relay:          config.RelayConfig{ConnectTimeoutSeconds: 15},
+		Identity:       config.IdentityConfig{PrivateKeyRef: "identity/synthetic"},
+		AgentInstances: []config.AgentInstanceConfig{{ID: config.DefaultCodexInstanceID, AdapterType: "codex", DisplayName: "Codex", Enabled: true, IsDefault: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: "codex", RuntimeMode: "stdio"}}},
+		Events:         config.EventsConfig{MaxAgeHours: 24, MaxSizeMiB: 16},
+		Workspaces:     []config.WorkspaceConfig{},
 	}
 	configurationStore, err := config.NewFileStore(configPath)
 	if err != nil || configurationStore.Save(context.Background(), configuration) != nil {

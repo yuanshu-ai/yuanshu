@@ -33,7 +33,7 @@ func openTestManager(t *testing.T) (*Manager, *fake.WorkspaceInspector, *nodesto
 func workspaceConfig(id, path string, permission config.PermissionProfile) config.WorkspaceConfig {
 	return config.WorkspaceConfig{
 		ID: id, DisplayName: "Synthetic " + id, Path: path,
-		AllowedAdapters: []string{"codex"}, DefaultAdapter: "codex",
+		AllowedAgentInstances: []string{config.DefaultCodexInstanceID}, DefaultAgentInstance: config.DefaultCodexInstanceID,
 		PermissionProfile: permission,
 	}
 }

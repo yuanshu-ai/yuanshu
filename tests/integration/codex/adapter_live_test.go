@@ -77,7 +77,7 @@ func TestAdapterLive(t *testing.T) {
 	}
 	if err := workspaceManager.Reconcile(ctx, []config.WorkspaceConfig{{
 		ID: "ac203-live-workspace", DisplayName: "AC-203 Live Workspace", Path: workspacePath,
-		AllowedAdapters: []string{"codex"}, DefaultAdapter: "codex",
+		AllowedAgentInstances: []string{config.DefaultCodexInstanceID}, DefaultAgentInstance: config.DefaultCodexInstanceID,
 		PermissionProfile: config.PermissionReadOnly,
 	}}); err != nil {
 		t.Fatal(err)

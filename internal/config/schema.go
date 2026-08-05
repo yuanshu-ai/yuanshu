@@ -9,7 +9,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-const embeddedSchemaID = "https://yuanshu.ai/schemas/config/v1/node-config.schema.json"
+const embeddedSchemaID = "https://yuanshu.ai/schemas/config/v2/node-config.schema.json"
 
 //go:embed node-config.schema.json
 var embeddedSchemaJSON string

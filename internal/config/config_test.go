@@ -23,7 +23,7 @@ func TestValidateConfiguration(t *testing.T) {
 		mutate func(*Config)
 	}{
 		{"version zero", func(value *Config) { value.ConfigVersion = 0 }},
-		{"future version", func(value *Config) { value.ConfigVersion = 2 }},
+		{"future version", func(value *Config) { value.ConfigVersion = 3 }},
 		{"empty host", func(value *Config) { value.Host.Name = "" }},
 		{"control in host", func(value *Config) { value.Host.Name = "bad\nname" }},
 		{"direct transport", func(value *Config) { value.Transport.Mode = "direct" }},
@@ -36,8 +36,11 @@ func TestValidateConfiguration(t *testing.T) {
 		{"short timeout", func(value *Config) { value.Relay.ConnectTimeoutSeconds = 0 }},
 		{"long timeout", func(value *Config) { value.Relay.ConnectTimeoutSeconds = 121 }},
 		{"control in secret ref", func(value *Config) { value.Identity.PrivateKeyRef = "bad\nref" }},
-		{"daemon runtime", func(value *Config) { value.Adapters.Codex.RuntimeMode = "daemon" }},
-		{"enabled without binary", func(value *Config) { value.Adapters.Codex.Binary = "" }},
+		{"attached runtime", func(value *Config) { value.AgentInstances[0].RuntimeMode = "attached" }},
+		{"daemon runtime", func(value *Config) { value.AgentInstances[0].Codex.RuntimeMode = "daemon" }},
+		{"enabled without binary", func(value *Config) { value.AgentInstances[0].Codex.Binary = "" }},
+		{"duplicate agent", func(value *Config) { value.AgentInstances = append(value.AgentInstances, value.AgentInstances[0]) }},
+		{"no default agent", func(value *Config) { value.AgentInstances[0].IsDefault = false }},
 		{"event age", func(value *Config) { value.Events.MaxAgeHours = 0 }},
 		{"event size", func(value *Config) { value.Events.MaxSizeMiB = 15 }},
 		{"duplicate workspace ID", func(value *Config) {
@@ -50,8 +53,8 @@ func TestValidateConfiguration(t *testing.T) {
 			copy.ID = "workspace-2"
 			value.Workspaces = append(value.Workspaces, copy)
 		}},
-		{"unknown adapter", func(value *Config) { value.Workspaces[0].AllowedAdapters = []string{"other"} }},
-		{"default adapter", func(value *Config) { value.Workspaces[0].DefaultAdapter = "other" }},
+		{"unknown agent", func(value *Config) { value.Workspaces[0].AllowedAgentInstances = []string{"other"} }},
+		{"default agent", func(value *Config) { value.Workspaces[0].DefaultAgentInstance = "other" }},
 		{"permission", func(value *Config) { value.Workspaces[0].PermissionProfile = "dangerous" }},
 	}
 	for _, testCase := range tests {
@@ -80,12 +83,12 @@ func TestDecodeIsStrictAndVersioned(t *testing.T) {
 		want error
 	}{
 		{"unknown field", append(valid, []byte("\nunknown_field = \"SENSITIVE_CANARY\"\n")...), ErrInvalid},
-		{"duplicate key", append(valid, []byte("\nconfig_version = 1\n")...), ErrInvalid},
+		{"duplicate key", append(valid, []byte("\nconfig_version = 2\n")...), ErrInvalid},
 		{"invalid type", []byte("config_version = \"one\""), ErrInvalid},
 		{"missing version", []byte("[host]\nname = \"node\""), ErrInvalid},
-		{"missing sections", []byte("config_version = 1\n"), ErrInvalid},
+		{"missing sections", []byte("config_version = 2\n"), ErrInvalid},
 		{"zero version", []byte("config_version = 0"), ErrInvalid},
-		{"future version", []byte("config_version = 2"), ErrUnsupportedVersion},
+		{"future version", []byte("config_version = 3"), ErrUnsupportedVersion},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -104,8 +107,61 @@ func TestDecodeIsStrictAndVersioned(t *testing.T) {
 	}
 }
 
+func TestDecodeMigratesVersionOneInMemoryWithoutRewriting(t *testing.T) {
+	raw := []byte(`config_version = 1
+[host]
+name = "legacy"
+[transport]
+mode = "relay"
+[relay]
+url = "wss://relay.example.test/node/connect"
+proxy_url = ""
+connect_timeout_seconds = 15
+credential_ref = ""
+proxy_credential_ref = ""
+[identity]
+private_key_ref = "identity"
+[adapters.codex]
+enabled = true
+binary = "codex"
+runtime_mode = "stdio"
+home = ""
+[events]
+max_age_hours = 24
+max_size_mib = 256
+[[workspaces]]
+id = "workspace"
+display_name = "Workspace"
+path = "SYNTHETIC_PATH"
+allowed_adapters = ["codex"]
+default_adapter = "codex"
+permission_profile = "read-only"
+allow_network = false
+`)
+	value, migrated, err := decode(raw)
+	if err != nil || !migrated || value.ConfigVersion != CurrentVersion {
+		t.Fatalf("migration value=%+v migrated=%v err=%v", value, migrated, err)
+	}
+	if len(value.AgentInstances) != 1 || value.AgentInstances[0].ID != DefaultCodexInstanceID || value.Workspaces[0].DefaultAgentInstance != DefaultCodexInstanceID {
+		t.Fatalf("legacy mapping=%+v", value)
+	}
+	path := filepath.Join(t.TempDir(), "node.toml")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := NewFileStore(path)
+	loaded, err := store.Load(context.Background())
+	if err != nil || !loaded.Migrated {
+		t.Fatalf("load=%+v err=%v", loaded, err)
+	}
+	unchanged, _ := os.ReadFile(path)
+	if !bytes.Equal(unchanged, raw) {
+		t.Fatal("ordinary load rewrote legacy configuration")
+	}
+}
+
 func TestEmbeddedSchemaMatchesPublishedSchema(t *testing.T) {
-	published, err := os.ReadFile(filepath.Join("..", "..", "schemas", "config", "v1", "node-config.schema.json"))
+	published, err := os.ReadFile(filepath.Join("..", "..", "schemas", "config", "v2", "node-config.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +254,7 @@ func TestLoadBackupRules(t *testing.T) {
 
 	t.Run("future primary never downgrades", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "node.toml")
-		if err := os.WriteFile(path, []byte("config_version = 2\n"), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte("config_version = 3\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(path+".bak", mustEncode(t, validConfig("backup")), 0o600); err != nil {
@@ -401,13 +457,13 @@ func validConfig(host string) Config {
 			URL:                   "wss://relay.example.test/node/connect",
 			ConnectTimeoutSeconds: 15,
 		},
-		Adapters: AdaptersConfig{Codex: CodexAdapterConfig{
+		AgentInstances: []AgentInstanceConfig{{ID: DefaultCodexInstanceID, AdapterType: "codex", DisplayName: "Codex", Enabled: true, IsDefault: true, RuntimeMode: AgentRuntimeManaged, Codex: &CodexAdapterConfig{
 			Enabled: true, Binary: "codex", RuntimeMode: "stdio",
-		}},
+		}}},
 		Events: EventsConfig{MaxAgeHours: 24, MaxSizeMiB: 256},
 		Workspaces: []WorkspaceConfig{{
 			ID: "workspace-1", DisplayName: "Synthetic workspace", Path: "SYNTHETIC_WORKSPACE_PATH",
-			AllowedAdapters: []string{"codex"}, DefaultAdapter: "codex",
+			AllowedAgentInstances: []string{DefaultCodexInstanceID}, DefaultAgentInstance: DefaultCodexInstanceID,
 			PermissionProfile: PermissionWorkspaceWrite,
 		}},
 	}

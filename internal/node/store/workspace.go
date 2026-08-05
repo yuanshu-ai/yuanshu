@@ -40,13 +40,33 @@ func (s *Store) ReplaceWorkspaces(ctx context.Context, records []WorkspaceRecord
 		return internal("workspace transaction")
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, "DELETE FROM workspaces"); err != nil {
-		return internal("workspace replace")
+	if len(records) == 0 {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM workspaces"); err != nil {
+			return internal("workspace replace")
+		}
+	} else {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(records)), ",")
+		arguments := make([]any, 0, len(records))
+		for _, record := range records {
+			arguments = append(arguments, record.ID)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM workspaces WHERE id NOT IN ("+placeholders+")", arguments...); err != nil {
+			return internal("workspace replace")
+		}
 	}
 	statement := `INSERT INTO workspaces(
 		id, display_name, canonical_path, filesystem_root, file_identity,
 		adapter, permission_profile, allow_network, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		display_name=excluded.display_name,
+		canonical_path=excluded.canonical_path,
+		filesystem_root=excluded.filesystem_root,
+		file_identity=excluded.file_identity,
+		adapter=excluded.adapter,
+		permission_profile=excluded.permission_profile,
+		allow_network=excluded.allow_network,
+		updated_at=excluded.updated_at`
 	updatedAt := timestamp(s.clock().UTC())
 	for _, record := range records {
 		if _, err := tx.ExecContext(ctx, statement,

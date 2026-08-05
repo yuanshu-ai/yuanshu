@@ -1,0 +1,23 @@
+[
+  {
+    "name": "future version",
+    "config": { "config_version": 3 }
+  },
+  {
+    "name": "unknown field",
+    "config": { "config_version": 2, "host": { "name": "devbox", "token": "TEST_CANARY" } }
+  },
+  {
+    "name": "attached runtime is not configurable",
+    "config": {
+      "config_version": 2,
+      "host": { "name": "devbox" },
+      "transport": { "mode": "relay" },
+      "relay": { "url": "wss://relay.example.test", "proxy_url": "", "connect_timeout_seconds": 15, "credential_ref": "", "proxy_credential_ref": "" },
+      "identity": { "private_key_ref": "" },
+      "agent_instances": [{ "id": "codex-default", "adapter_type": "codex", "display_name": "Codex", "enabled": true, "is_default": true, "runtime_mode": "attached", "codex": { "enabled": true, "binary": "codex", "runtime_mode": "stdio", "home": "" } }],
+      "events": { "max_age_hours": 24, "max_size_mib": 256 },
+      "workspaces": []
+    }
+  }
+]

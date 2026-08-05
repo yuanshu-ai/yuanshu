@@ -120,15 +120,15 @@ func TestNodeConfigControllerRejectsExpiredPendingChange(t *testing.T) {
 
 func testRemoteConfig() config.Config {
 	return config.Config{
-		ConfigVersion: 1,
-		Host:          config.HostConfig{Name: "Test Node"},
-		Transport:     config.TransportConfig{Mode: config.TransportRelay},
-		Relay:         config.RelayConfig{URL: "wss://relay.example.test", ConnectTimeoutSeconds: 30, CredentialRef: "relay-secret"},
-		Identity:      config.IdentityConfig{PrivateKeyRef: "private-key"},
-		Adapters:      config.AdaptersConfig{Codex: config.CodexAdapterConfig{RuntimeMode: "stdio"}},
-		Events:        config.EventsConfig{MaxAgeHours: 168, MaxSizeMiB: 256},
+		ConfigVersion:  config.CurrentVersion,
+		Host:           config.HostConfig{Name: "Test Node"},
+		Transport:      config.TransportConfig{Mode: config.TransportRelay},
+		Relay:          config.RelayConfig{URL: "wss://relay.example.test", ConnectTimeoutSeconds: 30, CredentialRef: "relay-secret"},
+		Identity:       config.IdentityConfig{PrivateKeyRef: "private-key"},
+		AgentInstances: []config.AgentInstanceConfig{{ID: config.DefaultCodexInstanceID, AdapterType: "codex", DisplayName: "Codex", Enabled: true, IsDefault: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: "codex", RuntimeMode: "stdio"}}},
+		Events:         config.EventsConfig{MaxAgeHours: 168, MaxSizeMiB: 256},
 		Workspaces: []config.WorkspaceConfig{{
-			ID: "workspace-1", DisplayName: "Work", Path: "/private/workspace", AllowedAdapters: []string{"codex"}, DefaultAdapter: "codex", PermissionProfile: config.PermissionReadOnly,
+			ID: "workspace-1", DisplayName: "Work", Path: "/private/workspace", AllowedAgentInstances: []string{config.DefaultCodexInstanceID}, DefaultAgentInstance: config.DefaultCodexInstanceID, PermissionProfile: config.PermissionReadOnly,
 		}},
 	}
 }

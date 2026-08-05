@@ -149,7 +149,7 @@ func TestWorkspacePolicyMapsOpaqueIDAndSurvivesRestart(t *testing.T) {
 	}
 	configured := config.WorkspaceConfig{
 		ID: "workspace-1", DisplayName: "Synthetic Workspace", Path: workspacePath,
-		AllowedAdapters: []string{"codex"}, DefaultAdapter: "codex",
+		AllowedAgentInstances: []string{config.DefaultCodexInstanceID}, DefaultAgentInstance: config.DefaultCodexInstanceID,
 		PermissionProfile: config.PermissionWorkspaceWrite,
 	}
 	if err := manager.Reconcile(ctx, []config.WorkspaceConfig{configured}); err != nil {

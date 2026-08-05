@@ -1,0 +1,17 @@
+[
+  {
+    "config_version": 2,
+    "host": { "name": "devbox", "locale": "zh-CN" },
+    "transport": { "mode": "relay" },
+    "relay": { "url": "wss://relay.example.test/node/connect", "proxy_url": "", "ca_bundle_file": "", "connect_timeout_seconds": 15, "credential_ref": "", "proxy_credential_ref": "" },
+    "identity": { "private_key_ref": "yuanshu/identity/node" },
+    "agent_instances": [
+      { "id": "codex-default", "adapter_type": "codex", "display_name": "Codex", "enabled": true, "is_default": true, "runtime_mode": "managed", "codex": { "enabled": true, "binary": "codex", "runtime_mode": "stdio", "home": "" } },
+      { "id": "opencode-detected", "adapter_type": "opencode", "display_name": "OpenCode", "enabled": true, "is_default": false, "runtime_mode": "detected-only" }
+    ],
+    "events": { "max_age_hours": 24, "max_size_mib": 256 },
+    "workspaces": [
+      { "id": "workspace-1", "display_name": "Synthetic workspace", "path": "SYNTHETIC_WORKSPACE_PATH", "allowed_agent_instances": ["codex-default"], "default_agent_instance": "codex-default", "permission_profile": "workspace-write", "allow_network": false }
+    ]
+  }
+]

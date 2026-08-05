@@ -326,6 +326,9 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil || workspaceManager.Reconcile(ctx, loaded.Config.Workspaces) != nil {
 		return errors.Join(ErrUnavailable, errors.New("workspace configuration is unavailable"))
 	}
+	if err := local.ReconcileConfiguredAgents(ctx, loaded.Config); err != nil {
+		return errors.Join(ErrUnavailable, errors.New("agent configuration is unavailable"))
+	}
 	identityManager, err := identity.NewManager(local, options.Platform.SecureStore(), loaded.Config.Identity.PrivateKeyRef, identity.Options{Random: options.Random, Clock: options.Clock})
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("node identity is unavailable"))
@@ -345,8 +348,12 @@ func Run(ctx context.Context, options Options) error {
 	defer clear(sessionToken)
 	sessionExpiresAt := options.Clock().UTC().Add(15 * time.Minute)
 
+	codexConfig, ok := loaded.Config.DefaultCodexConfig()
+	if !ok {
+		return errors.Join(ErrUnavailable, errors.New("Codex adapter is unavailable"))
+	}
 	registry, err := builtin.NewRegistry(builtin.Options{
-		CodexConfig: loaded.Config.Adapters.Codex, Processes: options.Platform.Processes(),
+		CodexConfig: codexConfig, Processes: options.Platform.Processes(),
 		Inspector:  options.Platform.ProcessInspector(),
 		Workspaces: workspaceManager, Threads: local,
 	})

@@ -111,7 +111,7 @@ func (m *Manager) Reconcile(ctx context.Context, configured []config.WorkspaceCo
 			CanonicalPath:     facts.CanonicalPath,
 			FilesystemRoot:    facts.FilesystemRoot,
 			FileIdentity:      facts.FileIdentity,
-			Adapter:           item.DefaultAdapter,
+			Adapter:           "codex",
 			PermissionProfile: string(item.PermissionProfile),
 			AllowNetwork:      item.AllowNetwork,
 		})
@@ -299,8 +299,17 @@ func safeWorkspaceTarget(facts platform.WorkspaceFacts, root string) bool {
 
 func validConfig(item config.WorkspaceConfig) bool {
 	return validText(item.ID, 128) && validText(item.DisplayName, 128) && validText(item.Path, 4096) &&
-		len(item.AllowedAdapters) == 1 && item.AllowedAdapters[0] == "codex" && item.DefaultAdapter == "codex" &&
+		len(item.AllowedAgentInstances) > 0 && item.DefaultAgentInstance != "" && contains(item.AllowedAgentInstances, item.DefaultAgentInstance) &&
 		(item.PermissionProfile == config.PermissionReadOnly || item.PermissionProfile == config.PermissionWorkspaceWrite)
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func validLogicalPath(value string) bool {

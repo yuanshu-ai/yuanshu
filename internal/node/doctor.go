@@ -86,8 +86,13 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 			return status, false
 		}
 	}
+	codexConfig, ok := loaded.Config.DefaultCodexConfig()
+	if !ok {
+		status.Codex, status.Compatibility = "unavailable", "unavailable"
+		return status, false
+	}
 	inventory, err := builtin.NewInventory(builtin.Options{
-		CodexConfig: loaded.Config.Adapters.Codex, Processes: current.Processes(), Inspector: current.ProcessInspector(),
+		CodexConfig: codexConfig, Processes: current.Processes(), Inspector: current.ProcessInspector(),
 	})
 	if err != nil {
 		status.Codex, status.Compatibility = "unavailable", "unavailable"
@@ -111,7 +116,7 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 	}
 	status.Compatibility = string(detected.Installation.Compatibility)
 	registry, err := builtin.NewRegistry(builtin.Options{
-		CodexConfig: loaded.Config.Adapters.Codex, Processes: current.Processes(), Inspector: current.ProcessInspector(),
+		CodexConfig: codexConfig, Processes: current.Processes(), Inspector: current.ProcessInspector(),
 		Workspaces: diagnosticWorkspace{}, Threads: diagnosticThreads{}, ApprovalTimeout: time.Second,
 	})
 	if err != nil {

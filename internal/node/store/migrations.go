@@ -245,6 +245,72 @@ var nodeMigrations = []migration{
 			`CREATE INDEX config_changes_state ON config_changes(state, created_at)`,
 		},
 	},
+	{
+		version: 8,
+		name:    "agent_resources_and_task_bindings",
+		statements: []string{
+			`CREATE TABLE agent_installations (
+				adapter_type TEXT PRIMARY KEY CHECK (length(adapter_type) BETWEEN 1 AND 64),
+				installation_state TEXT NOT NULL CHECK (installation_state IN ('installed', 'not_installed', 'incompatible', 'unavailable')),
+				version TEXT NOT NULL CHECK (length(version) <= 128),
+				compatibility TEXT NOT NULL CHECK (compatibility IN ('known', 'unverified', 'unsupported')),
+				process_state TEXT NOT NULL CHECK (process_state IN ('running', 'stopped', 'unknown')),
+				process_count INTEGER NOT NULL CHECK (process_count BETWEEN 0 AND 1024),
+				detected_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TABLE agent_instances (
+				instance_id TEXT PRIMARY KEY CHECK (length(instance_id) BETWEEN 1 AND 128),
+				adapter_type TEXT NOT NULL CHECK (length(adapter_type) BETWEEN 1 AND 64),
+				display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 128),
+				enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+				is_default INTEGER NOT NULL CHECK (is_default IN (0, 1)),
+				runtime_mode TEXT NOT NULL CHECK (runtime_mode IN ('managed', 'detected-only')),
+				config_revision TEXT NOT NULL CHECK (length(config_revision) BETWEEN 1 AND 128),
+				updated_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE UNIQUE INDEX agent_instances_single_default ON agent_instances(is_default) WHERE is_default = 1`,
+			`CREATE TABLE runtime_endpoints (
+				endpoint_id TEXT PRIMARY KEY CHECK (length(endpoint_id) BETWEEN 1 AND 128),
+				instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id) ON DELETE CASCADE,
+				mode TEXT NOT NULL CHECK (mode IN ('managed', 'detected-only')),
+				ownership TEXT NOT NULL CHECK (ownership IN ('node', 'external')),
+				updated_at TEXT NOT NULL,
+				UNIQUE(instance_id, endpoint_id)
+			) STRICT`,
+			`CREATE TABLE workspace_agents (
+				workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+				instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id) ON DELETE CASCADE,
+				is_default INTEGER NOT NULL CHECK (is_default IN (0, 1)),
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY(workspace_id, instance_id)
+			) STRICT`,
+			`CREATE UNIQUE INDEX workspace_agents_single_default ON workspace_agents(workspace_id) WHERE is_default = 1`,
+			`CREATE TABLE task_bindings (
+				task_id TEXT PRIMARY KEY CHECK (length(task_id) BETWEEN 1 AND 128),
+				instance_id TEXT NOT NULL REFERENCES agent_instances(instance_id) ON DELETE CASCADE,
+				endpoint_id TEXT NOT NULL REFERENCES runtime_endpoints(endpoint_id) ON DELETE CASCADE,
+				workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+				native_session_id TEXT NOT NULL CHECK (length(native_session_id) BETWEEN 1 AND 256),
+				ownership TEXT NOT NULL CHECK (ownership IN ('created', 'resumed')),
+				state TEXT NOT NULL CHECK (state IN ('idle', 'starting', 'active', 'needs_reconcile')),
+				active_run_id TEXT CHECK (active_run_id IS NULL OR length(active_run_id) BETWEEN 1 AND 128),
+				legacy_native_id_exposed INTEGER NOT NULL DEFAULT 0 CHECK (legacy_native_id_exposed IN (0, 1)),
+				updated_at TEXT NOT NULL,
+				UNIQUE(instance_id, native_session_id),
+				CHECK ((state = 'active' AND active_run_id IS NOT NULL) OR state != 'active')
+			) STRICT`,
+			`CREATE INDEX task_bindings_workspace ON task_bindings(workspace_id, instance_id, task_id)`,
+			`INSERT INTO agent_instances(instance_id,adapter_type,display_name,enabled,is_default,runtime_mode,config_revision,updated_at)
+				VALUES ('codex-default','codex','Codex',1,1,'managed','legacy-v1',CURRENT_TIMESTAMP)`,
+			`INSERT INTO runtime_endpoints(endpoint_id,instance_id,mode,ownership,updated_at)
+				VALUES ('codex-default-managed','codex-default','managed','node',CURRENT_TIMESTAMP)`,
+			`INSERT INTO workspace_agents(workspace_id,instance_id,is_default,updated_at)
+				SELECT id,'codex-default',1,CURRENT_TIMESTAMP FROM workspaces`,
+			`INSERT INTO task_bindings(task_id,instance_id,endpoint_id,workspace_id,native_session_id,ownership,state,active_run_id,legacy_native_id_exposed,updated_at)
+				SELECT r.thread_id,'codex-default','codex-default-managed',r.workspace_id,r.thread_id,r.ownership,r.state,r.active_turn_id,1,r.updated_at
+				FROM runtime_threads r JOIN workspaces w ON w.id = r.workspace_id`,
+		},
+	},
 }
 
 func runMigrations(ctx context.Context, db *sql.DB, now time.Time) error {
@@ -315,6 +381,8 @@ func sqlLiteralInt(value int) string {
 		return "6"
 	case 7:
 		return "7"
+	case 8:
+		return "8"
 	default:
 		panic(errors.New("unsupported schema version"))
 	}

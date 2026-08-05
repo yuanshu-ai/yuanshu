@@ -201,6 +201,9 @@ func (h *host) reload(ctx context.Context) error {
 	if err != nil || workspaceManager.Reconcile(ctx, loaded.Config.Workspaces) != nil {
 		return h.fail("workspace_unavailable")
 	}
+	if err := local.ReconcileConfiguredAgents(ctx, loaded.Config); err != nil {
+		return h.fail("agent_configuration_invalid")
+	}
 	h.status.update(func(value *Status) { value.Workspaces = len(loaded.Config.Workspaces) })
 	h.workspaceManager = workspaceManager
 	identityManager, err := identity.NewManager(local, h.options.platform.SecureStore(), loaded.Config.Identity.PrivateKeyRef, identity.Options{})
@@ -240,8 +243,12 @@ func (h *host) reload(ctx context.Context) error {
 			h.startTrustSyncLocked(manager)
 		}
 	}
+	codexConfig, ok := loaded.Config.DefaultCodexConfig()
+	if !ok {
+		return h.fail("codex_unavailable")
+	}
 	registry, err := builtin.NewRegistry(builtin.Options{
-		CodexConfig: loaded.Config.Adapters.Codex, Processes: h.options.platform.Processes(),
+		CodexConfig: codexConfig, Processes: h.options.platform.Processes(),
 		Inspector:  h.options.platform.ProcessInspector(),
 		Workspaces: workspaceManager, Threads: local,
 	})
@@ -265,7 +272,7 @@ func (h *host) reload(ctx context.Context) error {
 	}
 	h.runtimeManager = runtimeManager
 	if inventory, inventoryErr := builtin.NewInventory(builtin.Options{
-		CodexConfig: loaded.Config.Adapters.Codex, Processes: h.options.platform.Processes(),
+		CodexConfig: codexConfig, Processes: h.options.platform.Processes(),
 		Inspector: h.options.platform.ProcessInspector(),
 	}); inventoryErr == nil {
 		h.startInventoryLocked(inventory)
@@ -386,12 +393,18 @@ func (h *host) reloadConfiguration(ctx context.Context) error {
 	rollback := func() {
 		_ = configurationStore.Save(context.Background(), previous)
 		_ = h.workspaceManager.Reconcile(context.Background(), previous.Workspaces)
+		_ = h.local.ReconcileConfiguredAgents(context.Background(), previous)
 		_ = h.controlEvents.UpdateRetention(time.Duration(previous.Events.MaxAgeHours)*time.Hour, int64(previous.Events.MaxSizeMiB)<<20)
 	}
 	if err := h.workspaceManager.Reconcile(ctx, loaded.Config.Workspaces); err != nil {
 		rollback()
 		h.mu.Unlock()
 		return errors.New("workspace configuration could not be applied")
+	}
+	if err := h.local.ReconcileConfiguredAgents(ctx, loaded.Config); err != nil {
+		rollback()
+		h.mu.Unlock()
+		return errors.New("agent configuration could not be applied")
 	}
 	if err := h.controlEvents.UpdateRetention(time.Duration(loaded.Config.Events.MaxAgeHours)*time.Hour, int64(loaded.Config.Events.MaxSizeMiB)<<20); err != nil {
 		rollback()

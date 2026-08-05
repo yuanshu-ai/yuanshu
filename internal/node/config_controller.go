@@ -295,6 +295,7 @@ func configChangeSummaries(changes []store.ConfigChangeRecord, value config.Conf
 }
 
 func configView(value config.Config, revision string, pending int) map[string]any {
+	codex, _ := value.DefaultCodexConfig()
 	workspaces := make([]any, 0, len(value.Workspaces))
 	for _, workspace := range value.Workspaces {
 		workspaces = append(workspaces, map[string]any{
@@ -315,15 +316,27 @@ func configView(value config.Config, revision string, pending int) map[string]an
 			"customCAFingerprint":     relayCAFingerprint(value.Relay.CABundleFile),
 		},
 		"adapter": map[string]any{
-			"codexEnabled":     value.Adapters.Codex.Enabled,
-			"binaryConfigured": value.Adapters.Codex.Binary != "",
-			"homeConfigured":   value.Adapters.Codex.Home != "",
-			"runtimeMode":      value.Adapters.Codex.RuntimeMode,
+			"codexEnabled":     codex.Enabled,
+			"binaryConfigured": codex.Binary != "",
+			"homeConfigured":   codex.Home != "",
+			"runtimeMode":      codex.RuntimeMode,
 		},
+		"agentInstances": publicAgentInstances(value.AgentInstances),
 		"events":         map[string]any{"maxAgeHours": value.Events.MaxAgeHours, "maxSizeMiB": value.Events.MaxSizeMiB},
 		"workspaces":     workspaces,
 		"pendingChanges": pending,
 	}
+}
+
+func publicAgentInstances(instances []config.AgentInstanceConfig) []map[string]any {
+	result := make([]map[string]any, 0, len(instances))
+	for _, instance := range instances {
+		result = append(result, map[string]any{
+			"id": instance.ID, "adapterType": instance.AdapterType, "name": instance.DisplayName,
+			"enabled": instance.Enabled, "default": instance.IsDefault, "runtimeMode": string(instance.RuntimeMode),
+		})
+	}
+	return result
 }
 
 func relayCAFingerprint(path string) string {

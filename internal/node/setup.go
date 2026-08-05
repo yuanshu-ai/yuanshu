@@ -380,14 +380,14 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 	identityRef := setupSecretRef("identity", s.configPath)
 	workspaceID := setupWorkspaceID(facts.FileIdentity)
 	value := config.Config{
-		ConfigVersion: config.CurrentVersion,
-		Host:          config.HostConfig{Name: name, Locale: setupLocale(request.Locale)},
-		Transport:     config.TransportConfig{Mode: config.TransportRelay},
-		Relay:         config.RelayConfig{URL: request.RelayURL, ConnectTimeoutSeconds: 15},
-		Identity:      config.IdentityConfig{PrivateKeyRef: identityRef},
-		Adapters:      config.AdaptersConfig{Codex: config.CodexAdapterConfig{Enabled: true, Binary: codexBinary, RuntimeMode: "stdio"}},
-		Events:        config.EventsConfig{MaxAgeHours: 168, MaxSizeMiB: 256},
-		Workspaces:    []config.WorkspaceConfig{{ID: workspaceID, DisplayName: workspaceName, Path: facts.CanonicalPath, AllowedAdapters: []string{"codex"}, DefaultAdapter: "codex", PermissionProfile: permission, AllowNetwork: allowNetwork}},
+		ConfigVersion:  config.CurrentVersion,
+		Host:           config.HostConfig{Name: name, Locale: setupLocale(request.Locale)},
+		Transport:      config.TransportConfig{Mode: config.TransportRelay},
+		Relay:          config.RelayConfig{URL: request.RelayURL, ConnectTimeoutSeconds: 15},
+		Identity:       config.IdentityConfig{PrivateKeyRef: identityRef},
+		AgentInstances: []config.AgentInstanceConfig{{ID: config.DefaultCodexInstanceID, AdapterType: "codex", DisplayName: "Codex", Enabled: true, IsDefault: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: codexBinary, RuntimeMode: "stdio"}}},
+		Events:         config.EventsConfig{MaxAgeHours: 168, MaxSizeMiB: 256},
+		Workspaces:     []config.WorkspaceConfig{{ID: workspaceID, DisplayName: workspaceName, Path: facts.CanonicalPath, AllowedAgentInstances: []string{config.DefaultCodexInstanceID}, DefaultAgentInstance: config.DefaultCodexInstanceID, PermissionProfile: permission, AllowNetwork: allowNetwork}},
 	}
 	setupSaved := false
 	var previousCA []byte

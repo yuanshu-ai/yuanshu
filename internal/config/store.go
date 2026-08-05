@@ -166,6 +166,7 @@ type versionHeader struct {
 type versionStep func([]byte) ([]byte, error)
 
 var versionSteps = map[int]versionStep{
+	1: migrateV1,
 	CurrentVersion: func(raw []byte) ([]byte, error) {
 		return append([]byte(nil), raw...), nil
 	},

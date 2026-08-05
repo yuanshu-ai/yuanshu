@@ -59,16 +59,8 @@ func Validate(value Config) error {
 		!validSecretRef(value.Identity.PrivateKeyRef) {
 		return configError("validation", ErrInvalid)
 	}
-	if value.Adapters.Codex.RuntimeMode != "stdio" {
-		return configError("validation", ErrInvalid)
-	}
-	if value.Adapters.Codex.Enabled && !validText(value.Adapters.Codex.Binary, true, maxPathBytes) {
-		return configError("validation", ErrInvalid)
-	}
-	if value.Adapters.Codex.Binary != "" && !validText(value.Adapters.Codex.Binary, true, maxPathBytes) {
-		return configError("validation", ErrInvalid)
-	}
-	if value.Adapters.Codex.Home != "" && !validText(value.Adapters.Codex.Home, false, maxPathBytes) {
+	instances, ok := validAgentInstances(value.AgentInstances)
+	if !ok {
 		return configError("validation", ErrInvalid)
 	}
 	if value.Events.MaxAgeHours < 1 || value.Events.MaxAgeHours > 720 ||
@@ -78,7 +70,7 @@ func Validate(value Config) error {
 	if value.Workspaces == nil {
 		return configError("validation", ErrInvalid)
 	}
-	if !validWorkspaces(value.Workspaces) {
+	if !validWorkspaces(value.Workspaces, instances) {
 		return configError("validation", ErrInvalid)
 	}
 	return nil
@@ -96,7 +88,56 @@ func validRelayURL(raw string) bool {
 	return parsed.Scheme == "ws" && (host == "127.0.0.1" || host == "::1")
 }
 
-func validWorkspaces(workspaces []WorkspaceConfig) bool {
+func validAgentInstances(instances []AgentInstanceConfig) (map[string]AgentInstanceConfig, bool) {
+	if len(instances) == 0 {
+		return nil, false
+	}
+	result := make(map[string]AgentInstanceConfig, len(instances))
+	defaults := 0
+	for _, instance := range instances {
+		if !validText(instance.ID, true, maxIDBytes) || !validText(instance.DisplayName, true, maxDisplayBytes) {
+			return nil, false
+		}
+		if _, exists := result[instance.ID]; exists {
+			return nil, false
+		}
+		if instance.IsDefault {
+			defaults++
+			if !instance.Enabled || instance.RuntimeMode != AgentRuntimeManaged {
+				return nil, false
+			}
+		}
+		switch instance.AdapterType {
+		case "codex":
+			if instance.RuntimeMode != AgentRuntimeManaged || instance.Codex == nil || instance.Codex.Enabled != instance.Enabled || !validCodexConfig(*instance.Codex) {
+				return nil, false
+			}
+		case "claude-code", "opencode":
+			if instance.RuntimeMode != AgentRuntimeDetectedOnly || instance.Codex != nil || instance.IsDefault {
+				return nil, false
+			}
+		default:
+			return nil, false
+		}
+		result[instance.ID] = instance
+	}
+	return result, defaults == 1
+}
+
+func validCodexConfig(value CodexAdapterConfig) bool {
+	if value.RuntimeMode != "stdio" {
+		return false
+	}
+	if value.Enabled && !validText(value.Binary, true, maxPathBytes) {
+		return false
+	}
+	if value.Binary != "" && !validText(value.Binary, true, maxPathBytes) {
+		return false
+	}
+	return value.Home == "" || validText(value.Home, false, maxPathBytes)
+}
+
+func validWorkspaces(workspaces []WorkspaceConfig, instances map[string]AgentInstanceConfig) bool {
 	ids := make(map[string]struct{}, len(workspaces))
 	paths := make(map[string]struct{}, len(workspaces))
 	for _, workspace := range workspaces {
@@ -113,8 +154,21 @@ func validWorkspaces(workspaces []WorkspaceConfig) bool {
 			return false
 		}
 		paths[workspace.Path] = struct{}{}
-		if len(workspace.AllowedAdapters) != 1 || workspace.AllowedAdapters[0] != "codex" ||
-			workspace.DefaultAdapter != "codex" {
+		if len(workspace.AllowedAgentInstances) == 0 {
+			return false
+		}
+		allowed := make(map[string]struct{}, len(workspace.AllowedAgentInstances))
+		for _, instanceID := range workspace.AllowedAgentInstances {
+			instance, exists := instances[instanceID]
+			if !exists || !instance.Enabled || instance.RuntimeMode != AgentRuntimeManaged {
+				return false
+			}
+			if _, duplicate := allowed[instanceID]; duplicate {
+				return false
+			}
+			allowed[instanceID] = struct{}{}
+		}
+		if _, exists := allowed[workspace.DefaultAgentInstance]; !exists {
 			return false
 		}
 		switch workspace.PermissionProfile {

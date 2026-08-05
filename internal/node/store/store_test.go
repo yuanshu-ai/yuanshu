@@ -75,7 +75,7 @@ func TestOpenMigratesAndReopensSQLite(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
 		t.Fatalf("journal_mode = %q, %v", mode, err)
 	}
-	wantTables := []string{"identity", "outbox", "replay_messages", "replay_nonces", "runtime_threads", "schema_migrations", "signer_sequences", "trust_manifests", "trusted_clients", "workspaces", "config_changes"}
+	wantTables := []string{"identity", "outbox", "replay_messages", "replay_nonces", "runtime_threads", "schema_migrations", "signer_sequences", "trust_manifests", "trusted_clients", "workspaces", "config_changes", "agent_installations", "agent_instances", "runtime_endpoints", "workspace_agents", "task_bindings"}
 	for _, table := range wantTables {
 		var count int
 		if err := store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count); err != nil || count != 1 {

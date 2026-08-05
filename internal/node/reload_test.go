@@ -130,7 +130,7 @@ func TestSameRuntimeBoundaryAllowsOnlyLiveNodeSettings(t *testing.T) {
 	}
 
 	changed = cloneNodeConfig(base)
-	changed.Adapters.Codex.Binary = "/different/codex"
+	changed.AgentInstances[0].Codex.Binary = "/different/codex"
 	if sameRuntimeBoundary(base, changed) {
 		t.Fatal("Codex executable change did not require a Runtime restart")
 	}
@@ -157,5 +157,12 @@ func TestRelayHTTPClientUsesExplicitSafeProxy(t *testing.T) {
 
 func cloneNodeConfig(value config.Config) config.Config {
 	value.Workspaces = append([]config.WorkspaceConfig(nil), value.Workspaces...)
+	value.AgentInstances = append([]config.AgentInstanceConfig(nil), value.AgentInstances...)
+	for index := range value.AgentInstances {
+		if value.AgentInstances[index].Codex != nil {
+			copy := *value.AgentInstances[index].Codex
+			value.AgentInstances[index].Codex = &copy
+		}
+	}
 	return value
 }

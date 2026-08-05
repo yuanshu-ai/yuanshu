@@ -14,7 +14,7 @@ import (
 	configpkg "github.com/yuanshu-ai/yuanshu/internal/config"
 )
 
-const schemaID = "https://yuanshu.ai/schemas/config/v1/node-config.schema.json"
+const schemaID = "https://yuanshu.ai/schemas/config/v2/node-config.schema.json"
 
 func TestSharedConfigurationFixtures(t *testing.T) {
 	schema := compileSchema(t)
@@ -73,8 +73,8 @@ func TestStrictTOMLAndSanitizedErrors(t *testing.T) {
 		raw  string
 		want error
 	}{
-		{"unknown secret field", "config_version=1\nsecret_token=\"SENSITIVE_TOKEN_CANARY\"\n", configpkg.ErrInvalid},
-		{"duplicate version", "config_version=1\nconfig_version=1\n", configpkg.ErrInvalid},
+		{"unknown secret field", "config_version=2\nsecret_token=\"SENSITIVE_TOKEN_CANARY\"\n", configpkg.ErrInvalid},
+		{"duplicate version", "config_version=2\nconfig_version=2\n", configpkg.ErrInvalid},
 		{"future version", "config_version=99\n", configpkg.ErrUnsupportedVersion},
 	}
 	for _, testCase := range tests {
@@ -191,5 +191,5 @@ func readFixture(t *testing.T, name string, target any) {
 }
 
 func schemaDirectory() string {
-	return filepath.Join("..", "..", "..", "schemas", "config", "v1")
+	return filepath.Join("..", "..", "..", "schemas", "config", "v2")
 }

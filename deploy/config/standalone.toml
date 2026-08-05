@@ -1,4 +1,4 @@
-config_version = 1
+config_version = 2
 
 [host]
 name = "Personal Standalone"
@@ -16,7 +16,15 @@ proxy_credential_ref = ""
 [identity]
 private_key_ref = "yuanshu/standalone/device-identity"
 
-[adapters.codex]
+[[agent_instances]]
+id = "codex-default"
+adapter_type = "codex"
+display_name = "Codex"
+enabled = true
+is_default = true
+runtime_mode = "managed"
+
+[agent_instances.codex]
 enabled = true
 binary = "codex"
 runtime_mode = "stdio"
@@ -30,7 +38,7 @@ max_size_mib = 256
 id = "personal-workspace"
 display_name = "Personal Workspace"
 path = "/workspace"
-allowed_adapters = ["codex"]
-default_adapter = "codex"
+allowed_agent_instances = ["codex-default"]
+default_agent_instance = "codex-default"
 permission_profile = "workspace-write"
 allow_network = false

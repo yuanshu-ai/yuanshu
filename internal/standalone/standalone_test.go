@@ -73,16 +73,16 @@ func TestFormalStandaloneStartsServerAndLocalNodeWithSeparateStores(t *testing.T
 		t.Fatal(err)
 	}
 	configuration := config.Config{
-		ConfigVersion: config.CurrentVersion,
-		Host:          config.HostConfig{Name: "Synthetic Standalone"},
-		Transport:     config.TransportConfig{Mode: config.TransportStandalone},
-		Relay:         config.RelayConfig{ConnectTimeoutSeconds: 15},
-		Identity:      config.IdentityConfig{PrivateKeyRef: "standalone-identity"},
-		Adapters:      config.AdaptersConfig{Codex: config.CodexAdapterConfig{Enabled: true, Binary: "synthetic-codex", RuntimeMode: "stdio"}},
-		Events:        config.EventsConfig{MaxAgeHours: 24, MaxSizeMiB: 16},
+		ConfigVersion:  config.CurrentVersion,
+		Host:           config.HostConfig{Name: "Synthetic Standalone"},
+		Transport:      config.TransportConfig{Mode: config.TransportStandalone},
+		Relay:          config.RelayConfig{ConnectTimeoutSeconds: 15},
+		Identity:       config.IdentityConfig{PrivateKeyRef: "standalone-identity"},
+		AgentInstances: []config.AgentInstanceConfig{{ID: config.DefaultCodexInstanceID, AdapterType: "codex", DisplayName: "Codex", Enabled: true, IsDefault: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: "synthetic-codex", RuntimeMode: "stdio"}}},
+		Events:         config.EventsConfig{MaxAgeHours: 24, MaxSizeMiB: 16},
 		Workspaces: []config.WorkspaceConfig{{
 			ID: "workspace", DisplayName: "Synthetic Workspace", Path: workspacePath,
-			AllowedAdapters: []string{"codex"}, DefaultAdapter: "codex", PermissionProfile: config.PermissionReadOnly,
+			AllowedAgentInstances: []string{config.DefaultCodexInstanceID}, DefaultAgentInstance: config.DefaultCodexInstanceID, PermissionProfile: config.PermissionReadOnly,
 		}},
 	}
 	configPath := filepath.Join(root, "config.toml")
