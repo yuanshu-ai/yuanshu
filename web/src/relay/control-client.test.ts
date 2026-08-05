@@ -52,11 +52,9 @@ describe("ControlClient recovery", () => {
     client.connect();
     sockets[0].open();
     sockets[0].receive(challenge());
-    await tick();
-    expect(JSON.parse(sockets[0].sent[0]).type).toBe("authenticate");
+    expect((await waitForSent(sockets[0], (message) => message.type === "authenticate")).type).toBe("authenticate");
     sockets[0].receive({ version: "1", type: "authenticated" });
-    await tick();
-    const initialReplay = JSON.parse(sockets[0].sent[1]);
+    const initialReplay = await waitForSent(sockets[0], (message) => message.type === "events.replay");
     expect(initialReplay.type).toBe("events.replay");
     expect(initialReplay.payload.afterSequence).toBe(0);
     sockets[0].receive(event("control.result", 1, initialReplay.messageId));
@@ -64,8 +62,7 @@ describe("ControlClient recovery", () => {
     expect(await storage.getEventCursor({ ownerId: "owner", nodeId: "node", streamId: "node-events-v1" })).toBe(1);
 
     const acquire = client.acquireLease({ nodeId: "node", workspaceId: "workspace", threadId: "thread" });
-    await tick();
-    const acquireMessage = JSON.parse(sockets[0].sent.at(-1) as string);
+    const acquireMessage = await waitForSent(sockets[0], (message) => message.type === "lease.acquire");
     sockets[0].receive(serverResult("node", 1, acquireMessage.messageId, { state: "held", leaseId: "lease-1", holderClientId: "client", epoch: 1, expiresAt: "2099-01-01T00:01:00Z" }));
     await acquire;
     await client.sendControl("turn.start", { input: "do not resend" }, { workspaceId: "workspace", threadId: "thread" });
@@ -75,16 +72,16 @@ describe("ControlClient recovery", () => {
     expect(sockets).toHaveLength(2);
     sockets[1].open();
     sockets[1].receive(challenge());
-    await tick();
+    await waitForSent(sockets[1], (message) => message.type === "authenticate");
     sockets[1].receive({ version: "1", type: "authenticated" });
-    await tick();
+    const replay = await waitForSent(sockets[1], (message) => message.type === "events.replay");
 
     const resentTypes = sockets[1].sent.map((value) => JSON.parse(value).type);
     expect(resentTypes).toContain("authenticate");
     expect(resentTypes).toContain("events.replay");
     expect(resentTypes).not.toContain("turn.start");
     expect(mutation.sequence).toBe(3);
-    expect(JSON.parse(sockets[1].sent.at(-1) as string).payload.afterSequence).toBe(1);
+    expect(replay.payload.afterSequence).toBe(1);
     client.close();
   });
 
@@ -314,4 +311,14 @@ function serverResult(nodeId: string, sequence: number, correlationId: string, l
 async function tick(): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+async function waitForSent(socket: FakeSocket, predicate: (message: Record<string, any>) => boolean): Promise<Record<string, any>> {
+  const deadline = Date.now() + 2_000;
+  for (;;) {
+    const message = socket.sent.map((value) => JSON.parse(value) as Record<string, any>).find(predicate);
+    if (message) return message;
+    if (Date.now() >= deadline) throw new Error("timed out waiting for WebSocket message");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
