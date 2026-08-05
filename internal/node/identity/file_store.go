@@ -186,7 +186,17 @@ func checkDirectoryComponents(path string) error {
 		if err != nil {
 			return ErrUnavailable
 		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		if info.Mode()&os.ModeSymlink != 0 {
+			if !trustedDirectorySymlink(current, info) {
+				return ErrInvalid
+			}
+			target, targetErr := os.Stat(current)
+			if targetErr != nil || !target.IsDir() {
+				return ErrInvalid
+			}
+			continue
+		}
+		if !info.IsDir() {
 			return ErrInvalid
 		}
 	}
