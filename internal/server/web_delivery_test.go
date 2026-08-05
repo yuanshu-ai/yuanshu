@@ -68,6 +68,23 @@ func TestEmbeddedWebDeliveryServesWorkbenchRuntimeConfigAndAssets(t *testing.T) 
 	}
 }
 
+func TestEmbeddedWebDeliveryPreservesPublicServerDiscovery(t *testing.T) {
+	api := withWellKnownDiscovery(http.NotFoundHandler(), wellKnownDiscovery{
+		DeploymentMode: "local",
+		PublicURL:      "http://127.0.0.1:9527",
+		Invitations:   true,
+	})
+	handler, err := newWebDeliveryHandler(api, webDeliveryOptions{Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/.well-known/yuanshu", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"product":"yuanshu"`) {
+		t.Fatalf("discovery status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
 func TestEmbeddedWebDeliveryServesAdminOnlyWhenEnabled(t *testing.T) {
 	handler, err := newWebDeliveryHandler(http.NotFoundHandler(), webDeliveryOptions{Enabled: true, AdminEnabled: true})
 	if err != nil {

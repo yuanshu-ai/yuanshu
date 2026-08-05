@@ -533,7 +533,10 @@ func claimBootstrap(ctx context.Context, client *http.Client, relayURL, secret, 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return "", "", errors.New("setup bootstrap request was rejected")
 	}
-	var result struct{ OwnerID, NodeID, Status string }
+	var result struct {
+		OwnerID, NodeID, Status     string
+		Fingerprint, Platform, Arch string
+	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 64<<10))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&result) != nil || result.OwnerID == "" || result.NodeID == "" || result.Status != "enrolled" {
@@ -600,7 +603,10 @@ func claimNodeInvitation(ctx context.Context, client *http.Client, serverURL, re
 	if response.StatusCode != http.StatusCreated {
 		return "", "", errors.New("setup invitation was rejected")
 	}
-	var result struct{ OwnerID, NodeID, Status string }
+	var result struct {
+		OwnerID, NodeID, Status     string
+		Fingerprint, Platform, Arch string
+	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 64<<10))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&result) != nil || result.OwnerID == "" || result.NodeID == "" || result.Status != "active" {

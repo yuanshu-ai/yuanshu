@@ -215,6 +215,25 @@ func TestNodeFlagParsing(t *testing.T) {
 	}
 }
 
+func TestPathsForConfigIsolatesExplicitProfile(t *testing.T) {
+	defaults := paths{
+		root:     "/Users/test/Library/Application Support/Yuanshu",
+		config:   "/Users/test/Library/Application Support/Yuanshu/config.toml",
+		database: "/Users/test/Library/Application Support/Yuanshu/node.db",
+		log:      "/Users/test/Library/Application Support/Yuanshu/node.log",
+	}
+
+	if got := pathsForConfig(defaults, defaults.config); got != defaults {
+		t.Fatalf("default paths changed: %#v", got)
+	}
+
+	custom := pathsForConfig(defaults, "/tmp/yuanshu-profile/node.toml")
+	if custom.root != "/tmp/yuanshu-profile" || custom.config != "/tmp/yuanshu-profile/node.toml" ||
+		custom.database != "/tmp/yuanshu-profile/node.db" || custom.log != "/tmp/yuanshu-profile/node.log" {
+		t.Fatalf("custom paths = %#v", custom)
+	}
+}
+
 func TestNodeSetupHelp(t *testing.T) {
 	var output bytes.Buffer
 	if err := Command(context.Background(), []string{"setup", "--help"}, &output, io.Discard); err != nil {

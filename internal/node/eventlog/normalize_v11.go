@@ -134,7 +134,7 @@ func taskSnapshotPayloadV11(payload map[string]any, event adapter.AgentEvent) ma
 	task["agentInstanceId"], task["workspaceId"] = event.AgentInstanceID, event.WorkspaceID
 	result["task"] = task
 	if turns, ok := result["turns"]; ok {
-		result["runs"] = turns
+		result["runs"] = runSummariesPayloadV11(turns)
 		delete(result, "turns")
 	}
 	if pending, ok := result["pendingApprovals"].([]any); ok {
@@ -161,6 +161,71 @@ func taskSnapshotPayloadV11(payload map[string]any, event adapter.AgentEvent) ma
 		}
 		result["interactions"] = interactions
 		delete(result, "pendingApprovals")
+	}
+	return result
+}
+
+func runSummariesPayloadV11(value any) []any {
+	turns, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	runs := make([]any, 0, len(turns))
+	for _, value := range turns {
+		turn, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := firstString(turn, "id", "")
+		if id == "" {
+			continue
+		}
+		run := map[string]any{"id": id, "status": firstString(turn, "status", "unknown")}
+		for _, key := range []string{"startedAt", "completedAt"} {
+			if item, exists := turn[key]; exists {
+				run[key] = item
+			}
+		}
+		if items, exists := turn["items"]; exists {
+			run["items"] = runItemsPayloadV11(items)
+		}
+		runs = append(runs, run)
+	}
+	return runs
+}
+
+func runItemsPayloadV11(value any) []any {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	allowed := []string{"id", "kind", "status", "text", "command", "output", "toolName", "path", "changeType", "diff", "exitCode", "errorCode", "errorMessage", "partial", "truncated", "totalBytes", "digest"}
+	result := make([]any, 0, len(items))
+	for _, value := range items {
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := firstString(item, "id", "")
+		if id == "" {
+			continue
+		}
+		kind := firstString(item, "kind", "unknown")
+		switch kind {
+		case "user_message", "agent_message", "reasoning_summary", "plan", "command", "command_output", "tool", "file_change", "diff", "error", "unknown":
+		default:
+			kind = "unknown"
+		}
+		clean := map[string]any{"id": id, "kind": kind}
+		for _, key := range allowed[2:] {
+			if itemValue, exists := item[key]; exists {
+				clean[key] = itemValue
+			}
+		}
+		if _, exists := clean["status"]; !exists {
+			clean["status"] = "unknown"
+		}
+		result = append(result, clean)
 	}
 	return result
 }

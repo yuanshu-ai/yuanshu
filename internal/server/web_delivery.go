@@ -192,7 +192,7 @@ func loopbackURLHost(value string) bool {
 
 func serverAPIPath(value string) bool {
 	switch value {
-	case "/healthz", "/readyz", "/node/connect", "/web/connect":
+	case "/.well-known/yuanshu", "/healthz", "/readyz", "/node/connect", "/web/connect":
 		return true
 	}
 	if value == "/v1/trust/ca.crt" {

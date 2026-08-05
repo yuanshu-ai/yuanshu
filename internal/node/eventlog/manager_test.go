@@ -182,6 +182,51 @@ func TestProtocolV11PersistsQuestionInteractionAndVisibleReasoning(t *testing.T)
 	}
 }
 
+func TestProtocolV11ProjectsLegacyThreadSnapshotRuns(t *testing.T) {
+	local, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "node.db"), store.Options{Clock: func() time.Time { return eventNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	manager, err := NewManager(local, Options{OwnerID: "owner", NodeID: "node", ProtocolVersion: protocolv11.CurrentVersion, MaxAge: time.Hour, MaxBytes: 16 << 20, Clock: func() time.Time { return eventNow }, Random: &incrementingReader{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := manager.Publish(context.Background(), adapter.AgentEvent{
+		Type: protocol.EventThreadSnapshot, AgentInstanceID: "codex-default", WorkspaceID: "workspace", ThreadID: "task",
+		Payload: map[string]any{
+			"id": "task", "status": "completed", "historyState": "partial",
+			"turns": []any{map[string]any{
+				"id": "run", "status": "completed", "historyState": "partial",
+				"items": []any{map[string]any{"id": "item", "kind": "agent_message", "status": "completed", "text": "hello", "unsupported": "drop"}},
+			}},
+		},
+	})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("snapshot Publish = %#v, %v", records, err)
+	}
+	message, err := protocolv11.ParseEvent(records[0].Frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, ok := message.Payload["runs"].([]any)
+	if !ok || len(runs) != 1 {
+		t.Fatalf("runs = %#v", message.Payload["runs"])
+	}
+	run, ok := runs[0].(map[string]any)
+	if !ok || run["historyState"] != nil {
+		t.Fatalf("run projection = %#v", runs[0])
+	}
+	items, ok := run["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("items = %#v", run["items"])
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok || item["unsupported"] != nil || item["text"] != "hello" {
+		t.Fatalf("item projection = %#v", items[0])
+	}
+}
+
 func TestControlResultLifecycleIsIdempotent(t *testing.T) {
 	manager, _ := newTestManager(t, 16<<20)
 	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x31}, ed25519.SeedSize))

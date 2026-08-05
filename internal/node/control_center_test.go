@@ -131,7 +131,7 @@ func TestControlCenterRejectsCrossOriginHostAndUnknownActions(t *testing.T) {
 	if controlCenterCommand("config_approve") || controlCenterCommand("client_revoke") {
 		t.Fatal("sensitive controls must require native or CLI confirmation")
 	}
-	if !controlCenterCommand("config_update") || !controlCenterCommand("pairing_create") {
+	if !controlCenterCommand("config_update") || !controlCenterCommand("pairing_create") || !controlCenterCommand("setup_discover") {
 		t.Fatal("expected safe local management controls are missing")
 	}
 }

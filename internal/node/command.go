@@ -76,7 +76,7 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if err != nil {
 			return err
 		}
-		return runHost(ctx, runOptions{paths: defaults, configPath: configPath, background: background, platform: current})
+		return runHost(ctx, runOptions{paths: pathsForConfig(defaults, configPath), configPath: configPath, background: background, platform: current})
 	case "setup":
 		defaults, err := defaultPaths()
 		if err != nil {
@@ -97,7 +97,7 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if printURL {
 			setupURLWriter = stdout
 		}
-		return runHost(ctx, runOptions{paths: defaults, configPath: configPath, platform: current, setup: true, setupURLWriter: setupURLWriter, setupWorkspacePath: workspacePath, setupRelayCAPath: relayCAPath})
+		return runHost(ctx, runOptions{paths: pathsForConfig(defaults, configPath), configPath: configPath, platform: current, setup: true, setupURLWriter: setupURLWriter, setupWorkspacePath: workspacePath, setupRelayCAPath: relayCAPath})
 	case "status":
 		_, _, jsonOutput, err := parseNodeFlags(args, "", true, false)
 		if err != nil {
@@ -137,7 +137,7 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if err != nil {
 			return err
 		}
-		status, healthy := diagnose(ctx, current, defaults, configPath)
+		status, healthy := diagnose(ctx, current, pathsForConfig(defaults, configPath), configPath)
 		if err := writeStatus(stdout, status, jsonOutput); err != nil {
 			return err
 		}

@@ -161,6 +161,26 @@ func TestNodeSetupClaimsFirstNodeBootstrapOverTrustedTLS(t *testing.T) {
 	}
 }
 
+func TestNodeSetupAcceptsExtendedInvitationResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/node-invitations/claim" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writer.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(writer).Encode(map[string]string{
+			"ownerId": "owner-1", "nodeId": "node-1", "status": "active",
+			"fingerprint": "fingerprint", "platform": "darwin", "arch": "arm64",
+		})
+	}))
+	defer server.Close()
+	relayURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/node/connect"
+	ownerID, nodeID, err := claimNodeInvitation(context.Background(), server.Client(), server.URL, relayURL, "", "ABCDEFGHJKMNPQRS", "Mac", make([]byte, 32))
+	if err != nil || ownerID != "owner-1" || nodeID != "node-1" {
+		t.Fatalf("claim invitation = %q %q, %v", ownerID, nodeID, err)
+	}
+}
+
 func TestNodeSetupStoresValidatedCustomCAInPrivateDirectory(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/healthz" {
