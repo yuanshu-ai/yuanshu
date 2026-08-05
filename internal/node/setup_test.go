@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,8 +63,9 @@ func TestNodeSetupUsesSessionBoundNativeWorkspaceToken(t *testing.T) {
 	if value.Config.Workspaces[0].PermissionProfile != config.PermissionReadOnly {
 		t.Fatalf("permission = %q", value.Config.Workspaces[0].PermissionProfile)
 	}
-	if _, err := fakePlatform.SecureStore().Get(context.Background(), value.Config.Identity.PrivateKeyRef); err != nil {
-		t.Fatalf("identity was not stored securely: %v", err)
+	key, err := os.ReadFile(filepath.Join(root, config.DefaultIdentityKeyFile))
+	if err != nil || len(key) != 32 {
+		t.Fatalf("identity key was not stored locally: %v", err)
 	}
 	if value.Config.Relay.CredentialRef != "" {
 		t.Fatalf("legacy relay credential reference = %q", value.Config.Relay.CredentialRef)
@@ -227,7 +227,7 @@ func TestNodeSetupWorkspaceTokenExpiresAndWorkspaceBoundaryIsRechecked(t *testin
 	}
 }
 
-func TestNodeSetupFailsClosedWithoutSecureStore(t *testing.T) {
+func TestNodeSetupDoesNotRequireSecureStore(t *testing.T) {
 	directory := t.TempDir()
 	fakePlatform, _ := platformfake.New(platform.FamilyDarwin)
 	fakePlatform.FakeSecureStore().SetError(platform.ErrUnavailable)
@@ -238,14 +238,10 @@ func TestNodeSetupFailsClosedWithoutSecureStore(t *testing.T) {
 	picked := controller.handle(context.Background(), localRequest{Command: "setup_pick", localSession: "session"})
 	request := localRequest{Command: "setup_complete", localSession: "session", Name: "Mac", RelayURL: "wss://relay.example.test/node/connect", JoinURL: "https://relay.example.test/join#value", WorkspaceToken: picked.WorkspaceToken, WorkspaceName: "Workspace", PermissionProfile: "read-only"}
 	result := controller.handle(context.Background(), request)
-	if result.OK || result.Error != "setup_secure_store_unavailable" {
-		t.Fatalf("secure store result = %#v", result)
+	if !result.OK {
+		t.Fatalf("file identity setup result = %#v", result)
 	}
-	if _, err := os.Stat(filepath.Join(directory, "config.toml")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("configuration was written after secure store failure")
-	}
-	fakePlatform.FakeSecureStore().SetError(nil)
-	if retry := controller.handle(context.Background(), request); retry.Error == "workspace token is invalid" {
-		t.Fatalf("workspace token was consumed by a failed setup: %#v", retry)
+	if _, err := os.Stat(filepath.Join(directory, "config.toml")); err != nil {
+		t.Fatalf("configuration was not written: %v", err)
 	}
 }

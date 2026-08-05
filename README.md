@@ -114,8 +114,8 @@ Remote access is TLS-only. Yuanshu never provides a switch to disable certificat
 
 | Target | Implementation | Automated evidence | Real-device/release evidence |
 | --- | --- | --- | --- |
-| Windows x64 Node | Implemented: DPAPI, Named Pipe, Job Object, native tray, user autostart | Native CI and cross-build coverage | PF-052 Windows daily-use acceptance pending |
-| macOS arm64 Node | Implemented: Keychain, Unix IPC, process groups, AppKit menu, LaunchAgent | Native build and test coverage | PF-052 full Node/menu/LaunchAgent acceptance pending |
+| Windows x64 Node | Implemented: file-backed Ed25519 identity, Named Pipe, Job Object, native tray, user autostart | Native CI and cross-build coverage | PF-052 Windows daily-use acceptance pending |
+| macOS arm64 Node | Implemented: file-backed Ed25519 identity, Unix IPC, process groups, AppKit menu, LaunchAgent | Native build and test coverage | PF-052 full Node/menu/LaunchAgent acceptance pending |
 | Linux amd64 Server/Standalone | Implemented and buildable | Linux tests, race suite, container and cross-build coverage | Real self-hosted phone deployment pending |
 | Linux Node | Platform boundaries exist | Contract coverage | Not a supported general Node yet |
 | Mobile Web workbench | Implemented for responsive browsers | Chromium/WebKit viewport and workflow tests | Real Safari, Android Chrome, and iPad acceptance pending |
@@ -157,7 +157,7 @@ yuanshu standalone   Server + Web + local Node in one deployment
 | Data | Node machine | Server | Browser |
 | --- | --- | --- | --- |
 | Agent login, API keys, custom Base URL credentials, Git/SSH credentials | Remain in local Agent or OS secure storage | Never stored | Never stored |
-| Node identity and sessions | Ed25519 private key in OS secure storage; short session in memory | Public key and revocation metadata; short session in memory | Never stored |
+| Node identity and sessions | Ed25519 private key in the Node data directory as `identity.key`; short session in memory | Public key and revocation metadata; short session in memory | Never stored |
 | Thread content, command output, and Diffs | Runtime and bounded local recovery state | Not permanently stored | In-memory projection only |
 | Control-client private key | Not stored | Public key only | Non-exportable IndexedDB CryptoKey |
 | Workspace paths | Canonical local configuration and policy store | Opaque workspace IDs only | Opaque IDs and display names only |

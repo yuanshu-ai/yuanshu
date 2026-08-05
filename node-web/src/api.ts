@@ -4,6 +4,7 @@ export type NodeStatus = {
   platform: string;
   config: string;
   identity: string;
+  identityStorage?: string;
   database: string;
   workspaces: number;
   codex: string;

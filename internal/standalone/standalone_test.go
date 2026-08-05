@@ -77,7 +77,7 @@ func TestFormalStandaloneStartsServerAndLocalNodeWithSeparateStores(t *testing.T
 		Host:           config.HostConfig{Name: "Synthetic Standalone"},
 		Transport:      config.TransportConfig{Mode: config.TransportStandalone},
 		Relay:          config.RelayConfig{ConnectTimeoutSeconds: 15},
-		Identity:       config.IdentityConfig{PrivateKeyRef: "standalone-identity"},
+		Identity:       config.IdentityConfig{KeyFile: config.DefaultIdentityKeyFile},
 		AgentInstances: []config.AgentInstanceConfig{{ID: config.DefaultCodexInstanceID, AdapterType: "codex", DisplayName: "Codex", Enabled: true, IsDefault: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: "synthetic-codex", RuntimeMode: "stdio"}}},
 		Events:         config.EventsConfig{MaxAgeHours: 24, MaxSizeMiB: 16},
 		Workspaces: []config.WorkspaceConfig{{

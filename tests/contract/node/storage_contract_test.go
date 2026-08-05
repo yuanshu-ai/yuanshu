@@ -25,14 +25,17 @@ import (
 func TestIdentitySecurityAndOutboxSurviveRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "node.db")
+	identityStore, err := identity.NewFileKeyStore(filepath.Join(filepath.Dir(path), config.DefaultIdentityKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2026, 8, 1, 14, 0, 0, 0, time.UTC)
-	secrets := platformfake.NewSecureStore()
 	local, err := store.Open(ctx, path, store.Options{Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	seed := bytes.Repeat([]byte{0x29}, ed25519.SeedSize)
-	manager, err := identity.NewManager(local, secrets, "node/identity", identity.Options{Random: bytes.NewReader(seed), Clock: func() time.Time { return now }})
+	manager, err := identity.NewManager(local, identityStore, identity.Options{Random: bytes.NewReader(seed), Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +68,7 @@ func TestIdentitySecurityAndOutboxSurviveRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	reopenedManager, err := identity.NewManager(reopened, secrets, "node/identity", identity.Options{})
+	reopenedManager, err := identity.NewManager(reopened, identityStore, identity.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

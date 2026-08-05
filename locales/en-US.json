@@ -89,7 +89,7 @@
   "setup.node.permission.readOnly": "Read only",
   "setup.node.permission.write": "Allow workspace writes",
   "setup.node.allowNetwork": "Allow Codex network access",
-  "setup.node.review.help": "The private key stays in the operating system secure store. Server and browsers see only the device fingerprint.",
+  "setup.node.review.help": "The device key stays in the Node's private directory; no password is required. Server and browsers see only the device fingerprint.",
   "setup.node.complete.title": "Node is configured",
   "setup.node.complete.description": "Configuration was saved securely. Node will establish an outbound connection.",
   "pair.title": "Connect this browser",

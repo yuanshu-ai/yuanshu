@@ -14,7 +14,7 @@ credential_ref = ""
 proxy_credential_ref = ""
 
 [identity]
-private_key_ref = "yuanshu/standalone/device-identity"
+key_file = "identity.key"
 
 [[agent_instances]]
 id = "codex-default"

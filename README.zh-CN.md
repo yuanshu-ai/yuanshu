@@ -114,8 +114,8 @@ CA 私钥永远不会离开 Server 私有数据目录。连接其他设备前请
 
 | 目标 | 实现状态 | 自动化证据 | 真实设备/发布证据 |
 | --- | --- | --- | --- |
-| Windows x64 Node | 已实现 DPAPI、Named Pipe、Job Object、原生托盘和用户级自启动 | 原生 CI 与交叉构建覆盖 | PF-052 Windows 日常使用验收待完成 |
-| macOS arm64 Node | 已实现 Keychain、Unix IPC、进程组、AppKit 菜单和 LaunchAgent | 原生构建与测试覆盖 | PF-052 完整 Node/菜单/LaunchAgent 验收待完成 |
+| Windows x64 Node | 已实现本机文件 Ed25519 身份、Named Pipe、Job Object、原生托盘和用户级自启动 | 原生 CI 与交叉构建覆盖 | PF-052 Windows 日常使用验收待完成 |
+| macOS arm64 Node | 已实现本机文件 Ed25519 身份、Unix IPC、进程组、AppKit 菜单和 LaunchAgent | 原生构建与测试覆盖 | PF-052 完整 Node/菜单/LaunchAgent 验收待完成 |
 | Linux amd64 Server/Standalone | 已实现且可构建 | Linux 测试、race、容器和交叉构建覆盖 | 真实自托管手机部署待完成 |
 | Linux Node | 已有平台边界 | 合约测试覆盖 | 尚不是受支持的通用 Node |
 | 移动 Web 工作台 | 已实现响应式浏览器界面 | Chromium/WebKit 视口和工作流测试 | 真实 Safari、Android Chrome 和 iPad 验收待完成 |
@@ -157,7 +157,7 @@ yuanshu standalone   在一个部署中运行 Server + Web + 本机 Node
 | 数据 | Node 电脑 | Server | 浏览器 |
 | --- | --- | --- | --- |
 | Agent 登录、API Key、自定义 Base URL 凭据、Git/SSH 凭据 | 留在本地 Agent 或操作系统安全存储 | 不保存 | 不保存 |
-| Node 身份与会话 | Ed25519 私钥保存在操作系统安全存储；短期会话仅在内存 | 公钥与撤销元数据；短期会话仅在内存 | 不保存 |
+| Node 身份与会话 | Ed25519 私钥保存在 Node 私有目录的 `identity.key`；短期会话仅在内存 | 公钥与撤销元数据；短期会话仅在内存 | 不保存 |
 | Thread 正文、命令输出和 Diff | Runtime 与有界本地恢复状态 | 不永久保存 | 仅内存投影 |
 | 控制端私钥 | 不保存 | 只保存公钥 | IndexedDB 中不可导出的 CryptoKey |
 | 工作区路径 | 本地规范化配置与策略存储 | 只接收不透明工作区 ID | 只接收不透明 ID 和显示名称 |

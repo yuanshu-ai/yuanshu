@@ -4,7 +4,7 @@
     "host": { "name": "devbox", "locale": "zh-CN" },
     "transport": { "mode": "relay" },
     "relay": { "url": "wss://relay.example.test/node/connect", "proxy_url": "", "ca_bundle_file": "", "connect_timeout_seconds": 15, "credential_ref": "", "proxy_credential_ref": "" },
-    "identity": { "private_key_ref": "yuanshu/identity/node" },
+    "identity": { "key_file": "identity.key" },
     "agent_instances": [
       { "id": "codex-default", "adapter_type": "codex", "display_name": "Codex", "enabled": true, "is_default": true, "runtime_mode": "managed", "codex": { "enabled": true, "binary": "codex", "runtime_mode": "stdio", "home": "" } },
       { "id": "opencode-detected", "adapter_type": "opencode", "display_name": "OpenCode", "enabled": true, "is_default": false, "runtime_mode": "detected-only" }

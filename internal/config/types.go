@@ -7,6 +7,7 @@ const (
 	CurrentVersion         = 2
 	MaxFileBytes           = 1 << 20
 	DefaultCodexInstanceID = "codex-default"
+	DefaultIdentityKeyFile = "identity.key"
 )
 
 type TransportMode string
@@ -53,7 +54,12 @@ type RelayConfig struct {
 }
 
 type IdentityConfig struct {
-	PrivateKeyRef platformpkg.SecretRef `toml:"private_key_ref" json:"private_key_ref"`
+	// KeyFile is the local Node device key. It is deliberately fixed to a
+	// basename so a config file cannot redirect identity material elsewhere.
+	KeyFile string `toml:"key_file,omitempty" json:"key_file,omitempty"`
+	// PrivateKeyRef is retained only so pre-file-identity configurations can be
+	// decoded and reported as requiring repair. New code must not read it.
+	PrivateKeyRef platformpkg.SecretRef `toml:"private_key_ref,omitempty" json:"private_key_ref,omitempty"`
 }
 
 type AgentRuntimeMode string

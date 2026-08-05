@@ -15,7 +15,7 @@ import (
 
 const Usage = `Usage:
   yuanshu node [run] [--config <absolute-path>] [--background]
-  yuanshu node setup [--config <absolute-path>] [--print-url] [--workspace <absolute-path>] [--relay-ca <absolute-path>]
+  yuanshu node setup [--config <absolute-path>] [--repair] [--print-url] [--workspace <absolute-path>] [--relay-ca <absolute-path>]
   yuanshu node status [--json]
   yuanshu node stop
   yuanshu node ui
@@ -82,9 +82,16 @@ func Command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if err != nil {
 			return err
 		}
-		configPath, printURL, workspacePath, relayCAPath, err := parseNodeSetupFlags(args, defaults.config)
+		configPath, repair, printURL, workspacePath, relayCAPath, err := parseNodeSetupFlags(args, defaults.config)
 		if err != nil {
 			return err
+		}
+		if repair {
+			backup, repairErr := prepareNodeIdentityRepair(ctx, current, identityRepairPaths(defaults, configPath), configPath)
+			if repairErr != nil {
+				return repairErr
+			}
+			fmt.Fprintf(stdout, "Node identity repair backup created: %s\n", backup)
 		}
 		var setupURLWriter io.Writer
 		if printURL {
@@ -164,7 +171,7 @@ func validateNodeArguments(args []string) error {
 		_, _, _, err := parseNodeFlags(args, "", false, true)
 		return err
 	case "setup":
-		_, _, _, _, err := parseNodeSetupFlags(args, "")
+		_, _, _, _, _, err := parseNodeSetupFlags(args, "")
 		return err
 	case "status":
 		_, _, _, err := parseNodeFlags(args, "", true, false)
@@ -407,8 +414,9 @@ func parseNodeFlags(args []string, defaultConfig string, allowJSON, allowBackgro
 	return configPath, background, jsonOutput, nil
 }
 
-func parseNodeSetupFlags(args []string, defaultConfig string) (string, bool, string, string, error) {
+func parseNodeSetupFlags(args []string, defaultConfig string) (string, bool, bool, string, string, error) {
 	configPath := defaultConfig
+	var repair bool
 	var printURL bool
 	var workspacePath string
 	var relayCAPath string
@@ -416,35 +424,37 @@ func parseNodeSetupFlags(args []string, defaultConfig string) (string, bool, str
 	for index := 0; index < len(args); index++ {
 		name := args[index]
 		if seen[name] {
-			return "", false, "", "", ErrUsage
+			return "", false, false, "", "", ErrUsage
 		}
 		seen[name] = true
 		switch name {
 		case "--config":
 			index++
 			if index >= len(args) || !filepath.IsAbs(args[index]) {
-				return "", false, "", "", ErrUsage
+				return "", false, false, "", "", ErrUsage
 			}
 			configPath = filepath.Clean(args[index])
+		case "--repair":
+			repair = true
 		case "--print-url":
 			printURL = true
 		case "--workspace":
 			index++
 			if index >= len(args) || !filepath.IsAbs(args[index]) {
-				return "", false, "", "", ErrUsage
+				return "", false, false, "", "", ErrUsage
 			}
 			workspacePath = filepath.Clean(args[index])
 		case "--relay-ca":
 			index++
 			if index >= len(args) || !filepath.IsAbs(args[index]) {
-				return "", false, "", "", ErrUsage
+				return "", false, false, "", "", ErrUsage
 			}
 			relayCAPath = filepath.Clean(args[index])
 		default:
-			return "", false, "", "", ErrUsage
+			return "", false, false, "", "", ErrUsage
 		}
 	}
-	return configPath, printURL, workspacePath, relayCAPath, nil
+	return configPath, repair, printURL, workspacePath, relayCAPath, nil
 }
 
 func commandAutostart(ctx context.Context, current platform.Platform, defaults paths, args []string, stdout io.Writer) error {
@@ -519,9 +529,9 @@ func writeStatus(writer io.Writer, status Status, jsonOutput bool) error {
 		return json.NewEncoder(writer).Encode(status)
 	}
 	_, err := fmt.Fprintf(writer,
-		"Yuanshu Node: %s\nPlatform: %s\nConfig: %s\nIdentity: %s\nDatabase: %s\nWorkspaces: %d (%s)\nCodex: %s\nCompatibility: %s\nAuthentication: %s\nCredential: %s\nRecovery: %s\nRemote control: %s\nRelay last error: %s\nRelay last seen: %s\nStart at login: %s\n",
+		"Yuanshu Node: %s\nPlatform: %s\nConfig: %s\nIdentity: %s\nIdentity storage: %s\nDatabase: %s\nWorkspaces: %d (%s)\nCodex: %s\nCompatibility: %s\nAuthentication: %s\nCredential: %s\nRecovery: %s\nRemote control: %s\nRelay last error: %s\nRelay last seen: %s\nStart at login: %s\n",
 		status.State, status.Platform, status.Config, status.Identity, status.Database,
-		status.Workspaces, status.WorkspaceStatus, status.Codex, status.Compatibility, status.Authentication, status.Credential, status.Recovery,
+		status.IdentityStorage, status.Workspaces, status.WorkspaceStatus, status.Codex, status.Compatibility, status.Authentication, status.Credential, status.Recovery,
 		status.RemoteControl, status.RelayLastError, status.RelayLastSeen, status.Autostart,
 	)
 	return err

@@ -22,13 +22,18 @@ import (
 )
 
 func TestUnboundNodeJoinsAndImportsOwnerTrust(t *testing.T) {
-	local, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
+	root := t.TempDir()
+	local, err := store.Open(context.Background(), filepath.Join(root, "node.db"), store.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer local.Close()
 	secrets := platformfake.NewSecureStore()
-	manager, err := identity.NewManager(local, secrets, platform.SecretRef("identity/test"), identity.Options{})
+	identityStore, err := identity.NewFileKeyStore(filepath.Join(root, "identity.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := identity.NewManager(local, identityStore, identity.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

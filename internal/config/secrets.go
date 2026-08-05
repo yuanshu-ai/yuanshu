@@ -37,11 +37,17 @@ func CheckSecretRefs(ctx context.Context, value Config, store platformpkg.Secure
 		slot SecretSlot
 		ref  platformpkg.SecretRef
 	}{
-		{SecretIdentityPrivateKey, value.Identity.PrivateKeyRef},
 		{SecretRelayCredential, value.Relay.CredentialRef},
 		{SecretProxyCredential, value.Relay.ProxyCredentialRef},
 	}
 	report := make(SecretReport, len(references))
+	if value.Identity.PrivateKeyRef != "" {
+		// Identity secrets are no longer read through SecureStore. This state
+		// tells doctor and local setup that the profile needs explicit repair.
+		report[SecretIdentityPrivateKey] = SecretUnavailable
+	} else {
+		report[SecretIdentityPrivateKey] = SecretUnset
+	}
 	for _, reference := range references {
 		report[reference.slot] = SecretUnset
 	}

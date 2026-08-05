@@ -26,8 +26,14 @@
     "identity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["private_key_ref"],
-      "properties": { "private_key_ref": { "$ref": "#/$defs/secretRef" } }
+      "oneOf": [
+        { "required": ["key_file"], "not": { "required": ["private_key_ref"] } },
+        { "required": ["private_key_ref"], "not": { "required": ["key_file"] } }
+      ],
+      "properties": {
+        "key_file": { "const": "identity.key" },
+        "private_key_ref": { "$ref": "#/$defs/secretRef" }
+      }
     },
     "agent_instances": {
       "type": "array",

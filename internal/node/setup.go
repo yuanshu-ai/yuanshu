@@ -377,14 +377,13 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 	if err != nil {
 		return "", err
 	}
-	identityRef := setupSecretRef("identity", s.configPath)
 	workspaceID := setupWorkspaceID(facts.FileIdentity)
 	value := config.Config{
 		ConfigVersion:  config.CurrentVersion,
 		Host:           config.HostConfig{Name: name, Locale: setupLocale(request.Locale)},
 		Transport:      config.TransportConfig{Mode: config.TransportRelay},
 		Relay:          config.RelayConfig{URL: request.RelayURL, ConnectTimeoutSeconds: 15},
-		Identity:       config.IdentityConfig{PrivateKeyRef: identityRef},
+		Identity:       config.IdentityConfig{KeyFile: config.DefaultIdentityKeyFile},
 		AgentInstances: []config.AgentInstanceConfig{{ID: config.DefaultCodexInstanceID, AdapterType: "codex", DisplayName: "Codex", Enabled: true, IsDefault: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: codexBinary, RuntimeMode: "stdio"}}},
 		Events:         config.EventsConfig{MaxAgeHours: 168, MaxSizeMiB: 256},
 		Workspaces:     []config.WorkspaceConfig{{ID: workspaceID, DisplayName: workspaceName, Path: facts.CanonicalPath, AllowedAgentInstances: []string{config.DefaultCodexInstanceID}, DefaultAgentInstance: config.DefaultCodexInstanceID, PermissionProfile: permission, AllowNetwork: allowNetwork}},
@@ -417,24 +416,31 @@ func (s *nodeSetupController) complete(ctx context.Context, request localRequest
 	if err := config.Validate(value); err != nil {
 		return "", errors.New("setup configuration is invalid")
 	}
-	if s.platform.SecureStore() == nil || !s.platform.SecureStore().Available() {
-		return "", platform.ErrUnavailable
-	}
 	if err := os.MkdirAll(s.paths.root, 0o700); err != nil || os.Chmod(s.paths.root, 0o700) != nil {
 		return "", errors.New("setup data directory is unavailable")
+	}
+	if existingStore, storeErr := config.NewFileStore(s.configPath); storeErr == nil {
+		if existing, loadErr := existingStore.Load(ctx); loadErr == nil && existing.Config.Identity.PrivateKeyRef != "" {
+			return "", errIdentityRepairRequired
+		}
 	}
 	local, err := store.Open(ctx, s.paths.database, store.Options{})
 	if err != nil {
 		return "", errors.New("setup database is unavailable")
 	}
 	defer local.Close()
-	manager, err := identity.NewManager(local, s.platform.SecureStore(), identityRef, identity.Options{})
+	identityStore, err := identity.NewFileKeyStore(filepath.Join(s.paths.root, config.DefaultIdentityKeyFile))
+	if err != nil {
+		return "", errors.New("setup identity path is invalid")
+	}
+	manager, err := identity.NewManager(local, identityStore, identity.Options{})
 	if err != nil {
 		return "", errors.New("setup identity is unavailable")
 	}
+	defer manager.Close()
 	nodeIdentity, err := manager.Ensure(ctx)
 	if err != nil {
-		return "", errors.New("setup secure storage is unavailable")
+		return "", errors.New("setup identity storage is unavailable")
 	}
 	if request.BootstrapSecret != "" {
 		client := s.httpClient
@@ -721,11 +727,6 @@ func writeRelayCABundle(path string, raw []byte) error {
 	return nil
 }
 
-func setupSecretRef(kind, configPath string) platform.SecretRef {
-	digest := sha256.Sum256([]byte(filepath.Clean(configPath)))
-	return platform.SecretRef("yuanshu.setup." + kind + "." + base64.RawURLEncoding.EncodeToString(digest[:12]))
-}
-
 func setupWorkspaceID(identity string) string {
 	digest := sha256.Sum256([]byte(identity))
 	return "ws_" + base64.RawURLEncoding.EncodeToString(digest[:12])
@@ -741,6 +742,10 @@ func setupErrorCode(err error) string {
 		return "workspace_denied"
 	case errors.Is(err, workspace.ErrUnavailable):
 		return "workspace_unavailable"
+	case errors.Is(err, errIdentityRepairRequired):
+		return "identity_repair_required"
+	case strings.Contains(err.Error(), "identity storage"):
+		return "setup_identity_storage_unavailable"
 	case strings.Contains(err.Error(), "secure storage"):
 		return "setup_secure_store_unavailable"
 	case strings.Contains(err.Error(), "bootstrap request was rejected"):

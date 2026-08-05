@@ -80,13 +80,17 @@ func TestHostKeepsManagementAvailableForInvalidConfiguration(t *testing.T) {
 func TestHostAssemblesFormalUnpairedNode(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "config.toml")
+	codexBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	configuration := config.Config{
 		ConfigVersion:  config.CurrentVersion,
 		Host:           config.HostConfig{Name: "synthetic-node"},
 		Transport:      config.TransportConfig{Mode: config.TransportStandalone},
 		Relay:          config.RelayConfig{ConnectTimeoutSeconds: 15},
-		Identity:       config.IdentityConfig{PrivateKeyRef: "identity/synthetic"},
-		AgentInstances: []config.AgentInstanceConfig{{ID: config.DefaultCodexInstanceID, AdapterType: "codex", DisplayName: "Codex", Enabled: true, IsDefault: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: "codex", RuntimeMode: "stdio"}}},
+		Identity:       config.IdentityConfig{KeyFile: config.DefaultIdentityKeyFile},
+		AgentInstances: []config.AgentInstanceConfig{{ID: config.DefaultCodexInstanceID, AdapterType: "codex", DisplayName: "Codex", Enabled: true, IsDefault: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: codexBinary, RuntimeMode: "stdio"}}},
 		Events:         config.EventsConfig{MaxAgeHours: 24, MaxSizeMiB: 16},
 		Workspaces:     []config.WorkspaceConfig{},
 	}
@@ -199,12 +203,15 @@ func TestNodeFlagParsing(t *testing.T) {
 	}
 	workspacePath := filepath.Join(t.TempDir(), "workspace")
 	relayCAPath := filepath.Join(t.TempDir(), "relay-ca.crt")
-	setupConfig, printURL, setupWorkspace, setupRelayCA, err := parseNodeSetupFlags([]string{"--config", configPath, "--print-url", "--workspace", workspacePath, "--relay-ca", relayCAPath}, "default")
-	if err != nil || setupConfig != configPath || !printURL || setupWorkspace != workspacePath || setupRelayCA != relayCAPath {
-		t.Fatalf("setup flags = %q %v %q %q %v", setupConfig, printURL, setupWorkspace, setupRelayCA, err)
+	setupConfig, repair, printURL, setupWorkspace, setupRelayCA, err := parseNodeSetupFlags([]string{"--config", configPath, "--print-url", "--workspace", workspacePath, "--relay-ca", relayCAPath}, "default")
+	if err != nil || setupConfig != configPath || repair || !printURL || setupWorkspace != workspacePath || setupRelayCA != relayCAPath {
+		t.Fatalf("setup flags = %q %v %v %q %q %v", setupConfig, repair, printURL, setupWorkspace, setupRelayCA, err)
 	}
-	if _, _, _, _, err := parseNodeSetupFlags([]string{"--print-url", "--print-url"}, "default"); !errors.Is(err, ErrUsage) {
+	if _, _, _, _, _, err := parseNodeSetupFlags([]string{"--print-url", "--print-url"}, "default"); !errors.Is(err, ErrUsage) {
 		t.Fatalf("duplicate setup flag error = %v", err)
+	}
+	if _, repair, _, _, _, err := parseNodeSetupFlags([]string{"--repair"}, "default"); err != nil || !repair {
+		t.Fatalf("repair flag = %v %v", repair, err)
 	}
 }
 

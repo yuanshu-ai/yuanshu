@@ -9,6 +9,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/adapter/builtin"
 	"github.com/yuanshu-ai/yuanshu/internal/config"
+	"github.com/yuanshu-ai/yuanshu/internal/node/identity"
 	noderuntime "github.com/yuanshu-ai/yuanshu/internal/node/runtime"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
@@ -46,25 +47,39 @@ func diagnose(ctx context.Context, current platform.Platform, locations paths, c
 	} else {
 		status.Config = "ready"
 	}
+	status.NodeAuthentication = "device_signature"
+	if loaded.Config.Identity.PrivateKeyRef != "" {
+		status.Identity = "repair_required"
+		status.IdentityStorage = "legacy_system_store"
+		return status, false
+	}
+	identityStore, identityErr := newNodeIdentityStore(locations.root, loaded.Config.Identity)
+	if identityErr != nil {
+		status.Identity = "invalid"
+		return status, false
+	}
+	seed, identityErr := identityStore.Get(ctx)
+	clear(seed)
+	switch {
+	case identityErr == nil:
+		status.Identity = "available"
+		status.IdentityStorage = "local_file"
+	case errors.Is(identityErr, identity.ErrMissing):
+		status.Identity = "not_initialized"
+		status.IdentityStorage = "local_file"
+	default:
+		status.Identity = "unavailable"
+		status.IdentityStorage = "local_file"
+	}
 	report, err := config.CheckSecretRefs(ctx, loaded.Config, current.SecureStore())
 	if err != nil {
 		status.Identity = "unavailable"
 		return status, false
 	}
-	identityState := report[config.SecretIdentityPrivateKey]
-	status.NodeAuthentication = "device_signature"
 	if report[config.SecretRelayCredential] == config.SecretAvailable {
 		status.Credential = "legacy_pending_cleanup"
 	} else {
 		status.Credential = "not_required"
-	}
-	switch identityState {
-	case config.SecretAvailable:
-		status.Identity = "available"
-	case config.SecretMissing, config.SecretUnset:
-		status.Identity = "not_initialized"
-	default:
-		status.Identity = "unavailable"
 	}
 	if _, err := os.Stat(locations.database); errors.Is(err, os.ErrNotExist) {
 		status.Database = "not_initialized"

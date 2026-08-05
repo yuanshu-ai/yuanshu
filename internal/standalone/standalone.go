@@ -329,10 +329,18 @@ func Run(ctx context.Context, options Options) error {
 	if err := local.ReconcileConfiguredAgents(ctx, loaded.Config); err != nil {
 		return errors.Join(ErrUnavailable, errors.New("agent configuration is unavailable"))
 	}
-	identityManager, err := identity.NewManager(local, options.Platform.SecureStore(), loaded.Config.Identity.PrivateKeyRef, identity.Options{Random: options.Random, Clock: options.Clock})
+	if loaded.Config.Identity.PrivateKeyRef != "" {
+		return errors.Join(ErrUnavailable, errors.New("standalone identity requires explicit repair"))
+	}
+	identityStore, err := identity.NewFileKeyStore(filepath.Join(nodeDir, config.DefaultIdentityKeyFile))
+	if err != nil {
+		return errors.Join(ErrUnavailable, errors.New("node identity path is unavailable"))
+	}
+	identityManager, err := identity.NewManager(local, identityStore, identity.Options{Random: options.Random, Clock: options.Clock})
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("node identity is unavailable"))
 	}
+	defer identityManager.Close()
 	nodeIdentity, err := identityManager.Ensure(ctx)
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("node identity is unavailable"))

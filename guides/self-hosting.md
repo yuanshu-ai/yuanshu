@@ -36,7 +36,7 @@ On the Server computer, verify the displayed SHA-256 root fingerprint. On every 
 
 - iPhone/iPad: install the profile, then enable full trust in Certificate Trust Settings.
 - Android: install it as a CA certificate through the device security settings.
-- macOS: import it into the current user's Keychain and set trust explicitly.
+- Node identity is separate from LAN TLS trust: `identity.key` is created with restrictive local-file permissions inside the Node data directory and is not stored in the macOS Keychain, Windows DPAPI, or Linux Secret Service. Install and verify only the public CA certificate for browser/Node LAN trust.
 - Windows: import it into the current user's Trusted Root Certification Authorities.
 
 After trust is enabled, reopen the HTTPS workbench and test WSS connectivity. Node setup can import the public CA PEM into the Node's private directory. It adds that CA to the system pool without disabling hostname or IP verification.

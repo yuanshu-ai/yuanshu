@@ -124,7 +124,7 @@ func testRemoteConfig() config.Config {
 		Host:           config.HostConfig{Name: "Test Node"},
 		Transport:      config.TransportConfig{Mode: config.TransportRelay},
 		Relay:          config.RelayConfig{URL: "wss://relay.example.test", ConnectTimeoutSeconds: 30, CredentialRef: "relay-secret"},
-		Identity:       config.IdentityConfig{PrivateKeyRef: "private-key"},
+		Identity:       config.IdentityConfig{KeyFile: config.DefaultIdentityKeyFile},
 		AgentInstances: []config.AgentInstanceConfig{{ID: config.DefaultCodexInstanceID, AdapterType: "codex", DisplayName: "Codex", Enabled: true, IsDefault: true, RuntimeMode: config.AgentRuntimeManaged, Codex: &config.CodexAdapterConfig{Enabled: true, Binary: "codex", RuntimeMode: "stdio"}}},
 		Events:         config.EventsConfig{MaxAgeHours: 168, MaxSizeMiB: 256},
 		Workspaces: []config.WorkspaceConfig{{

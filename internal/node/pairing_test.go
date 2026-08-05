@@ -16,23 +16,23 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/enrollment"
 	"github.com/yuanshu-ai/yuanshu/internal/node/identity"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
-	"github.com/yuanshu-ai/yuanshu/internal/platform"
-	platformfake "github.com/yuanshu-ai/yuanshu/internal/platform/fake"
 	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
 )
 
 func TestPairingManagerCreatesApprovesRevokesAndRotates(t *testing.T) {
 	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
-	local, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "node.db"), store.Options{Clock: func() time.Time { return now }})
+	root := t.TempDir()
+	local, err := store.Open(context.Background(), filepath.Join(root, "node.db"), store.Options{Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer local.Close()
-	fakePlatform, _ := platformfake.New(platform.FamilyWindows)
-	secrets := fakePlatform.SecureStore()
-	identityRef := platform.SecretRef("identity-test")
 	sessionToken := []byte("01234567890123456789012345678901")
-	identityManager, err := identity.NewManager(local, secrets, identityRef, identity.Options{Clock: func() time.Time { return now }})
+	identityStore, err := identity.NewFileKeyStore(filepath.Join(root, "identity.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityManager, err := identity.NewManager(local, identityStore, identity.Options{Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}

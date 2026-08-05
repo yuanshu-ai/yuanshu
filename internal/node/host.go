@@ -80,7 +80,6 @@ func runHost(ctx context.Context, options runOptions) error {
 		return context.Canceled
 	}
 	if options.platform == nil || options.platform.IPC() == nil || !options.platform.IPC().Available() ||
-		options.platform.SecureStore() == nil || !options.platform.SecureStore().Available() ||
 		options.platform.Processes() == nil || !options.platform.Processes().Available() ||
 		options.platform.Workspaces() == nil || !options.platform.Workspaces().Available() {
 		return platform.ErrUnavailable
@@ -209,7 +208,18 @@ func (h *host) reload(ctx context.Context) error {
 	}
 	h.status.update(func(value *Status) { value.Workspaces = len(loaded.Config.Workspaces) })
 	h.workspaceManager = workspaceManager
-	identityManager, err := identity.NewManager(local, h.options.platform.SecureStore(), loaded.Config.Identity.PrivateKeyRef, identity.Options{})
+	identityStore, err := newNodeIdentityStore(h.options.paths.root, loaded.Config.Identity)
+	if errors.Is(err, errIdentityRepairRequired) {
+		h.status.update(func(value *Status) {
+			value.Identity = "repair_required"
+			value.IdentityStorage = "legacy_system_store"
+		})
+		return h.fail("identity_repair_required")
+	}
+	if err != nil {
+		return h.fail("identity_invalid")
+	}
+	identityManager, err := identity.NewManager(local, identityStore, identity.Options{})
 	if err != nil {
 		return h.fail("identity_invalid")
 	}
@@ -218,6 +228,7 @@ func (h *host) reload(ctx context.Context) error {
 		return h.fail("identity_unavailable")
 	}
 	h.identityManager, h.nodeIdentity = identityManager, nodeIdentity
+	h.status.update(func(value *Status) { value.IdentityStorage = "local_file" })
 	bound := nodeIdentity.OwnerID != "" && nodeIdentity.NodeID != ""
 	h.status.update(func(value *Status) {
 		if bound {
@@ -555,8 +566,7 @@ func (h *host) closeResourcesLocked() error {
 	h.configController = nil
 	h.activeConfig = config.Config{}
 	h.workspaceManager = nil
-	h.identityManager = nil
-	h.nodeIdentity = identity.Identity{}
+	identityManager := h.identityManager
 	if h.trustCancel != nil {
 		h.trustCancel()
 		h.trustCancel = nil
@@ -565,6 +575,11 @@ func (h *host) closeResourcesLocked() error {
 		h.pairing.Close()
 		h.pairing = nil
 	}
+	if identityManager != nil {
+		identityManager.Close()
+	}
+	h.identityManager = nil
+	h.nodeIdentity = identity.Identity{}
 	if h.joiner != nil {
 		h.joiner.Close()
 		h.joiner = nil

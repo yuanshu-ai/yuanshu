@@ -56,7 +56,7 @@ func Validate(value Config) error {
 	}
 	if !validSecretRef(value.Relay.CredentialRef) ||
 		!validSecretRef(value.Relay.ProxyCredentialRef) ||
-		!validSecretRef(value.Identity.PrivateKeyRef) {
+		!validIdentityConfig(value.Identity) {
 		return configError("validation", ErrInvalid)
 	}
 	instances, ok := validAgentInstances(value.AgentInstances)
@@ -74,6 +74,19 @@ func Validate(value Config) error {
 		return configError("validation", ErrInvalid)
 	}
 	return nil
+}
+
+func validIdentityConfig(value IdentityConfig) bool {
+	switch {
+	case value.KeyFile == DefaultIdentityKeyFile && value.PrivateKeyRef == "":
+		return true
+	case value.KeyFile == "" && validSecretRef(value.PrivateKeyRef):
+		// Legacy OS-backed identity. It remains decodable, but the Node runtime
+		// will require an explicit repair instead of reading the old secret.
+		return true
+	default:
+		return false
+	}
 }
 
 func validRelayURL(raw string) bool {

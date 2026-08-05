@@ -381,6 +381,7 @@ func TestConcurrentStoresAlwaysLeaveValidConfiguration(t *testing.T) {
 
 func TestSecretReferenceStatesAndSanitization(t *testing.T) {
 	value := validConfig("secrets")
+	value.Identity.KeyFile = ""
 	value.Identity.PrivateKeyRef = "identity-ref"
 	value.Relay.CredentialRef = "relay-ref"
 	value.Relay.ProxyCredentialRef = ""
@@ -404,7 +405,7 @@ func TestSecretReferenceStatesAndSanitization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report[SecretIdentityPrivateKey] != SecretAvailable ||
+	if report[SecretIdentityPrivateKey] != SecretUnavailable ||
 		report[SecretRelayCredential] != SecretMissing ||
 		report[SecretProxyCredential] != SecretUnset {
 		t.Fatalf("report=%v", report)
@@ -418,7 +419,7 @@ func TestSecretReferenceStatesAndSanitization(t *testing.T) {
 	}
 
 	tracking := &trackingSecretStore{secret: []byte("SENSITIVE_TRACKED_SECRET")}
-	value.Relay.CredentialRef = ""
+	value.Relay.CredentialRef = "tracking-ref"
 	if _, err := CheckSecretRefs(context.Background(), value, tracking); err != nil {
 		t.Fatal(err)
 	}
@@ -453,6 +454,7 @@ func validConfig(host string) Config {
 		ConfigVersion: CurrentVersion,
 		Host:          HostConfig{Name: host},
 		Transport:     TransportConfig{Mode: TransportRelay},
+		Identity:      IdentityConfig{KeyFile: DefaultIdentityKeyFile},
 		Relay: RelayConfig{
 			URL:                   "wss://relay.example.test/node/connect",
 			ConnectTimeoutSeconds: 15,

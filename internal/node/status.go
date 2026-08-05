@@ -11,6 +11,7 @@ type Status struct {
 	Platform           string `json:"platform"`
 	Config             string `json:"config"`
 	Identity           string `json:"identity"`
+	IdentityStorage    string `json:"identityStorage,omitempty"`
 	Database           string `json:"database"`
 	Workspaces         int    `json:"workspaces"`
 	Codex              string `json:"codex"`
@@ -34,7 +35,7 @@ type statusStore struct {
 func newStatusStore(family string) *statusStore {
 	return &statusStore{status: Status{
 		Version: LocalStatusVersion, State: "starting", Platform: family,
-		Config: "unchecked", Identity: "unchecked", Database: "unchecked",
+		Config: "unchecked", Identity: "unchecked", IdentityStorage: "local_file", Database: "unchecked",
 		Codex: "unchecked", Authentication: "unchecked", NodeAuthentication: "device_signature", Recovery: "not_required",
 		RemoteControl: "not_available", WorkspaceStatus: "unchecked", Credential: "unchecked", Autostart: "unchecked",
 	}}

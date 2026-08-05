@@ -41,7 +41,7 @@ func StartStandaloneManagement(ctx context.Context, options StandaloneManagement
 	}
 	management := &StandaloneManagement{pairing: pairing}
 	status := func() Status {
-		return Status{Version: LocalStatusVersion, State: "ready", Platform: string(platform.FamilyLinux), Config: "ready", Identity: "bound", Database: "ready", Codex: "ready", Authentication: "available", Recovery: "not_required", RemoteControl: "local", Autostart: "not_available"}
+		return Status{Version: LocalStatusVersion, State: "ready", Platform: string(platform.FamilyLinux), Config: "ready", Identity: "bound", IdentityStorage: "local_file", Database: "ready", Codex: "ready", Authentication: "available", NodeAuthentication: "device_signature", Recovery: "not_required", RemoteControl: "local", Autostart: "not_available"}
 	}
 	server, err := startLocalServer(ctx, options.IPC, status, options.Stop, management.handle)
 	if err != nil {
