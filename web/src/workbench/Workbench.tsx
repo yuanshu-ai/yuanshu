@@ -280,20 +280,19 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
   return <main className={`workbench-shell ${mobileThreadOpen ? "thread-open" : ""}`}>
     <header className="workbench-topbar">
       <div className="brand-lockup"><BrandMark /><div><strong>远枢</strong><span>Codex task relay</span></div></div>
-      <nav className="desktop-nav" aria-label="工作台导航"><button type="button" className={screen === "home" ? "active" : ""} onClick={() => selectScreen("home")}>{t("workbench.nav.home")}</button><button type="button" className={screen === "tasks" ? "active" : ""} onClick={() => selectScreen("tasks")}>{t("workbench.nav.tasks")}</button><button type="button" className={screen === "devices" ? "active" : ""} onClick={() => selectScreen("devices")}>{t("workbench.nav.devices")}</button><button type="button" className={screen === "settings" ? "active" : ""} onClick={() => selectScreen("settings")}>{t("workbench.nav.settings")}</button></nav>
+      <nav className="desktop-nav" aria-label="工作台导航"><button type="button" className={screen === "home" ? "active" : ""} onClick={() => selectScreen("home")}>{t("workbench.nav.home")}</button><button type="button" className={screen === "tasks" ? "active" : ""} onClick={() => selectScreen("tasks")}>{t("workbench.nav.tasks")}</button><button type="button" className={screen === "notifications" ? "active" : ""} onClick={() => selectScreen("notifications")}>{t("workbench.nav.notifications")}{unread > 0 && <span className="nav-count">{unread}</span>}</button><button type="button" className={screen === "settings" ? "active" : ""} onClick={() => selectScreen("settings")}>{t("workbench.nav.settings")}</button></nav>
       <LanguageSwitch compact />
-      <button className={`topbar-attention ${screen === "notifications" ? "active" : ""}`} type="button" onClick={() => selectScreen("notifications")} aria-label={`待办通知 ${unread}`}><Icon name="bell" />{unread > 0 && <span>{unread}</span>}</button>
       <button className={`connection-state ${snapshot.connectionState}`} type="button" onClick={() => void session.refreshAll()} aria-label="刷新连接状态"><span className="semantic-state" />{connectionLabel(snapshot.connectionState)}</button>
     </header>
 
     {snapshot.connectionState === "reauth_required" && <div className="reauth-banner" role="alert"><Icon name="lock" /><div><b>当前浏览器需要重新配对</b><span>现有身份已失效；重新授权前，任务仍可在设备上继续运行。</span></div><a className="button warning" href={settings.pairingUrl}>重新配对</a></div>}
 
     {screen === "notifications" ? <NotificationsView notifications={notifications} resource={snapshot.resources[resourceKey.notifications]} onRefresh={() => void session.refreshNotifications()} onOpen={(notification) => void openNotification(notification)} />
-      : screen === "settings" ? <SettingsView session={session} storage={storage} settings={settings} connectionState={snapshot.connectionState} selectedNodeId={selectedNodeId} onSettingsSaved={onSettingsSaved} />
+      : screen === "settings" ? <SettingsView session={session} storage={storage} settings={settings} connectionState={snapshot.connectionState} selectedNodeId={selectedNodeId} onSettingsSaved={onSettingsSaved} onDevices={() => selectScreen("devices")} />
       : screen === "devices" ? <DevicesView nodes={nodes} agents={agents} workspaces={allWorkspaces} selectedNodeId={selectedNodeId} selectedAgentInstanceId={selectedAgentInstanceId} selectedWorkspaceId={selectedWorkspaceId} onNode={(nodeId) => navigate(() => { setSelectedNodeId(nodeId); setSelectedAgentInstanceId(""); setSelectedWorkspaceId(""); })} onAgent={(agentInstanceId) => navigate(() => { setSelectedAgentInstanceId(agentInstanceId); setSelectedWorkspaceId(""); })} onWorkspace={selectDeviceWorkspace} onNewTask={(nodeId, agentInstanceId, workspaceId) => openNewTask({ nodeId, agentInstanceId, workspaceId })} onShowTasks={() => { setTaskNodeFilter(selectedNodeId); setTaskWorkspaceFilter(selectedWorkspaceId); selectScreen("tasks"); }} />
       : <div className="workbench-grid">
         <aside className="task-sidebar" aria-label="任务列表与上下文">
-          <TaskContextBar nodes={nodes} workspaces={workspaces} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} onNode={(nodeId) => navigate(() => { setSelectedNodeId(nodeId); setSelectedWorkspaceId(""); setSelectedThreadId(""); })} onWorkspace={(workspaceId) => navigate(() => { setSelectedWorkspaceId(workspaceId); setSelectedThreadId(""); })} />
+          <TaskContextBar nodes={nodes} workspaces={workspaces} selectedNodeId={selectedNodeId} selectedWorkspaceId={selectedWorkspaceId} onNode={(nodeId) => navigate(() => { setSelectedNodeId(nodeId); setSelectedWorkspaceId(""); setSelectedThreadId(""); })} onWorkspace={(workspaceId) => navigate(() => { setSelectedWorkspaceId(workspaceId); setSelectedThreadId(""); })} onDevices={() => selectScreen("devices")} />
           <section className="task-pane">
           <TaskDataState resource={taskResource} hasTasks={tasks.length > 0} onRetry={() => void session.refreshAll()} />
           {screen === "home" ? <HomeView groups={groups} nodes={nodes} unreadNotifications={unread} onOpen={openThread} onNew={() => openNewTask()} onNotifications={() => selectScreen("notifications")} /> : <TasksView tasks={filteredTasks} allTasks={tasks} nodes={nodes} workspaces={allWorkspaces} filter={filter} query={query} selectedNodeId={taskNodeFilter} selectedWorkspaceId={taskWorkspaceFilter} onFilter={setFilter} onQuery={setQuery} onNode={(nodeId) => { setTaskNodeFilter(nodeId); setTaskWorkspaceFilter(""); }} onWorkspace={setTaskWorkspaceFilter} onOpen={openThread} onNew={() => openNewTask()} />}
@@ -308,7 +307,7 @@ export function Workbench({ session, storage, settings, onSettingsSaved }: { ses
     <nav className="mobile-nav" aria-label="工作台导航">
       <NavButton icon="home" label={t("workbench.nav.home")} active={screen === "home"} onClick={() => selectScreen("home")} />
       <NavButton icon="tasks" label={t("workbench.nav.tasks")} active={screen === "tasks"} onClick={() => selectScreen("tasks")} />
-      <NavButton icon="node" label={t("workbench.nav.devices")} active={screen === "devices"} onClick={() => selectScreen("devices")} />
+      <NavButton icon="bell" label={t("workbench.nav.notifications")} badge={unread} active={screen === "notifications"} onClick={() => selectScreen("notifications")} />
       <NavButton icon="settings" label={t("workbench.nav.settings")} active={screen === "settings"} onClick={() => selectScreen("settings")} />
     </nav>
   </main>;
@@ -325,8 +324,8 @@ function TaskDataState({ resource, hasTasks, onRetry }: { resource?: ResourceSta
   return <ResourceMessage resource={resource} compact onRetry={onRetry} />;
 }
 
-function NavButton({ icon, label, active, onClick }: { icon: IconName; label: string; active: boolean; onClick: () => void }) {
-  return <button type="button" className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={onClick}><span><Icon name={icon} /></span><small>{label}</small></button>;
+function NavButton({ icon, label, active, badge = 0, onClick }: { icon: IconName; label: string; active: boolean; badge?: number; onClick: () => void }) {
+  return <button type="button" className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={onClick}><span><Icon name={icon} />{badge > 0 && <em>{badge}</em>}</span><small>{label}</small></button>;
 }
 
 function notificationTitle(value: string) {

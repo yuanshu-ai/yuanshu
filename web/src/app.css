@@ -59,6 +59,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .desktop-nav button:hover { color: var(--ink); }
 .desktop-nav button.active { color: var(--accent); }
 .desktop-nav button.active::after { position: absolute; right: 9px; bottom: -1px; left: 9px; height: 2px; background: var(--accent); content: ""; }
+.desktop-nav .nav-count { display: inline-grid; place-items: center; min-width: 15px; height: 15px; margin-left: 4px; padding: 0 3px; border-radius: 8px; background: var(--warning); color: #24190a; font: 8px var(--mono); vertical-align: middle; }
 .topbar-attention { position: relative; display: grid; place-items: center; width: 38px; height: 38px; margin-left: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; color: var(--muted); }
 .topbar-attention:hover, .topbar-attention.active { border-color: var(--line-strong); background: var(--surface); color: var(--ink); }
 .topbar-attention svg { width: 17px; }
@@ -319,6 +320,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .agent-capabilities > span.full { color: var(--accent); }
 .agent-capabilities small { opacity: .72; }
 .agent-boundary-note { margin: 0; padding: 10px; color: var(--quiet); font-size: 10px; line-height: 1.5; }
+.agent-advanced, .detected-agents { border-top: 1px solid var(--line); }
+.agent-advanced summary, .detected-agents summary { padding: 9px 10px; color: var(--quiet); cursor: pointer; font-size: 10px; }
+.agent-advanced summary:focus-visible, .detected-agents summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.detected-agent-list { display: grid; gap: 6px; padding: 0 10px 8px; }
+.detected-agent { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.detected-agent > div { display: grid; min-width: 0; gap: 2px; }
+.detected-agent b { font-size: 10px; }
+.detected-agent small { color: var(--quiet); font-size: 9px; }
 .device-workspaces { display: grid; }
 .device-workspace-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; border-bottom: 1px solid var(--line); }
 .device-workspace-row.selected { background: var(--accent-soft); }
@@ -559,10 +568,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 /* Codex-style task workspace: one task rail, one conversation, one inspector. */
 .workbench-grid { grid-template-columns: minmax(290px, 340px) minmax(0, 1fr); }
 .task-sidebar { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--line); overflow: hidden; }
-.task-context-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: #0d1210; }
+.task-context-bar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: #0d1210; }
 .task-context-bar label { display: flex; min-width: 0; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .task-context-bar select { min-width: 0; width: 100%; height: 34px; border: 0; background: transparent; color: var(--muted); font-size: 10px; text-overflow: ellipsis; }
 .task-context-bar svg { flex: 0 0 auto; width: 14px; color: var(--quiet); }
+.context-devices { display: inline-flex; min-height: 34px; align-items: center; gap: 5px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 10px; }
+.context-devices:hover { border-color: var(--line-strong); color: var(--ink); }
 .context-presence { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--quiet); }
 .context-presence.online { background: var(--accent); box-shadow: 0 0 0 3px rgba(114,215,162,.09); }
 .task-sidebar .task-pane { flex: 1 1 auto; min-height: 0; padding: 0 14px; border: 0; overflow-y: auto; }
@@ -630,6 +641,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .workbench-grid { display: block; }
   .task-sidebar { height: 100%; border: 0; }
   .task-context-bar { grid-template-columns: 1fr 1fr; padding: 8px 0 10px; background: var(--bg); }
+  .context-devices { grid-column: 1 / -1; justify-content: center; }
   .task-sidebar .task-pane { padding: 0; }
   .thread-open .task-sidebar { display: none; }
   .thread-content-grid { display: block; min-height: 0; }

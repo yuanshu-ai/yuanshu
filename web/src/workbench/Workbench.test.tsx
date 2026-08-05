@@ -52,38 +52,32 @@ describe("personal workbench", () => {
     fireEvent.change(screen.getByPlaceholderText("搜索已同步的标题和摘要"), { target: { value: "missing" } });
     expect(screen.getByText("没有匹配的任务")).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "待办通知 1" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: /通知/ })[0]);
     expect(screen.getByRole("heading", { name: "最近通知" })).toBeInTheDocument();
     expect(screen.getByText("任务已完成")).toBeInTheDocument();
   });
 
-  it("exposes devices as a mobile-level destination", () => {
+  it("keeps devices as a secondary destination", () => {
     const fake = new FakeSession();
     render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
 
-    fireEvent.click(screen.getAllByRole("button", { name: "设备" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "设备" }));
     expect(screen.getByRole("heading", { name: "设备与 Agent" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Codex.*managed/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Codex.*managed/ }));
+    expect(screen.getByRole("button", { name: /Codex.*可用/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Codex.*可用/ }));
     expect(screen.getByRole("button", { name: /^Office repo/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "使用 Codex 在 Office repo 新建任务" })).toBeEnabled();
   });
 
-  it("requires an explicit target before starting a new task", async () => {
+  it("starts directly when there is one usable Codex target", async () => {
     const fake = new FakeSession();
     render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
 
     fireEvent.click(screen.getByRole("button", { name: "新任务" }));
     expect(screen.getByRole("dialog", { name: "开始新任务" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
-    expect(screen.queryByLabelText("你希望 Codex 完成什么？")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /Office.*Codex 可用/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Codex.*可创建任务/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Office repo.*可修改工作区文件/ }));
-    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.queryByRole("button", { name: "下一步" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("你希望 Codex 完成什么？")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("你希望 Codex 完成什么？"), { target: { value: "Run the release checks" } });
-    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("region", { name: "执行目标" })).toHaveTextContent("Office");
     expect(screen.getByRole("region", { name: "执行目标" })).toHaveTextContent("Office repo");
     fireEvent.click(screen.getByRole("button", { name: "确认并启动" }));
@@ -94,8 +88,8 @@ describe("personal workbench", () => {
     const fake = new FakeSession();
     render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
 
-    fireEvent.click(screen.getAllByRole("button", { name: "设备" })[0]);
-    fireEvent.click(screen.getByRole("button", { name: /Codex.*managed/ }));
+    fireEvent.click(screen.getByRole("button", { name: "设备" }));
+    fireEvent.click(screen.getByRole("button", { name: /Codex.*可用/ }));
     fireEvent.click(screen.getByRole("button", { name: "使用 Codex 在 Office repo 新建任务" }));
     expect(screen.getByLabelText("你希望 Codex 完成什么？")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "执行目标" })).toHaveTextContent("Office repo");
