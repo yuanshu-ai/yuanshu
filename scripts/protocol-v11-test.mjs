@@ -30,7 +30,7 @@ const control = (type, index) => {
   if (type === "task.read") value.payload = { includeRuns: true };
   if (type === "task.start") value.payload = { input: "Inspect the project" };
   if (["run.start", "run.steer"].includes(type)) value.payload = { input: "Continue", lease };
-  if (type === "run.interrupt") value.payload = { lease };
+  if (["task.resume", "run.interrupt"].includes(type)) value.payload = { lease };
   if (type === "interaction.resolve") value.payload = { answer: "Use option A", operationDigest: "A".repeat(43), lease };
   if (type === "events.replay") value.payload = { afterSequence: 0 };
   if (type === "lease.acquire") value.payload = { force: false };

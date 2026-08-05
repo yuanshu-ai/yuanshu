@@ -77,6 +77,33 @@ func (s *Store) SaveAgentInstallation(ctx context.Context, record AgentInstallat
 	return nil
 }
 
+func (s *Store) AgentInstallations(ctx context.Context) ([]AgentInstallationRecord, error) {
+	if err := requireContext(ctx); err != nil {
+		return nil, err
+	}
+	db, err := s.database()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT adapter_type,installation_state,version,compatibility,process_state,process_count FROM agent_installations ORDER BY adapter_type`)
+	if err != nil {
+		return nil, internal("agent installation list")
+	}
+	defer rows.Close()
+	var result []AgentInstallationRecord
+	for rows.Next() {
+		var item AgentInstallationRecord
+		if err := rows.Scan(&item.AdapterType, &item.InstallationState, &item.Version, &item.Compatibility, &item.ProcessState, &item.ProcessCount); err != nil {
+			return nil, internal("agent installation list")
+		}
+		result = append(result, item)
+	}
+	if rows.Err() != nil {
+		return nil, internal("agent installation list")
+	}
+	return result, nil
+}
+
 func (s *Store) ReplaceAgentResources(ctx context.Context, instances []AgentInstanceRecord, endpoints []RuntimeEndpointRecord, links []WorkspaceAgentRecord) error {
 	if err := requireContext(ctx); err != nil {
 		return err

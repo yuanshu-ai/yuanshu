@@ -12,6 +12,7 @@ import (
 	"time"
 
 	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
@@ -21,6 +22,10 @@ const serverControlStreamPrefix = "server-control-v1-"
 func leaseRequired(controlType string) bool {
 	switch protocolv1.ControlType(controlType) {
 	case protocolv1.ControlTurnStart, protocolv1.ControlTurnSteer, protocolv1.ControlTurnInterrupt, protocolv1.ControlApprovalResolve:
+		return true
+	}
+	switch protocolv11.ControlType(controlType) {
+	case protocolv11.ControlTaskResume, protocolv11.ControlRunStart, protocolv11.ControlRunSteer, protocolv11.ControlRunInterrupt, protocolv11.ControlInteractionResolve:
 		return true
 	default:
 		return false
@@ -36,29 +41,29 @@ func serverControl(controlType string) bool {
 	}
 }
 
-func (h *Hub) validateControlFrame(ctx context.Context, source *hubConnection, raw []byte) (protocolv1.YuanshuMessage, error) {
-	message, err := protocolv1.ParseControl(raw)
+func (h *Hub) validateControlFrame(ctx context.Context, source *hubConnection, raw []byte) (routedControl, error) {
+	message, err := parseRoutedControl(raw)
 	if err != nil || source.role != transport.SessionRoleControl || message.OwnerID != source.ownerID || message.Signer == nil || message.Signer.ClientID != source.subjectID || message.Signer.KeyID != source.keyID || message.Signature == nil || message.ExpiresAt == nil || message.Nonce == nil {
-		return protocolv1.YuanshuMessage{}, errors.New("control frame authorization failed")
+		return routedControl{}, errors.New("control frame authorization failed")
 	}
 	sentAt, err := time.Parse(time.RFC3339Nano, message.SentAt)
 	if err != nil {
-		return protocolv1.YuanshuMessage{}, errors.New("control frame time is invalid")
+		return routedControl{}, errors.New("control frame time is invalid")
 	}
 	expiresAt, err := time.Parse(time.RFC3339Nano, *message.ExpiresAt)
 	if err != nil || !expiresAt.After(sentAt) || expiresAt.Sub(sentAt) > protocolv1.DefaultControlMaxTTL || expiresAt.Before(h.clock().UTC().Add(-protocolv1.DefaultControlClockSkew)) {
-		return protocolv1.YuanshuMessage{}, errors.New("control frame is expired")
+		return routedControl{}, errors.New("control frame is expired")
 	}
 	if message.Sequence < 1 || len(source.publicKey) != ed25519.PublicKeySize {
-		return protocolv1.YuanshuMessage{}, errors.New("control frame sequence is invalid")
+		return routedControl{}, errors.New("control frame sequence is invalid")
 	}
 	decoded, err := decodeSignature(message.Signature)
 	if err != nil {
-		return protocolv1.YuanshuMessage{}, errors.New("control frame signature is invalid")
+		return routedControl{}, errors.New("control frame signature is invalid")
 	}
-	input, err := protocolv1.ControlSigningInput(message)
+	input, err := message.signingInput()
 	if err != nil || !ed25519.Verify(source.publicKey, input, decoded) {
-		return protocolv1.YuanshuMessage{}, errors.New("control frame signature is invalid")
+		return routedControl{}, errors.New("control frame signature is invalid")
 	}
 	record := protocolv1.ReplayRecord{
 		OwnerID: message.OwnerID, NodeID: message.NodeID, MessageID: message.MessageID,
@@ -107,7 +112,7 @@ func (h *Hub) withLeaseLock(scope serverstore.LeaseScope, fn func() error) error
 	return fn()
 }
 
-func (h *Hub) handleServerControl(ctx context.Context, source *hubConnection, message protocolv1.YuanshuMessage) error {
+func (h *Hub) handleServerControl(ctx context.Context, source *hubConnection, message routedControl) error {
 	if protocolv1.ControlType(message.Type) == protocolv1.ControlNotificationsList || protocolv1.ControlType(message.Type) == protocolv1.ControlNotificationsRead {
 		return h.handleNotificationControl(ctx, source, message)
 	}
@@ -162,7 +167,7 @@ func (h *Hub) handleServerControl(ctx context.Context, source *hubConnection, me
 	})
 }
 
-func (h *Hub) handleNotificationControl(ctx context.Context, source *hubConnection, message protocolv1.YuanshuMessage) error {
+func (h *Hub) handleNotificationControl(ctx context.Context, source *hubConnection, message routedControl) error {
 	switch protocolv1.ControlType(message.Type) {
 	case protocolv1.ControlNotificationsList:
 		limit := 50
@@ -209,7 +214,7 @@ func (h *Hub) handleNotificationControl(ctx context.Context, source *hubConnecti
 	}
 }
 
-func (h *Hub) checkLease(ctx context.Context, source *hubConnection, message protocolv1.YuanshuMessage) (serverstore.LeaseRecord, error) {
+func (h *Hub) checkLease(ctx context.Context, source *hubConnection, message routedControl) (serverstore.LeaseRecord, error) {
 	scope, err := messageLeaseScope(message)
 	if err != nil {
 		return serverstore.LeaseRecord{}, err
@@ -231,7 +236,7 @@ func (h *Hub) checkLease(ctx context.Context, source *hubConnection, message pro
 	return record, nil
 }
 
-func (h *Hub) sendServerResult(ctx context.Context, source *hubConnection, request protocolv1.YuanshuMessage, status protocolv1.ControlResultStatus, code protocolv1.ErrorCode, extra map[string]any) error {
+func (h *Hub) sendServerResult(ctx context.Context, source *hubConnection, request routedControl, status protocolv1.ControlResultStatus, code protocolv1.ErrorCode, extra map[string]any) error {
 	payload := map[string]any{"status": string(status), "source": "server"}
 	if code != "" {
 		payload["errorCode"] = string(code)
@@ -243,17 +248,25 @@ func (h *Hub) sendServerResult(ctx context.Context, source *hubConnection, reque
 	if err != nil {
 		return err
 	}
+	if request.ProtocolVersion == protocolv11.CurrentVersion {
+		result := protocolv11.YuanshuMessage{ProtocolVersion: protocolv11.The11, MessageID: messageID, Type: protocolv11.ControlResult, SentAt: h.clock().UTC().Format(time.RFC3339Nano), OwnerID: request.OwnerID, NodeID: request.NodeID, StreamID: serverControlStreamPrefix + source.subjectID, Sequence: request.Sequence, CorrelationID: request.MessageID, Payload: payload, AgentInstanceID: nil, WorkspaceID: request.WorkspaceID, TaskID: request.TaskID, RunID: request.RunID, ActivityID: request.ActivityID, InteractionID: request.InteractionID}
+		encoded, marshalErr := protocolv11.MarshalEvent(result)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		return source.relay.Send(ctx, transport.NewFrame(encoded))
+	}
 	result := protocolv1.YuanshuMessage{ProtocolVersion: protocolv1.CurrentVersion, MessageID: messageID, Type: string(protocolv1.EventControlResult), SentAt: h.clock().UTC().Format(time.RFC3339Nano), OwnerID: request.OwnerID, NodeID: request.NodeID, StreamID: serverControlStreamPrefix + source.subjectID, Sequence: request.Sequence, CorrelationID: request.MessageID, Payload: payload}
 	if request.WorkspaceID != nil {
 		value := *request.WorkspaceID
 		result.WorkspaceID = &value
 	}
-	if request.ThreadID != nil {
-		value := *request.ThreadID
+	if request.TaskID != nil {
+		value := *request.TaskID
 		result.ThreadID = &value
 	}
-	if request.TurnID != nil {
-		value := *request.TurnID
+	if request.RunID != nil {
+		value := *request.RunID
 		result.TurnID = &value
 	}
 	return source.relay.Send(ctx, transport.NewFrame(mustMarshal(result)))
@@ -277,6 +290,16 @@ func (h *Hub) broadcastLeaseChange(ctx context.Context, record serverstore.Lease
 	}
 	message := protocolv1.YuanshuMessage{ProtocolVersion: protocolv1.CurrentVersion, MessageID: messageID, Type: string(protocolv1.EventLeaseChanged), SentAt: h.clock().UTC().Format(time.RFC3339Nano), OwnerID: record.Scope.OwnerID, NodeID: record.Scope.NodeID, WorkspaceID: stringPtr(record.Scope.WorkspaceID), ThreadID: stringPtr(record.Scope.ThreadID), StreamID: streamID, Sequence: record.Epoch, CorrelationID: correlationID, Payload: payload}
 	h.broadcast(record.Scope.OwnerID, transport.NewFrame(mustMarshal(message)))
+	v11MessageID, err := h.randomValue(16)
+	if err != nil {
+		return err
+	}
+	v11Message := protocolv11.YuanshuMessage{ProtocolVersion: protocolv11.The11, MessageID: v11MessageID, Type: protocolv11.LeaseChanged, SentAt: h.clock().UTC().Format(time.RFC3339Nano), OwnerID: record.Scope.OwnerID, NodeID: record.Scope.NodeID, WorkspaceID: stringPtr(record.Scope.WorkspaceID), TaskID: stringPtr(record.Scope.ThreadID), StreamID: streamID + ".1", Sequence: record.Epoch, CorrelationID: correlationID, Payload: payload}
+	encoded, err := protocolv11.MarshalEvent(v11Message)
+	if err != nil {
+		return err
+	}
+	h.broadcast(record.Scope.OwnerID, transport.NewFrame(encoded))
 	return nil
 }
 
@@ -294,11 +317,11 @@ func leasePayload(record serverstore.LeaseRecord) map[string]any {
 	return map[string]any{"lease": payload}
 }
 
-func messageLeaseScope(message protocolv1.YuanshuMessage) (serverstore.LeaseScope, error) {
-	if message.WorkspaceID == nil || message.ThreadID == nil || *message.WorkspaceID == "" || *message.ThreadID == "" || message.OwnerID == "" || message.NodeID == "" {
+func messageLeaseScope(message routedControl) (serverstore.LeaseScope, error) {
+	if message.WorkspaceID == nil || message.TaskID == nil || *message.WorkspaceID == "" || *message.TaskID == "" || message.OwnerID == "" || message.NodeID == "" {
 		return serverstore.LeaseScope{}, serverstore.ErrInvalid
 	}
-	return serverstore.LeaseScope{OwnerID: message.OwnerID, NodeID: message.NodeID, WorkspaceID: *message.WorkspaceID, ThreadID: *message.ThreadID}, nil
+	return serverstore.LeaseScope{OwnerID: message.OwnerID, NodeID: message.NodeID, WorkspaceID: *message.WorkspaceID, ThreadID: *message.TaskID}, nil
 }
 
 func leaseAcquirePayload(payload map[string]interface{}) (bool, *int64, error) {
@@ -372,11 +395,17 @@ func (h *Hub) saveNotification(ctx context.Context, item serverstore.Notificatio
 
 func (h *Hub) observeNodeEvent(ctx context.Context, source *hubConnection, frame transport.Frame) {
 	h.touchNodeFrame(source)
-	event, err := protocolv1.ParseEvent(frame.Bytes())
+	event, err := parseRoutedEvent(frame.Bytes())
 	if err != nil {
 		return
 	}
 	h.observeNodeHealth(source, event)
+	// A current Node projects the same Adapter event into v1.0 and v1.1.
+	// Notifications remain based on the frozen v1.0 stream during migration so
+	// a single Agent transition cannot create two user-visible notifications.
+	if event.ProtocolVersion != protocolv1.CurrentVersion {
+		return
+	}
 	typeName := ""
 	summary := ""
 	switch protocolv1.EventType(event.Type) {
@@ -396,7 +425,7 @@ func (h *Hub) observeNodeEvent(ctx context.Context, source *hubConnection, frame
 	dedup := event.Type + ":" + event.NodeID + ":" + event.StreamID + ":" + fmt.Sprint(event.Sequence)
 	_ = h.saveNotification(ctx, serverstore.Notification{
 		ID: h.randomNotificationID(), OwnerID: source.ownerID, NodeID: source.subjectID,
-		WorkspaceID: value(event.WorkspaceID), ThreadID: value(event.ThreadID), TurnID: value(event.TurnID),
+		WorkspaceID: value(event.WorkspaceID), ThreadID: value(event.TaskID), TurnID: value(event.RunID),
 		Type: typeName, Summary: summary, SourceSequence: event.Sequence, DedupKey: dedup, CreatedAt: h.clock().UTC(),
 	})
 }
@@ -410,27 +439,27 @@ func (h *Hub) touchNodeFrame(source *hubConnection) {
 	h.mu.Unlock()
 }
 
-func (h *Hub) observeNodeHealth(source *hubConnection, event protocolv1.YuanshuMessage) {
+func (h *Hub) observeNodeHealth(source *hubConnection, event routedEvent) {
 	key := source.ownerID + "\x00" + source.subjectID
 	now := h.clock().UTC()
 	h.mu.Lock()
 	detail := h.nodeDetails[key]
 	detail.NodeID, detail.Online, detail.LastEventAt, detail.RelayStatus = source.subjectID, true, now, "online"
-	switch protocolv1.EventType(event.Type) {
-	case protocolv1.EventRuntimeStatus:
+	switch event.Type {
+	case string(protocolv1.EventRuntimeStatus):
 		if state, ok := event.Payload["state"].(string); ok {
 			detail.RuntimeStatus = state
 		} else if state, ok := event.Payload["status"].(string); ok {
 			detail.RuntimeStatus = state
 		}
-	case protocolv1.EventDeviceStatus:
+	case string(protocolv1.EventDeviceStatus):
 		if workspaces, ok := event.Payload["workspaces"].([]any); ok {
 			detail.WorkspaceCount = len(workspaces)
 		}
 		if recovery, ok := event.Payload["recovery"].(string); ok {
 			detail.RecoveryStatus = recovery
 		}
-	case protocolv1.EventHistoryGap:
+	case string(protocolv1.EventHistoryGap):
 		detail.RecoveryStatus = "history_gap"
 	}
 	h.nodeDetails[key] = detail

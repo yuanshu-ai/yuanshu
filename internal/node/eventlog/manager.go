@@ -17,11 +17,13 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 	"github.com/yuanshu-ai/yuanshu/internal/security/credential"
 )
 
 const (
 	DefaultStreamID    = "node-events-v1"
+	DefaultStreamIDV11 = "node-events-v1.1"
 	DefaultReplayLimit = 256
 	maxTextBytes       = 256 << 10
 	maxSnapshotItems   = 50
@@ -35,22 +37,24 @@ var (
 )
 
 type Options struct {
-	OwnerID  string
-	NodeID   string
-	StreamID string
-	MaxAge   time.Duration
-	MaxBytes int64
-	Clock    func() time.Time
-	Random   io.Reader
+	OwnerID         string
+	NodeID          string
+	StreamID        string
+	ProtocolVersion string
+	MaxAge          time.Duration
+	MaxBytes        int64
+	Clock           func() time.Time
+	Random          io.Reader
 }
 
 type Manager struct {
-	store     *store.Store
-	binding   store.EventBinding
-	retention store.EventRetention
-	clock     func() time.Time
-	random    io.Reader
-	mu        sync.Mutex
+	store           *store.Store
+	binding         store.EventBinding
+	retention       store.EventRetention
+	clock           func() time.Time
+	random          io.Reader
+	protocolVersion string
+	mu              sync.Mutex
 }
 
 type Record = store.EventRecord
@@ -79,7 +83,17 @@ func NewManager(local *store.Store, options Options) (*Manager, error) {
 		return nil, ErrInvalid
 	}
 	if options.StreamID == "" {
-		options.StreamID = DefaultStreamID
+		if options.ProtocolVersion == protocolv11.CurrentVersion {
+			options.StreamID = DefaultStreamIDV11
+		} else {
+			options.StreamID = DefaultStreamID
+		}
+	}
+	if options.ProtocolVersion == "" {
+		options.ProtocolVersion = protocol.CurrentVersion
+	}
+	if options.ProtocolVersion != protocol.CurrentVersion && options.ProtocolVersion != protocolv11.CurrentVersion {
+		return nil, ErrInvalid
 	}
 	if !validID(options.StreamID) {
 		return nil, ErrInvalid
@@ -92,7 +106,7 @@ func NewManager(local *store.Store, options Options) (*Manager, error) {
 	}
 	return &Manager{
 		store: local, binding: store.EventBinding{OwnerID: options.OwnerID, NodeID: options.NodeID, StreamID: options.StreamID},
-		retention: store.EventRetention{MaxAge: options.MaxAge, MaxBytes: options.MaxBytes}, clock: options.Clock, random: options.Random,
+		retention: store.EventRetention{MaxAge: options.MaxAge, MaxBytes: options.MaxBytes}, clock: options.Clock, random: options.Random, protocolVersion: options.ProtocolVersion,
 	}, nil
 }
 
@@ -115,7 +129,7 @@ func (m *Manager) Publish(ctx context.Context, event adapter.AgentEvent) ([]Reco
 		}
 		return nil, ctx.Err()
 	}
-	specs, err := normalizeEvent(event)
+	specs, err := m.normalize(event)
 	if err != nil {
 		return nil, err
 	}
@@ -128,17 +142,21 @@ func (m *Manager) Publish(ctx context.Context, event adapter.AgentEvent) ([]Reco
 			return nil, err
 		}
 		records = append(records, record)
-		_ = m.updateSnapshot(ctx, record, spec.payload)
-		_ = m.updateApproval(ctx, record, spec.payload)
+		if m.protocolVersion == protocol.CurrentVersion {
+			_ = m.updateSnapshot(ctx, record, spec.payload)
+			_ = m.updateApproval(ctx, record, spec.payload)
+		}
 	}
 	return records, nil
 }
 
 type eventSpec struct {
-	kind          protocol.EventType
-	target        store.EventTarget
-	correlationID string
-	payload       map[string]any
+	kind            string
+	agentInstanceID string
+	interactionID   string
+	target          store.EventTarget
+	correlationID   string
+	payload         map[string]any
 }
 
 func (m *Manager) append(ctx context.Context, spec eventSpec) (Record, error) {
@@ -156,13 +174,36 @@ func (m *Manager) appendWithControl(ctx context.Context, spec eventSpec, mutatio
 		if correlationID == "" {
 			correlationID = messageID
 		}
+		if m.protocolVersion == protocolv11.CurrentVersion {
+			message := protocolv11.YuanshuMessage{
+				ProtocolVersion: protocolv11.The11, MessageID: messageID, Type: protocolv11.Type(spec.kind), SentAt: createdAt.Format(time.RFC3339Nano),
+				OwnerID: m.binding.OwnerID, NodeID: m.binding.NodeID, AgentInstanceID: pointer(spec.agentInstanceID), StreamID: m.binding.StreamID,
+				Sequence: sequence, CorrelationID: correlationID, WorkspaceID: pointer(spec.target.WorkspaceID), TaskID: pointer(spec.target.ThreadID),
+				RunID: pointer(spec.target.TurnID), ActivityID: pointer(spec.target.ItemID), Payload: clonePayload(spec.payload),
+			}
+			if spec.kind == string(protocolv11.EventInteractionRequested) || spec.kind == string(protocolv11.EventInteractionResolved) {
+				message.InteractionID = pointer(spec.interactionID)
+			}
+			if spec.kind == string(protocolv11.EventInteractionRequested) {
+				digest, digestErr := protocolv11.InteractionOperationDigest(message)
+				if digestErr != nil {
+					return "", nil, digestErr
+				}
+				message.Payload["operationDigest"], spec.payload["operationDigest"] = digest, digest
+			}
+			if spec.kind == string(protocolv11.EventTaskSnapshot) {
+				message.Payload["latestSequence"], spec.payload["latestSequence"] = sequence, sequence
+			}
+			raw, marshalErr := protocolv11.MarshalEvent(message)
+			return messageID, raw, marshalErr
+		}
 		message := protocol.YuanshuMessage{
 			ProtocolVersion: protocol.CurrentVersion, MessageID: messageID, Type: string(spec.kind), SentAt: createdAt.Format(time.RFC3339Nano),
 			OwnerID: m.binding.OwnerID, NodeID: m.binding.NodeID, StreamID: m.binding.StreamID, Sequence: sequence, CorrelationID: correlationID,
 			WorkspaceID: pointer(spec.target.WorkspaceID), ThreadID: pointer(spec.target.ThreadID), TurnID: pointer(spec.target.TurnID), ItemID: pointer(spec.target.ItemID),
 			Payload: clonePayload(spec.payload),
 		}
-		if spec.kind == protocol.EventApprovalRequested {
+		if spec.kind == string(protocol.EventApprovalRequested) {
 			digest, err := protocol.ApprovalOperationDigest(message)
 			if err != nil {
 				return "", nil, err
@@ -170,7 +211,7 @@ func (m *Manager) appendWithControl(ctx context.Context, spec eventSpec, mutatio
 			message.Payload["operationDigest"] = digest
 			spec.payload["operationDigest"] = digest
 		}
-		if spec.kind == protocol.EventThreadSnapshot {
+		if spec.kind == string(protocol.EventThreadSnapshot) {
 			message.Payload["latestSequence"] = sequence
 			spec.payload["latestSequence"] = sequence
 		}
@@ -178,9 +219,9 @@ func (m *Manager) appendWithControl(ctx context.Context, spec eventSpec, mutatio
 		return messageID, raw, err
 	}
 	if mutation != nil {
-		return m.store.AppendControlEvent(ctx, m.binding, spec.target, string(spec.kind), createdAt, m.retention, *mutation, build)
+		return m.store.AppendControlEvent(ctx, m.binding, spec.target, spec.kind, createdAt, m.retention, *mutation, build)
 	}
-	return m.store.AppendEvent(ctx, m.binding, spec.target, string(spec.kind), createdAt, m.retention, build)
+	return m.store.AppendEvent(ctx, m.binding, spec.target, spec.kind, createdAt, m.retention, build)
 }
 
 func (m *Manager) Replay(ctx context.Context, afterSequence int64, limit int) (ReplayBatch, error) {
@@ -317,10 +358,12 @@ func (m *Manager) snapshotHasTerminal(ctx context.Context, threadID, turnID, eve
 }
 
 func (m *Manager) updateApproval(ctx context.Context, record Record, payload map[string]any) error {
-	if record.Type != string(protocol.EventApprovalRequested) && record.Type != string(protocol.EventApprovalResolved) {
+	requested := record.Type == string(protocol.EventApprovalRequested) || record.Type == string(protocolv11.EventInteractionRequested)
+	resolved := record.Type == string(protocol.EventApprovalResolved) || record.Type == string(protocolv11.EventInteractionResolved)
+	if !requested && !resolved {
 		return nil
 	}
-	approvalID, _ := payload["approvalId"].(string)
+	approvalID := firstString(payload, "approvalId", firstString(payload, "id", ""))
 	if !validID(approvalID) {
 		return ErrInvalid
 	}
@@ -328,7 +371,7 @@ func (m *Manager) updateApproval(ctx context.Context, record Record, payload map
 	if err != nil {
 		return err
 	}
-	if record.Type == string(protocol.EventApprovalRequested) {
+	if requested {
 		expiresAt, _ := time.Parse(time.RFC3339Nano, firstString(payload, "expiresAt", ""))
 		return m.store.SaveApproval(ctx, store.ApprovalRecord{
 			ApprovalID: approvalID, WorkspaceID: record.WorkspaceID, ThreadID: record.ThreadID, TurnID: record.TurnID, ItemID: record.ItemID,

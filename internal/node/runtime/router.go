@@ -87,6 +87,17 @@ func (r *Router) Health() adapter.HealthStatus {
 	return r.sources[r.defaultInstanceID].Runtime.Health()
 }
 
+func (r *Router) AgentHealth(instanceID string) (adapter.HealthStatus, bool) {
+	if r == nil {
+		return adapter.HealthStatus{}, false
+	}
+	source, ok := r.sources[instanceID]
+	if !ok {
+		return adapter.HealthStatus{}, false
+	}
+	return source.Runtime.Health(), true
+}
+
 func (r *Router) Close(ctx context.Context) error {
 	if r == nil {
 		return nil
@@ -314,6 +325,9 @@ func (r *Router) resolveTask(ctx context.Context, workspaceID, taskID, hintedIns
 		}
 	}
 	if binding.WorkspaceID != workspaceID {
+		return binding, Source{}, adapter.ErrForbidden
+	}
+	if hintedInstanceID != "" && binding.InstanceID != hintedInstanceID {
 		return binding, Source{}, adapter.ErrForbidden
 	}
 	source, exists := r.sources[binding.InstanceID]

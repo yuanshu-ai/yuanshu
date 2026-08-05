@@ -14,6 +14,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/node/eventlog"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
 
@@ -70,6 +71,53 @@ func TestControlSessionThreadStartUsesAdapterBoundary(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Run() = %v", err)
+	}
+}
+
+func TestControlSessionProtocol11UsesOpaqueTaskSurfaceAndIndependentStream(t *testing.T) {
+	serverSide, session, runtime, private, local := newControlSessionHarness(t)
+	managerV11, err := eventlog.NewManager(local, eventlog.Options{OwnerID: "owner", NodeID: "node", ProtocolVersion: protocolv11.CurrentVersion, MaxAge: time.Hour, MaxBytes: 16 << 20, Clock: func() time.Time { return controlSessionNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validatorV11, err := protocolv11.NewValidator(protocolv11.Options{TrustStore: local, ReplayStore: local, Now: func() time.Time { return controlSessionNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.validatorV11, session.eventsV11 = validatorV11, managerV11
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- session.Run(ctx) }()
+
+	if err := serverSide.Send(ctx, transport.NewFrame(signedSessionControlV11(t, private, protocolv11.ControlTaskStart, 1, map[string]any{"input": "synthetic input"}, "codex-default", "workspace", "", "", ""))); err != nil {
+		t.Fatal(err)
+	}
+	want := []protocolv11.EventType{protocolv11.EventTaskStarted, protocolv11.EventRunStarted, protocolv11.EventControlResult}
+	for _, expected := range want {
+		for {
+			ctxReceive, stop := context.WithTimeout(context.Background(), 2*time.Second)
+			frame, receiveErr := serverSide.Receive(ctxReceive)
+			stop()
+			if receiveErr != nil {
+				t.Fatal(receiveErr)
+			}
+			message, parseErr := protocolv11.ParseEvent(frame.Bytes())
+			if parseErr != nil {
+				continue
+			}
+			if protocolv11.EventType(message.Type) != expected || message.StreamID != eventlog.DefaultStreamIDV11 {
+				t.Fatalf("event = %q stream=%q, want %q", message.Type, message.StreamID, expected)
+			}
+			break
+		}
+	}
+	if runtime.calls != 2 || runtime.lastInput != "synthetic input" {
+		t.Fatalf("runtime calls/input = %d/%q", runtime.calls, runtime.lastInput)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -239,6 +287,36 @@ func signedSessionControl(t *testing.T, private ed25519.PrivateKey, kind protoco
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func signedSessionControlV11(t *testing.T, private ed25519.PrivateKey, kind protocolv11.ControlType, sequence int64, payload map[string]any, agentID, workspaceID, taskID, runID, interactionID string) []byte {
+	t.Helper()
+	expires := controlSessionNow.Add(time.Minute).Format(time.RFC3339Nano)
+	nonce := base64.RawURLEncoding.EncodeToString([]byte("fedcba9876543210"))
+	message := protocolv11.YuanshuMessage{
+		ProtocolVersion: protocolv11.The11, MessageID: "message-v11", Type: protocolv11.Type(kind), SentAt: controlSessionNow.Format(time.RFC3339Nano),
+		OwnerID: "owner", NodeID: "node", AgentInstanceID: optionalString(agentID), WorkspaceID: optionalString(workspaceID), TaskID: optionalString(taskID), RunID: optionalString(runID), InteractionID: optionalString(interactionID),
+		StreamID: "control-stream", Sequence: sequence, CorrelationID: "correlation-v11", Payload: payload,
+		ExpiresAt: &expires, Nonce: &nonce, Signer: &protocolv11.Signer{ClientID: "client", KeyID: "key"},
+	}
+	input, err := protocolv11.ControlSigningInput(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, input))
+	message.Signature = &signature
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func receiveSessionEvent(t *testing.T, endpoint transport.Transport) protocol.YuanshuMessage {

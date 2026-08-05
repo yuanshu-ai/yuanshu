@@ -7,6 +7,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/adapter"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 )
 
 // BeginControl records an already verified control without persisting its task
@@ -22,6 +23,22 @@ func (m *Manager) BeginControl(ctx context.Context, control protocol.ValidatedCo
 	record := store.ControlRecord{
 		MessageID: message.MessageID, RequestDigest: digest[:], Type: message.Type, State: store.ControlValidated,
 		EventTarget: store.EventTarget{WorkspaceID: dereference(message.WorkspaceID), ThreadID: dereference(message.ThreadID), TurnID: dereference(message.TurnID), ItemID: dereference(message.ItemID)},
+	}
+	created, err := m.store.CreateControl(ctx, record)
+	return created, classifyStore(err)
+}
+
+func (m *Manager) BeginControlV11(ctx context.Context, control protocolv11.ValidatedControl) (store.ControlRecord, error) {
+	message := control.Message()
+	input, err := protocolv11.ControlSigningInput(message)
+	if err != nil || message.Signature == nil {
+		return store.ControlRecord{}, ErrInvalid
+	}
+	digestInput := append(append([]byte(nil), input...), []byte(*message.Signature)...)
+	digest := sha256.Sum256(digestInput)
+	record := store.ControlRecord{
+		MessageID: message.MessageID, RequestDigest: digest[:], Type: string(message.Type), State: store.ControlValidated,
+		EventTarget: store.EventTarget{WorkspaceID: dereference(message.WorkspaceID), ThreadID: dereference(message.TaskID), TurnID: dereference(message.RunID), ItemID: dereference(message.InteractionID)},
 	}
 	created, err := m.store.CreateControl(ctx, record)
 	return created, classifyStore(err)
@@ -73,7 +90,7 @@ func (m *Manager) CompleteControlWithPayload(ctx context.Context, messageID stri
 		}
 		payload[key] = value
 	}
-	specs, err := normalizeEvent(adapterEventForControl(control, messageID, payload))
+	specs, err := m.normalize(adapterEventForControl(control, messageID, payload))
 	if err != nil || len(specs) != 1 {
 		return Record{}, ErrInvalid
 	}
@@ -83,7 +100,9 @@ func (m *Manager) CompleteControlWithPayload(ctx context.Context, messageID stri
 	if err != nil {
 		return Record{}, classifyStore(err)
 	}
-	_ = m.updateSnapshot(ctx, result, specs[0].payload)
+	if m.protocolVersion == protocol.CurrentVersion {
+		_ = m.updateSnapshot(ctx, result, specs[0].payload)
+	}
 	return result, nil
 }
 

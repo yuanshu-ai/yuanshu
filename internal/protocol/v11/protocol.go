@@ -3,6 +3,7 @@ package v11
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ const (
 	DefaultControlMaxTTL    = protocolv1.DefaultControlMaxTTL
 	DefaultControlClockSkew = protocolv1.DefaultControlClockSkew
 	ControlSigningDomain    = "yuanshu-control-v1.1\x00"
+	InteractionDigestDomain = "yuanshu-interaction-v1.1\x00"
 	protocolSchemaID        = "https://yuanshu.ai/schemas/protocol/v1.1/yuanshu-protocol.schema.json"
 )
 
@@ -215,6 +217,32 @@ func ControlSigningInput(message YuanshuMessage) ([]byte, error) {
 	return append([]byte(ControlSigningDomain), canonical...), nil
 }
 
+func InteractionOperationDigest(message YuanshuMessage) (string, error) {
+	if string(message.ProtocolVersion) != CurrentVersion || string(message.Type) != string(EventInteractionRequested) || message.AgentInstanceID == nil || message.WorkspaceID == nil || message.TaskID == nil || message.RunID == nil || message.InteractionID == nil {
+		return "", ErrInvalidEvent
+	}
+	payload := cloneMap(message.Payload)
+	delete(payload, "operationDigest")
+	binding := map[string]any{
+		"protocolVersion": CurrentVersion, "type": string(message.Type), "ownerId": message.OwnerID, "nodeId": message.NodeID,
+		"agentInstanceId": *message.AgentInstanceID, "workspaceId": *message.WorkspaceID, "taskId": *message.TaskID,
+		"runId": *message.RunID, "interactionId": *message.InteractionID, "payload": payload,
+	}
+	if message.ActivityID != nil {
+		binding["activityId"] = *message.ActivityID
+	}
+	encoded, err := json.Marshal(binding)
+	if err != nil {
+		return "", ErrInvalidEvent
+	}
+	canonical, err := jcs.Transform(encoded)
+	if err != nil {
+		return "", ErrInvalidEvent
+	}
+	digest := sha256.Sum256(append([]byte(InteractionDigestDomain), canonical...))
+	return base64.RawURLEncoding.EncodeToString(digest[:]), nil
+}
+
 func IsKnownControl(value string) bool {
 	for _, item := range KnownControlTypes {
 		if string(item) == value {
@@ -249,6 +277,13 @@ func decodeCanonicalBase64URL(value string, size int) ([]byte, error) {
 func cloneMessage(message YuanshuMessage) YuanshuMessage {
 	raw, _ := json.Marshal(message)
 	var clone YuanshuMessage
+	_ = json.Unmarshal(raw, &clone)
+	return clone
+}
+
+func cloneMap(value map[string]any) map[string]any {
+	raw, _ := json.Marshal(value)
+	var clone map[string]any
 	_ = json.Unmarshal(raw, &clone)
 	return clone
 }

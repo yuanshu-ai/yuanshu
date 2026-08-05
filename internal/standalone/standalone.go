@@ -26,6 +26,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 	"github.com/yuanshu-ai/yuanshu/internal/server"
 	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
@@ -381,9 +382,21 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("node event log is unavailable"))
 	}
+	eventsV11, err := eventlog.NewManager(local, eventlog.Options{
+		OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID, ProtocolVersion: protocolv11.CurrentVersion,
+		MaxAge: time.Duration(loaded.Config.Events.MaxAgeHours) * time.Hour, MaxBytes: int64(loaded.Config.Events.MaxSizeMiB) << 20,
+		Clock: options.Clock,
+	})
+	if err != nil {
+		return errors.Join(ErrUnavailable, errors.New("node Protocol 1.1 event log is unavailable"))
+	}
 	validator, err := protocol.NewValidator(protocol.Options{TrustStore: local, ReplayStore: local, Now: options.Clock})
 	if err != nil {
 		return errors.Join(ErrUnavailable, errors.New("control validator is unavailable"))
+	}
+	validatorV11, err := protocolv11.NewValidator(protocolv11.Options{TrustStore: local, ReplayStore: local, Now: options.Clock})
+	if err != nil {
+		return errors.Join(ErrUnavailable, errors.New("Protocol 1.1 control validator is unavailable"))
 	}
 	serverSide, nodeSide, err := transport.NewStandalonePair(transport.StandaloneOptions{})
 	if err != nil {
@@ -392,8 +405,8 @@ func Run(ctx context.Context, options Options) error {
 	defer serverSide.Close()
 	defer nodeSide.Close()
 	session, err := node.NewControlSession(node.ControlSessionOptions{
-		Transport: nodeSide, Validator: validator, Target: protocol.Target{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID},
-		Events: events, Store: local, Runtime: runtime, DeviceName: loaded.Config.Host.Name,
+		Transport: nodeSide, Validator: validator, ValidatorV11: validatorV11, Target: protocol.Target{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID},
+		Events: events, EventsV11: eventsV11, Store: local, Runtime: runtime, DeviceName: loaded.Config.Host.Name,
 	})
 	if err != nil {
 		return errors.Join(ErrUnavailable, err)

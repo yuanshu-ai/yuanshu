@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/node/eventlog"
 	"github.com/yuanshu-ai/yuanshu/internal/node/store"
 	protocol "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
 
@@ -22,14 +24,26 @@ type controlWorkspaceStore interface {
 	MarkApprovalAmbiguous(context.Context, string) error
 }
 
+type controlAgentStore interface {
+	AgentInstallations(context.Context) ([]store.AgentInstallationRecord, error)
+	AgentInstances(context.Context) ([]store.AgentInstanceRecord, error)
+	WorkspaceAgents(context.Context, string) ([]store.WorkspaceAgentRecord, error)
+}
+
+type agentHealthSource interface {
+	AgentHealth(string) (adapter.HealthStatus, bool)
+}
+
 // ControlSessionOptions binds one authenticated transport to the Node's
 // protocol validator, durable event log, workspace policy, and Agent runtime.
 // The same component is used by Relay and Standalone compositions.
 type ControlSessionOptions struct {
 	Transport    transport.Transport
 	Validator    *protocol.Validator
+	ValidatorV11 *protocolv11.Validator
 	Target       protocol.Target
 	Events       *eventlog.Manager
+	EventsV11    *eventlog.Manager
 	Store        controlWorkspaceStore
 	Runtime      adapter.Runtime
 	DeviceName   string
@@ -47,8 +61,10 @@ type ControlSessionOptions struct {
 // ControlSession is the formal Node-side Protocol v1 control boundary.
 type ControlSession struct {
 	validator    *protocol.Validator
+	validatorV11 *protocolv11.Validator
 	target       protocol.Target
 	events       *eventlog.Manager
+	eventsV11    *eventlog.Manager
 	store        controlWorkspaceStore
 	runtime      adapter.Runtime
 	deviceName   string
@@ -98,7 +114,8 @@ func NewControlSession(options ControlSessionOptions) (*ControlSession, error) {
 	}
 	return &ControlSession{
 		validator: options.Validator, target: options.Target,
-		events: options.Events, store: options.Store, runtime: options.Runtime, deviceName: options.DeviceName, refreshTrust: options.RefreshTrust,
+		validatorV11: options.ValidatorV11, events: options.Events, eventsV11: options.EventsV11,
+		store: options.Store, runtime: options.Runtime, deviceName: options.DeviceName, refreshTrust: options.RefreshTrust,
 		active: func() *sessionTransport {
 			if options.Transport == nil {
 				return nil
@@ -265,6 +282,12 @@ func (s *ControlSession) runEventPump(ctx context.Context) {
 }
 
 func (s *ControlSession) handle(ctx context.Context, raw []byte) error {
+	var header struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if json.Unmarshal(raw, &header) == nil && header.ProtocolVersion == protocolv11.CurrentVersion {
+		return s.handleV11(ctx, raw)
+	}
 	validated, err := s.validator.Validate(ctx, raw, s.target)
 	_, refreshTrust, _ := s.settings()
 	var validation *protocol.ValidationError
@@ -301,6 +324,57 @@ func (s *ControlSession) handle(ctx context.Context, raw []byte) error {
 	result, err := s.events.CompleteControlWithPayload(ctx, message.MessageID, status, code, "", extra)
 	if err != nil {
 		return errors.New("node control result persistence failed")
+	}
+	if err := s.send(ctx, result.Frame); err != nil {
+		return err
+	}
+	if reload && s.configReload != nil {
+		go s.configReload()
+	}
+	return nil
+}
+
+func (s *ControlSession) handleV11(ctx context.Context, raw []byte) error {
+	if s.validatorV11 == nil || s.eventsV11 == nil {
+		return adapter.ErrUnsupported
+	}
+	target := protocolv11.Target{OwnerID: s.target.OwnerID, NodeID: s.target.NodeID}
+	validated, err := s.validatorV11.Validate(ctx, raw, target)
+	if err != nil {
+		_, refreshTrust, _ := s.settings()
+		if refreshTrust != nil && refreshTrust(ctx) == nil {
+			validated, err = s.validatorV11.Validate(ctx, raw, target)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	message := validated.Message()
+	if _, err := s.eventsV11.BeginControlV11(ctx, validated); err != nil {
+		return errors.New("node Protocol 1.1 control persistence failed")
+	}
+	if _, err := s.eventsV11.MarkDispatching(ctx, message.MessageID); err != nil {
+		return errors.New("node Protocol 1.1 control persistence failed")
+	}
+	if protocolv11.ControlType(message.Type) == protocolv11.ControlEventsReplay {
+		return s.handleReplayV11(ctx, message)
+	}
+	status, code := protocol.ControlResultConfirmed, protocol.ErrorCode("")
+	var dispatchErr error
+	var extra map[string]any
+	var reload bool
+	if protocolv11.ControlType(message.Type) == protocolv11.ControlConfigRead || protocolv11.ControlType(message.Type) == protocolv11.ControlConfigUpdate {
+		legacy := legacyControlFromV11(message)
+		extra, reload, dispatchErr = s.dispatchConfig(ctx, legacy)
+	} else {
+		dispatchErr = s.dispatchV11(ctx, message)
+	}
+	if dispatchErr != nil {
+		status, code = classifyControlFailure(dispatchErr)
+	}
+	result, err := s.eventsV11.CompleteControlWithPayload(ctx, message.MessageID, status, code, "", extra)
+	if err != nil {
+		return errors.New("node Protocol 1.1 control result persistence failed")
 	}
 	if err := s.send(ctx, result.Frame); err != nil {
 		return err
@@ -364,6 +438,36 @@ func (s *ControlSession) handleReplay(ctx context.Context, message protocol.Yuan
 		return sendErr
 	}
 	return nil
+}
+
+func (s *ControlSession) handleReplayV11(ctx context.Context, message protocolv11.YuanshuMessage) error {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	batch, replayErr := s.eventsV11.Replay(ctx, int64Payload(message.Payload, "afterSequence"), eventlog.DefaultReplayLimit)
+	status, code := protocol.ControlResultConfirmed, protocol.ErrorCode("")
+	if replayErr == nil && batch.Gap {
+		workspaceID, taskID := value(message.WorkspaceID), value(message.TaskID)
+		if workspaceID == "" || taskID == "" {
+			replayErr = eventlog.ErrHistoryGap
+		} else {
+			batch, replayErr = s.eventsV11.Recover(ctx, s.runtime, eventlog.SnapshotTarget{WorkspaceID: workspaceID, ThreadID: taskID}, int64Payload(message.Payload, "afterSequence"), eventlog.DefaultReplayLimit)
+		}
+	}
+	if replayErr != nil {
+		status, code = classifyControlFailure(replayErr)
+	} else {
+		for _, record := range batch.Records {
+			if err := s.sendFrameLocked(ctx, record.Frame); err != nil && !errors.Is(err, errNoTransport) {
+				status, code = protocol.ControlResultRejected, protocol.ErrorRuntimeUnavailable
+				break
+			}
+		}
+	}
+	result, err := s.eventsV11.CompleteControl(ctx, message.MessageID, status, code, "")
+	if err != nil {
+		return errors.New("node Protocol 1.1 replay result persistence failed")
+	}
+	return s.sendFrameLocked(ctx, result.Frame)
 }
 
 func (s *ControlSession) dispatch(ctx context.Context, message protocol.YuanshuMessage) error {
@@ -501,6 +605,168 @@ func (s *ControlSession) dispatch(ctx context.Context, message protocol.YuanshuM
 	}
 }
 
+func (s *ControlSession) dispatchV11(ctx context.Context, message protocolv11.YuanshuMessage) error {
+	agentInstanceID, workspaceID, taskID, runID, interactionID := value(message.AgentInstanceID), value(message.WorkspaceID), value(message.TaskID), value(message.RunID), value(message.InteractionID)
+	switch protocolv11.ControlType(message.Type) {
+	case protocolv11.ControlAgentList, protocolv11.ControlAgentRead:
+		return s.publishAgentSnapshotV11(ctx, message.MessageID, agentInstanceID)
+	case protocolv11.ControlTaskList:
+		page, err := s.runtime.ListThreads(ctx, adapter.ListThreadsRequest{WorkspaceID: workspaceID, AgentInstanceID: agentInstanceID, Cursor: stringPayload(message.Payload, "cursor"), Limit: intPayload(message.Payload, "limit")})
+		if err != nil {
+			return err
+		}
+		tasks := make([]any, 0, len(page.Data))
+		for _, task := range page.Data {
+			tasks = append(tasks, taskPayloadV11(task, agentInstanceID))
+		}
+		return s.publishV11Only(ctx, adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventTaskSnapshot), AgentInstanceID: agentInstanceID, CorrelationID: message.MessageID, WorkspaceID: workspaceID, Payload: map[string]any{"tasks": tasks, "nextCursor": page.NextCursor}})
+	case protocolv11.ControlTaskRead:
+		snapshot, err := s.runtime.ReadThread(ctx, adapter.ReadThreadRequest{WorkspaceID: workspaceID, AgentInstanceID: agentInstanceID, ThreadID: taskID, IncludeTurns: boolPayload(message.Payload, "includeRuns"), IncludeDiffs: boolPayload(message.Payload, "includeDiffs"), DiffPath: stringPayload(message.Payload, "diffPath"), MaxDiffBytes: intPayload(message.Payload, "maxDiffBytes")})
+		if err != nil {
+			return err
+		}
+		return s.publishSnapshot(ctx, message.MessageID, snapshot)
+	case protocolv11.ControlTaskStart:
+		task, err := s.runtime.StartThread(ctx, adapter.StartThreadRequest{WorkspaceID: workspaceID, AgentInstanceID: agentInstanceID})
+		if err != nil {
+			return err
+		}
+		if err := s.publish(ctx, adapter.AgentEvent{Type: protocol.EventThreadStarted, AgentInstanceID: agentInstanceID, CorrelationID: message.MessageID, WorkspaceID: workspaceID, ThreadID: task.ID, Payload: map[string]any{"status": task.Status}}); err != nil {
+			return err
+		}
+		run, err := s.runtime.StartTurn(ctx, adapter.StartTurnRequest{WorkspaceID: workspaceID, ThreadID: task.ID, Input: stringPayload(message.Payload, "input")})
+		if err != nil {
+			return err
+		}
+		return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventTurnStarted, AgentInstanceID: agentInstanceID, CorrelationID: message.MessageID, WorkspaceID: workspaceID, ThreadID: task.ID, TurnID: run.ID, Payload: map[string]any{"status": run.Status}})
+	case protocolv11.ControlTaskResume:
+		task, err := s.runtime.ResumeThread(ctx, adapter.ResumeThreadRequest{WorkspaceID: workspaceID, AgentInstanceID: agentInstanceID, ThreadID: taskID})
+		if err != nil {
+			return err
+		}
+		return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventThreadStarted, AgentInstanceID: agentInstanceID, CorrelationID: message.MessageID, WorkspaceID: workspaceID, ThreadID: task.ID, Payload: map[string]any{"status": "resumed"}})
+	case protocolv11.ControlRunStart:
+		run, err := s.runtime.StartTurn(ctx, adapter.StartTurnRequest{WorkspaceID: workspaceID, ThreadID: taskID, Input: stringPayload(message.Payload, "input")})
+		if err != nil {
+			return err
+		}
+		return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventTurnStarted, AgentInstanceID: agentInstanceID, CorrelationID: message.MessageID, WorkspaceID: workspaceID, ThreadID: taskID, TurnID: run.ID, Payload: map[string]any{"status": run.Status}})
+	case protocolv11.ControlRunSteer:
+		return s.runtime.SteerTurn(ctx, adapter.SteerTurnRequest{WorkspaceID: workspaceID, ThreadID: taskID, TurnID: runID, Input: stringPayload(message.Payload, "input")})
+	case protocolv11.ControlRunInterrupt:
+		return s.runtime.InterruptTurn(ctx, adapter.InterruptTurnRequest{WorkspaceID: workspaceID, ThreadID: taskID, TurnID: runID})
+	case protocolv11.ControlInteractionResolve:
+		decision := stringPayload(message.Payload, "decision")
+		if decision == "" {
+			return adapter.ErrUnsupported
+		}
+		approval, err := s.store.Approval(ctx, interactionID)
+		if err != nil || approval.WorkspaceID != workspaceID || approval.ThreadID != taskID || approval.TurnID != runID {
+			if err != nil {
+				return err
+			}
+			return adapter.ErrForbidden
+		}
+		claimed, err := s.store.ClaimApproval(ctx, store.ApprovalClaim{ApprovalID: interactionID, WorkspaceID: workspaceID, ThreadID: taskID, TurnID: runID, ItemID: approval.ItemID, OperationDigest: stringPayload(message.Payload, "operationDigest"), Decision: decision, Now: s.now().UTC()})
+		if err != nil {
+			return err
+		}
+		err = s.runtime.ResolveApproval(ctx, adapter.ApprovalDecision{WorkspaceID: workspaceID, ThreadID: taskID, TurnID: runID, ItemID: approval.ItemID, ApprovalID: interactionID, Decision: decision})
+		if err != nil {
+			_ = s.store.MarkApprovalAmbiguous(ctx, claimed.ApprovalID)
+		}
+		return err
+	case protocolv11.ControlDeviceSync, protocolv11.ControlWorkspaceList:
+		return s.dispatch(ctx, legacyControlFromV11(message))
+	case protocolv11.ControlSnapshotRequest:
+		record, err := s.eventsV11.Snapshot(ctx, s.runtime, eventlog.SnapshotTarget{WorkspaceID: workspaceID, ThreadID: taskID})
+		if err != nil {
+			return err
+		}
+		return s.send(ctx, record.Frame)
+	default:
+		return adapter.ErrUnsupported
+	}
+}
+
+func (s *ControlSession) publishAgentSnapshotV11(ctx context.Context, correlationID, requestedID string) error {
+	resources, ok := s.store.(controlAgentStore)
+	if !ok {
+		return adapter.ErrUnsupported
+	}
+	instances, err := resources.AgentInstances(ctx)
+	if err != nil {
+		return adapter.ErrUnavailable
+	}
+	installations, _ := resources.AgentInstallations(ctx)
+	installationByType := make(map[string]store.AgentInstallationRecord, len(installations))
+	for _, item := range installations {
+		installationByType[item.AdapterType] = item
+	}
+	healthByAgent, _ := s.runtime.(agentHealthSource)
+	agents := make([]any, 0, len(instances))
+	for _, instance := range instances {
+		if requestedID != "" && instance.InstanceID != requestedID {
+			continue
+		}
+		installation := installationByType[instance.AdapterType]
+		status := installation.InstallationState
+		if status == "" {
+			status = "unknown"
+		}
+		controllable := false
+		if healthByAgent != nil {
+			if health, exists := healthByAgent.AgentHealth(instance.InstanceID); exists {
+				status, controllable = health.State, health.State == "ready"
+			}
+		}
+		capabilities := []any{
+			capabilityPayload("task.read", instance.RuntimeMode == store.AgentRuntimeManaged, "runtime_not_managed"),
+			capabilityPayload("task.start", controllable, "runtime_not_ready"),
+			capabilityPayload("run.control", controllable, "runtime_not_ready"),
+		}
+		agents = append(agents, map[string]any{
+			"id": instance.InstanceID, "adapterType": instance.AdapterType, "displayName": instance.DisplayName,
+			"version": installation.Version, "runtimeMode": instance.RuntimeMode, "status": status,
+			"authenticationAvailable": controllable, "capabilities": capabilities,
+		})
+	}
+	if requestedID != "" && len(agents) == 0 {
+		return adapter.ErrNotFound
+	}
+	return s.publishV11Only(ctx, adapter.AgentEvent{Type: protocol.EventType(protocolv11.EventAgentSnapshot), CorrelationID: correlationID, AgentInstanceID: requestedID, Payload: map[string]any{"agents": agents}})
+}
+
+func capabilityPayload(id string, available bool, reason string) map[string]any {
+	level := "unavailable"
+	if available {
+		level, reason = "full", ""
+	}
+	result := map[string]any{"id": id, "level": level}
+	if reason != "" {
+		result["reason"] = reason
+	}
+	return result
+}
+
+func taskPayloadV11(task adapter.Thread, fallbackAgentID string) map[string]any {
+	agentID := task.AgentInstanceID
+	if agentID == "" {
+		agentID = fallbackAgentID
+	}
+	payload := threadPayload(task)
+	payload["agentInstanceId"], payload["workspaceId"] = agentID, task.WorkspaceID
+	return payload
+}
+
+func legacyControlFromV11(message protocolv11.YuanshuMessage) protocol.YuanshuMessage {
+	legacyType := map[protocolv11.ControlType]protocol.ControlType{
+		protocolv11.ControlDeviceSync: protocol.ControlDeviceSync, protocolv11.ControlWorkspaceList: protocol.ControlWorkspaceList,
+		protocolv11.ControlConfigRead: protocol.ControlConfigRead, protocolv11.ControlConfigUpdate: protocol.ControlConfigUpdate,
+	}[protocolv11.ControlType(message.Type)]
+	return protocol.YuanshuMessage{ProtocolVersion: protocol.CurrentVersion, MessageID: message.MessageID, Type: string(legacyType), OwnerID: message.OwnerID, NodeID: message.NodeID, WorkspaceID: message.WorkspaceID, ThreadID: message.TaskID, TurnID: message.RunID, ItemID: message.InteractionID, CorrelationID: message.CorrelationID, Payload: message.Payload}
+}
+
 func (s *ControlSession) publishSnapshot(ctx context.Context, correlationID string, snapshot adapter.ThreadSnapshot) error {
 	turns := make([]any, 0, len(snapshot.Turns))
 	for _, turn := range snapshot.Turns {
@@ -513,7 +779,7 @@ func (s *ControlSession) publishSnapshot(ctx context.Context, correlationID stri
 	payload := threadPayload(snapshot.Thread)
 	payload["historyState"] = snapshot.Thread.HistoryState
 	payload["turns"] = turns
-	return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventThreadSnapshot, CorrelationID: correlationID, WorkspaceID: snapshot.Thread.WorkspaceID, ThreadID: snapshot.Thread.ID, Payload: payload})
+	return s.publish(ctx, adapter.AgentEvent{Type: protocol.EventThreadSnapshot, AgentInstanceID: snapshot.Thread.AgentInstanceID, CorrelationID: correlationID, WorkspaceID: snapshot.Thread.WorkspaceID, ThreadID: snapshot.Thread.ID, Payload: payload})
 }
 
 func threadPayload(thread adapter.Thread) map[string]any {
@@ -587,6 +853,30 @@ func (s *ControlSession) publish(ctx context.Context, event adapter.AgentEvent) 
 	records, err := s.events.Publish(ctx, event)
 	if err != nil {
 		return errors.New("node event persistence failed")
+	}
+	var recordsV11 []eventlog.Record
+	if s.eventsV11 != nil {
+		recordsV11, err = s.eventsV11.Publish(ctx, event)
+		if err != nil {
+			return errors.New("node Protocol 1.1 event persistence failed")
+		}
+	}
+	for _, record := range records {
+		_ = s.sendFrame(ctx, record.Frame)
+	}
+	for _, record := range recordsV11 {
+		_ = s.sendFrame(ctx, record.Frame)
+	}
+	return nil
+}
+
+func (s *ControlSession) publishV11Only(ctx context.Context, event adapter.AgentEvent) error {
+	if s.eventsV11 == nil {
+		return adapter.ErrUnsupported
+	}
+	records, err := s.eventsV11.Publish(ctx, event)
+	if err != nil {
+		return errors.New("node Protocol 1.1 event persistence failed")
 	}
 	for _, record := range records {
 		_ = s.sendFrame(ctx, record.Frame)

@@ -19,7 +19,7 @@ func normalizeEvent(event adapter.AgentEvent) ([]eventSpec, error) {
 	target := store.EventTarget{WorkspaceID: event.WorkspaceID, ThreadID: event.ThreadID, TurnID: event.TurnID, ItemID: event.ItemID}
 	payload, _ := event.Payload.(map[string]any)
 	payload = clonePayload(payload)
-	spec := eventSpec{kind: event.Type, target: target, correlationID: event.CorrelationID, payload: payload}
+	spec := eventSpec{kind: string(event.Type), agentInstanceID: event.AgentInstanceID, target: target, correlationID: event.CorrelationID, payload: payload}
 	switch event.Type {
 	case protocol.EventDeviceStatus, protocol.EventRuntimeStatus:
 		if _, ok := payload["status"]; !ok {
@@ -60,7 +60,7 @@ func normalizeEvent(event adapter.AgentEvent) ([]eventSpec, error) {
 				if path == "" {
 					continue
 				}
-				result = append(result, eventSpec{kind: event.Type, target: target, correlationID: event.CorrelationID, payload: diffPayload(map[string]any{"path": path, "changeType": mapChangeKind(firstString(item, "kind", "modified")), "diff": firstString(item, "diff", "")})})
+				result = append(result, eventSpec{kind: string(event.Type), agentInstanceID: event.AgentInstanceID, target: target, correlationID: event.CorrelationID, payload: diffPayload(map[string]any{"path": path, "changeType": mapChangeKind(firstString(item, "kind", "modified")), "diff": firstString(item, "diff", "")})})
 			}
 			if len(result) == 0 {
 				return nil, ErrInvalid

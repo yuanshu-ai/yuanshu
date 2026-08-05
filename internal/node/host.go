@@ -26,6 +26,7 @@ import (
 	"github.com/yuanshu-ai/yuanshu/internal/node/workspace"
 	"github.com/yuanshu-ai/yuanshu/internal/platform"
 	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 )
 
 const autostartID = "yuanshu-node"
@@ -48,28 +49,30 @@ type host struct {
 	log     *operationalLog
 	runCtx  context.Context
 
-	mu               sync.Mutex
-	local            *store.Store
-	runtime          adapter.Runtime
-	runtimeManager   *noderuntime.Manager
-	inventory        *adapter.Inventory
-	inventoryCancel  context.CancelFunc
-	pairing          *pairingManager
-	joiner           *nodeEnrollmentJoiner
-	trustCancel      context.CancelFunc
-	controlSession   *ControlSession
-	relaySupervisor  *relaySupervisor
-	controlEvents    *eventlog.Manager
-	controlValidator *protocolv1.Validator
-	controlTarget    protocolv1.Target
-	controlName      string
-	configController configController
-	controlCenter    *controlCenter
-	setupController  *nodeSetupController
-	activeConfig     config.Config
-	workspaceManager *workspace.Manager
-	identityManager  *identity.Manager
-	nodeIdentity     identity.Identity
+	mu                  sync.Mutex
+	local               *store.Store
+	runtime             adapter.Runtime
+	runtimeManager      *noderuntime.Manager
+	inventory           *adapter.Inventory
+	inventoryCancel     context.CancelFunc
+	pairing             *pairingManager
+	joiner              *nodeEnrollmentJoiner
+	trustCancel         context.CancelFunc
+	controlSession      *ControlSession
+	relaySupervisor     *relaySupervisor
+	controlEvents       *eventlog.Manager
+	controlEventsV11    *eventlog.Manager
+	controlValidator    *protocolv1.Validator
+	controlValidatorV11 *protocolv11.Validator
+	controlTarget       protocolv1.Target
+	controlName         string
+	configController    configController
+	controlCenter       *controlCenter
+	setupController     *nodeSetupController
+	activeConfig        config.Config
+	workspaceManager    *workspace.Manager
+	identityManager     *identity.Manager
+	nodeIdentity        identity.Identity
 }
 
 func runHost(ctx context.Context, options runOptions) error {
@@ -305,6 +308,13 @@ func (h *host) reload(ctx context.Context) error {
 		if err != nil {
 			return h.fail("recovery_unavailable")
 		}
+		managerV11, err := eventlog.NewManager(local, eventlog.Options{
+			OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID, ProtocolVersion: protocolv11.CurrentVersion,
+			MaxAge: time.Duration(loaded.Config.Events.MaxAgeHours) * time.Hour, MaxBytes: int64(loaded.Config.Events.MaxSizeMiB) << 20,
+		})
+		if err != nil {
+			return h.fail("recovery_unavailable")
+		}
 		h.runtime = runtime
 		if needsRecovery {
 			report, reconcileErr := manager.Reconcile(ctx, runtime)
@@ -333,7 +343,12 @@ func (h *host) reload(ctx context.Context) error {
 			if err != nil {
 				return h.fail("recovery_unavailable")
 			}
-			h.controlEvents, h.controlValidator = manager, validator
+			validatorV11, err := protocolv11.NewValidator(protocolv11.Options{TrustStore: local, ReplayStore: local})
+			if err != nil {
+				return h.fail("recovery_unavailable")
+			}
+			h.controlEvents, h.controlEventsV11 = manager, managerV11
+			h.controlValidator, h.controlValidatorV11 = validator, validatorV11
 			h.controlTarget = protocolv1.Target{OwnerID: nodeIdentity.OwnerID, NodeID: nodeIdentity.NodeID}
 			h.controlName = loaded.Config.Host.Name
 			if h.pairing != nil {
@@ -381,6 +396,9 @@ func (h *host) reloadConfiguration(ctx context.Context) error {
 		_ = h.workspaceManager.Reconcile(context.Background(), previous.Workspaces)
 		_ = h.local.ReconcileConfiguredAgents(context.Background(), previous)
 		_ = h.controlEvents.UpdateRetention(time.Duration(previous.Events.MaxAgeHours)*time.Hour, int64(previous.Events.MaxSizeMiB)<<20)
+		if h.controlEventsV11 != nil {
+			_ = h.controlEventsV11.UpdateRetention(time.Duration(previous.Events.MaxAgeHours)*time.Hour, int64(previous.Events.MaxSizeMiB)<<20)
+		}
 	}
 	if err := h.workspaceManager.Reconcile(ctx, loaded.Config.Workspaces); err != nil {
 		rollback()
@@ -396,6 +414,13 @@ func (h *host) reloadConfiguration(ctx context.Context) error {
 		rollback()
 		h.mu.Unlock()
 		return errors.New("event retention could not be applied")
+	}
+	if h.controlEventsV11 != nil {
+		if err := h.controlEventsV11.UpdateRetention(time.Duration(loaded.Config.Events.MaxAgeHours)*time.Hour, int64(loaded.Config.Events.MaxSizeMiB)<<20); err != nil {
+			rollback()
+			h.mu.Unlock()
+			return errors.New("event retention could not be applied")
+		}
 	}
 	if !reflect.DeepEqual(previous.Relay, loaded.Config.Relay) {
 		if err := h.replaceRelayLocked(ctx, loaded.Config); err != nil {
@@ -524,7 +549,8 @@ func (h *host) closeResourcesLocked() error {
 		}
 		h.controlSession = nil
 	}
-	h.controlEvents, h.controlValidator = nil, nil
+	h.controlEvents, h.controlEventsV11 = nil, nil
+	h.controlValidator, h.controlValidatorV11 = nil, nil
 	h.controlTarget, h.controlName = protocolv1.Target{}, ""
 	h.configController = nil
 	h.activeConfig = config.Config{}
@@ -810,15 +836,15 @@ func (h *host) handleLocalManagement(ctx context.Context, request localRequest) 
 }
 
 func (h *host) startControlSessionLocked() error {
-	if h.pairing == nil || h.runtime == nil || h.controlEvents == nil || h.controlValidator == nil || h.local == nil || h.runCtx == nil {
+	if h.pairing == nil || h.runtime == nil || h.controlEvents == nil || h.controlEventsV11 == nil || h.controlValidator == nil || h.controlValidatorV11 == nil || h.local == nil || h.runCtx == nil {
 		return errors.New("node control session is unavailable")
 	}
 	if h.controlSession != nil || h.relaySupervisor != nil {
 		return nil
 	}
 	session, err := NewControlSession(ControlSessionOptions{
-		Validator: h.controlValidator, Target: h.controlTarget,
-		Events: h.controlEvents, Store: h.local, Runtime: h.runtime, DeviceName: h.controlName, RefreshTrust: h.pairing.SyncTrust,
+		Validator: h.controlValidator, ValidatorV11: h.controlValidatorV11, Target: h.controlTarget,
+		Events: h.controlEvents, EventsV11: h.controlEventsV11, Store: h.local, Runtime: h.runtime, DeviceName: h.controlName, RefreshTrust: h.pairing.SyncTrust,
 		EventFailure: func(error) { go h.handleEventFailure() },
 		Config:       h.configController,
 		ConfigReload: func() { _ = h.reloadConfiguration(h.runCtx) },

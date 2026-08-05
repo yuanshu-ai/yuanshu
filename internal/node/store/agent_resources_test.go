@@ -8,6 +8,18 @@ import (
 
 func TestAgentResourcesAndTaskBindingsAreIsolated(t *testing.T) {
 	local, _ := openTestStore(t)
+	for _, installation := range []AgentInstallationRecord{
+		{AdapterType: "opencode", InstallationState: "detected", Version: "unknown", Compatibility: "unverified", ProcessState: "running", ProcessCount: 1},
+		{AdapterType: "codex", InstallationState: "installed", Version: "0.144.6", Compatibility: "known", ProcessState: "managed", ProcessCount: 1},
+	} {
+		if err := local.SaveAgentInstallation(context.Background(), installation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installations, err := local.AgentInstallations(context.Background())
+	if err != nil || len(installations) != 2 || installations[0].AdapterType != "codex" || installations[1].AdapterType != "opencode" {
+		t.Fatalf("installations=%+v err=%v", installations, err)
+	}
 	if err := local.ReplaceWorkspaces(context.Background(), []WorkspaceRecord{{
 		ID: "workspace", DisplayName: "Workspace", CanonicalPath: "/synthetic/workspace", FilesystemRoot: "/",
 		FileIdentity: "identity", Adapter: "codex", PermissionProfile: workspaceReadOnly,

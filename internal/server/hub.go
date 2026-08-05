@@ -464,7 +464,7 @@ func (h *Hub) route(ctx context.Context, source *hubConnection) {
 	}
 }
 
-func (h *Hub) withLeaseScopeForMessage(message protocolv1.YuanshuMessage, fn func() error) error {
+func (h *Hub) withLeaseScopeForMessage(message routedControl, fn func() error) error {
 	scope, err := messageLeaseScope(message)
 	if err != nil {
 		return err
@@ -485,13 +485,12 @@ func classifyRoutedFrame(frame transport.Frame, role transport.SessionRole) (rou
 		return routeHeader{}, errors.New("routed frame is invalid")
 	}
 	if role == transport.SessionRoleControl {
-		if protocolv1.Classify(header.ProtocolVersion, protocolv1.MessageKindControl, header.Type) != protocolv1.ClassificationKnownControl {
+		if !classifyControl(header.ProtocolVersion, header.Type) {
 			return routeHeader{}, errors.New("routed frame is invalid")
 		}
 		return header, nil
 	}
-	classification := protocolv1.Classify(header.ProtocolVersion, protocolv1.MessageKindEvent, header.Type)
-	if classification != protocolv1.ClassificationKnownEvent && classification != protocolv1.ClassificationUnknownEvent {
+	if !classifyEvent(header.ProtocolVersion, header.Type) {
 		return routeHeader{}, errors.New("routed frame is invalid")
 	}
 	return header, nil

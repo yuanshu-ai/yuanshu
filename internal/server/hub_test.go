@@ -15,6 +15,7 @@ import (
 	"time"
 
 	protocolv1 "github.com/yuanshu-ai/yuanshu/internal/protocol/v1"
+	protocolv11 "github.com/yuanshu-ai/yuanshu/internal/protocol/v11"
 	serverstore "github.com/yuanshu-ai/yuanshu/internal/server/store"
 	"github.com/yuanshu-ai/yuanshu/internal/transport"
 )
@@ -166,6 +167,62 @@ func TestHubRoutesSignedControlsAndRawEvents(t *testing.T) {
 	detail, ok := fixture.hub.OwnerNodeDetail("own_test", "nod_test")
 	if !ok || !detail.Online || detail.RuntimeStatus != "ready" || detail.LastEventAt.IsZero() {
 		t.Fatalf("node detail=%+v found=%v", detail, ok)
+	}
+}
+
+func TestHubRoutesProtocol11AndSharesReplayAndLeaseState(t *testing.T) {
+	fixture := newHubFixture(t)
+	node := fixture.dialNode(t)
+	defer node.Close()
+	control := fixture.dialControl(t)
+	defer control.Close()
+	waitHubSnapshot(t, fixture.hub, 1, 1)
+
+	agentList := signedControlV11(t, fixture, protocolv11.ControlAgentList, 1, map[string]any{}, "", "", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(agentList)); err != nil {
+		t.Fatal(err)
+	}
+	if forwarded, err := node.Receive(context.Background()); err != nil || !bytes.Equal(forwarded.Bytes(), agentList) {
+		t.Fatalf("v1.1 agent list=%q err=%v", forwarded.Bytes(), err)
+	}
+
+	// Sequences are shared across protocol minors, so a v1.0 frame cannot reuse
+	// sequence 1 after a v1.1 frame from the same control identity.
+	downgrade := signedControl(t, fixture, protocolv1.ControlDeviceSync, 1, map[string]any{}, "", "", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(downgrade)); err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := receiveJSONVersionType(control, protocolv1.CurrentVersion, string(protocolv1.EventControlResult))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := rejected["payload"].(map[string]any)
+	if payload["errorCode"] != string(protocolv1.ErrorReplay) {
+		t.Fatalf("downgrade replay result=%v", rejected)
+	}
+
+	acquire := signedControlV11(t, fixture, protocolv11.ControlLeaseAcquire, 2, map[string]any{}, "workspace", "task", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(acquire)); err != nil {
+		t.Fatal(err)
+	}
+	acquired, err := receiveJSONVersionType(control, protocolv11.CurrentVersion, string(protocolv11.EventControlResult))
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquiredPayload, _ := acquired["payload"].(map[string]any)
+	lease, _ := acquiredPayload["lease"].(map[string]any)
+	leaseID, _ := lease["leaseId"].(string)
+	epoch, _ := lease["epoch"].(float64)
+	if leaseID == "" || epoch < 1 {
+		t.Fatalf("v1.1 lease=%v", acquired)
+	}
+
+	runStart := signedControlV11(t, fixture, protocolv11.ControlRunStart, 3, map[string]any{"input": "continue", "lease": map[string]any{"leaseId": leaseID, "epoch": epoch}}, "workspace", "task", "", "")
+	if err := control.Send(context.Background(), transport.NewFrame(runStart)); err != nil {
+		t.Fatal(err)
+	}
+	if forwarded, err := node.Receive(context.Background()); err != nil || !bytes.Equal(forwarded.Bytes(), runStart) {
+		t.Fatalf("v1.1 run start=%q err=%v", forwarded.Bytes(), err)
 	}
 }
 
@@ -381,6 +438,38 @@ func signedRoutedControl(t *testing.T, ownerID, nodeID, clientID, keyID string, 
 	return result
 }
 
+func signedControlV11(t *testing.T, fixture hubFixture, kind protocolv11.ControlType, sequence int64, payload map[string]any, workspaceID, taskID, runID, interactionID string) []byte {
+	t.Helper()
+	now := time.Now().UTC()
+	message := protocolv11.YuanshuMessage{ProtocolVersion: protocolv11.The11, MessageID: "control-v11-" + fmt.Sprint(sequence), Type: protocolv11.Type(kind), SentAt: now.Format(time.RFC3339Nano), ExpiresAt: stringPtr(now.Add(time.Minute).Format(time.RFC3339Nano)), OwnerID: fixture.store.control.OwnerID, NodeID: fixture.store.node.NodeID, StreamID: "control-stream", Sequence: sequence, CorrelationID: "control-v11-" + fmt.Sprint(sequence), Nonce: stringPtr(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(sequence + 32)}, 16))), Signer: &protocolv11.Signer{ClientID: fixture.store.control.ClientID, KeyID: fixture.store.control.KeyID}, Payload: payload}
+	if workspaceID != "" {
+		message.WorkspaceID = stringPtr(workspaceID)
+	}
+	if taskID != "" {
+		message.TaskID = stringPtr(taskID)
+	}
+	if runID != "" {
+		message.RunID = stringPtr(runID)
+	}
+	if interactionID != "" {
+		message.InteractionID = stringPtr(interactionID)
+	}
+	if kind != protocolv11.ControlDeviceSync && kind != protocolv11.ControlWorkspaceList && kind != protocolv11.ControlAgentList && kind != protocolv11.ControlAgentRead && kind != protocolv11.ControlConfigRead && kind != protocolv11.ControlConfigUpdate && kind != protocolv11.ControlLeaseAcquire && kind != protocolv11.ControlLeaseRenew && kind != protocolv11.ControlLeaseRelease && kind != protocolv11.ControlLeaseStatus && kind != protocolv11.ControlNotificationsList && kind != protocolv11.ControlNotificationsRead {
+		message.AgentInstanceID = stringPtr("codex-default")
+	}
+	input, err := protocolv11.ControlSigningInput(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(fixture.controlPrivate, input))
+	message.Signature = &signature
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
 func receiveJSON(connection transport.Transport) (map[string]any, error) {
 	frame, err := connection.Receive(context.Background())
 	if err != nil {
@@ -402,6 +491,19 @@ func receiveJSONType(connection transport.Transport, messageType string) (map[st
 		}
 	}
 	return nil, fmt.Errorf("message type %q not received", messageType)
+}
+
+func receiveJSONVersionType(connection transport.Transport, version, messageType string) (map[string]any, error) {
+	for attempt := 0; attempt < 8; attempt++ {
+		message, err := receiveJSON(connection)
+		if err != nil {
+			return nil, err
+		}
+		if message["protocolVersion"] == version && message["type"] == messageType {
+			return message, nil
+		}
+	}
+	return nil, fmt.Errorf("protocol %s message type %q not received", version, messageType)
 }
 
 func TestHubRoutesRemoteControlThroughStandaloneLocalNode(t *testing.T) {
