@@ -72,7 +72,7 @@ func TestEmbeddedWebDeliveryPreservesPublicServerDiscovery(t *testing.T) {
 	api := withWellKnownDiscovery(http.NotFoundHandler(), wellKnownDiscovery{
 		DeploymentMode: "local",
 		PublicURL:      "http://127.0.0.1:9527",
-		Invitations:   true,
+		Invitations:    true,
 	})
 	handler, err := newWebDeliveryHandler(api, webDeliveryOptions{Enabled: true})
 	if err != nil {
