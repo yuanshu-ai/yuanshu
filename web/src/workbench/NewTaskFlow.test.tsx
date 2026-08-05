@@ -71,6 +71,27 @@ describe("new task flow", () => {
     await waitFor(() => expect(onConfirmed).toHaveBeenCalledWith("start-confirmed"));
   });
 
+  it("allows a managed runtime to initialize on the first task", () => {
+    renderFlow({
+      agents: [{ ...agent("office"), status: "starting" }],
+      initialTarget: { nodeId: "office", workspaceId: "repo" },
+    });
+
+    fireEvent.change(screen.getByLabelText("你希望 Codex 完成什么？"), { target: { value: "Initialize" } });
+    expect(screen.getByRole("button", { name: "确认并启动" })).toBeEnabled();
+    expect(screen.queryByText("该 Agent 未声明创建任务能力")).not.toBeInTheDocument();
+  });
+
+  it("trusts an explicit task.start capability while health is settling", () => {
+    renderFlow({
+      agents: [{ ...agent("office"), status: "unknown" }],
+      initialTarget: { nodeId: "office", workspaceId: "repo" },
+    });
+
+    fireEvent.change(screen.getByLabelText("你希望 Codex 完成什么？"), { target: { value: "Initialize" } });
+    expect(screen.getByRole("button", { name: "确认并启动" })).toBeEnabled();
+  });
+
   it("hides detected-only agents from the new task target list", () => {
     renderFlow({
       nodes: [node("office", true, "ready")],

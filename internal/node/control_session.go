@@ -829,14 +829,19 @@ func (s *ControlSession) publishAgentSnapshotV11(ctx context.Context, correlatio
 			status = "unknown"
 		}
 		controllable := false
+		canStart := instance.RuntimeMode == store.AgentRuntimeManaged
 		if healthByAgent != nil {
 			if health, exists := healthByAgent.AgentHealth(instance.InstanceID); exists {
 				status, controllable = health.State, health.State == "ready"
+				// Managed runtimes start their app-server lazily on the first
+				// task operation. Keep task.start available while that startup is
+				// in progress; the operation itself remains the runtime boundary.
+				canStart = canStart && (health.State == "starting" || health.State == "ready")
 			}
 		}
 		capabilities := []any{
 			capabilityPayload("task.read", instance.RuntimeMode == store.AgentRuntimeManaged, "runtime_not_managed"),
-			capabilityPayload("task.start", controllable, "runtime_not_ready"),
+			capabilityPayload("task.start", canStart, "runtime_not_ready"),
 			capabilityPayload("run.start", controllable, "runtime_not_ready"),
 			capabilityPayload("run.steer", controllable, "runtime_not_ready"),
 			capabilityPayload("run.interrupt", controllable, "runtime_not_ready"),

@@ -151,11 +151,12 @@ function taskTargets(nodes: NodeProjection[], agents: AgentProjection[], workspa
 }
 
 function canCreateTask(agent?: AgentProjection): boolean {
-  return agent?.runtimeMode === "managed" && agent.status === "ready" && agent.capabilities.some((capability) => capability.id === "task.start" && capability.level === "full");
+  return agent?.runtimeMode === "managed" && agent.capabilities.some((capability) => capability.id === "task.start" && capability.level === "full");
 }
 
 function agentUnavailableReason(agent?: AgentProjection): string {
   if (!agent) return "请选择 Agent";
+  if (canCreateTask(agent)) return "";
   if (agent.runtimeMode === "detected-only") return "仅检测到，当前任务不能安全接入";
   if (agent.runtimeMode !== "managed") return "当前运行模式只支持查看";
   if (agent.status !== "ready") return "Runtime 暂不可用";

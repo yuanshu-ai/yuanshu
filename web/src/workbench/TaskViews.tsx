@@ -79,7 +79,7 @@ export function DevicesView({ nodes, agents, workspaces, selectedNodeId, selecte
 }
 
 function agentCanCreate(agent: AgentProjection): boolean {
-  return agent.runtimeMode === "managed" && agent.status === "ready" && agent.capabilities.some((capability) => capability.id === "task.start" && capability.level === "full");
+  return agent.runtimeMode === "managed" && agent.capabilities.some((capability) => capability.id === "task.start" && capability.level === "full");
 }
 
 function agentStatusLabel(agent: AgentProjection, available: boolean): string {
