@@ -16,12 +16,16 @@ describe("personal workbench", () => {
     render(<Workbench session={fake as unknown as WorkbenchSession} storage={new MemoryControlStorage()} settings={{ relayUrl: "wss://relay.test/web/connect", pairingUrl: "https://relay.test/pair" }} onSettingsSaved={() => undefined} />);
 
     expect(document.querySelector('img[src="/brand/yuanshu-mark.svg"]')).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "继续你的 Codex 工作" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "继续任务 Office task" })).toHaveTextContent("Office");
+    expect(screen.getByRole("heading", { name: "继续正在进行的任务" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("筛选设备")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续任务 Office task" })).toHaveTextContent("Codex");
+    expect(screen.getByRole("button", { name: "继续任务 Office task" })).toHaveTextContent("Office repo");
     expect(screen.queryByRole("heading", { name: "其它运行中任务" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "继续任务 Office task" }));
     await waitFor(() => expect(fake.loadThread).toHaveBeenCalledWith("node-a", "workspace-a", "thread-a"));
     expect(screen.getByRole("heading", { name: "Office task" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "任务详情" })).toHaveTextContent("Office · Codex · Office repo");
+    expect(screen.getByLabelText("任务状态与控制权")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /需要控制权/ })).toBeDisabled();
   });
 

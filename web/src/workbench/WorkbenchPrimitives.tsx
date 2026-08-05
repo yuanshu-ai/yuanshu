@@ -30,6 +30,15 @@ export function StatusPill({ tone, children }: { tone?: "accent" | "warning" | "
   return <span className={`status-pill ${tone ?? "quiet"}`}>{children}</span>;
 }
 
+export function TaskSafetyStatus({ connection, connectionTone, task, taskTone, control, recovery }: { connection: string; connectionTone: "accent" | "warning" | "danger" | "quiet"; task?: string; taskTone?: "accent" | "warning" | "danger" | "quiet"; control: string; recovery?: string }) {
+  return <div className="task-safety-status" aria-label="任务状态与控制权">
+    <StatusPill tone={connectionTone}>连接 · {connection}</StatusPill>
+    {task && <StatusPill tone={taskTone}>{task}</StatusPill>}
+    {recovery && <StatusPill tone="warning">{recovery}</StatusPill>}
+    <span className="control-status">{control}</span>
+  </div>;
+}
+
 export function connectionLabel(value: string) {
   if (value === "connected") return machineStatus("online")!.title;
   if (value === "reconnecting") return machineStatus("reconnecting")!.title;

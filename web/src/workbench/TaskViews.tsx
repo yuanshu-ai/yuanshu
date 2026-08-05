@@ -11,9 +11,10 @@ export type WorkspaceSummary = { key: string; nodeId: string; workspaceId: strin
 export function TaskContextBar({ nodes, workspaces, selectedNodeId, selectedWorkspaceId, onNode, onWorkspace, onDevices }: { nodes: DeviceSummary[]; workspaces: WorkspaceSummary[]; selectedNodeId: string; selectedWorkspaceId: string; onNode: (value: string) => void; onWorkspace: (value: string) => void; onDevices?: () => void }) {
   const { t } = useI18n();
   const node = nodes.find((item) => item.nodeId === selectedNodeId);
+  const visibleWorkspaces = selectedNodeId ? workspaces.filter((item) => item.nodeId === selectedNodeId) : workspaces;
   return <div className="task-context-bar">
-    <label><span className={`context-presence ${node?.online ? "online" : "offline"}`} aria-hidden="true" /><span className="sr-only">{t("workbench.context.node")}</span><select aria-label={t("workbench.context.node")} value={selectedNodeId} onChange={(event) => onNode(event.target.value)}>{nodes.map((item) => <option value={item.nodeId} key={item.nodeId}>{item.name ?? item.nodeId}</option>)}</select></label>
-    <label><Icon name="folder" /><span className="sr-only">{t("workbench.context.workspace")}</span><select aria-label={t("workbench.context.workspace")} value={selectedWorkspaceId} onChange={(event) => onWorkspace(event.target.value)}>{workspaces.map((item) => <option value={item.workspaceId} key={item.key}>{item.name ?? item.workspaceId}</option>)}</select></label>
+    <label>{node && <span className={`context-presence ${node.online ? "online" : "offline"}`} aria-hidden="true" />}<span className="sr-only">{t("workbench.context.node")}</span><select aria-label={t("workbench.context.node")} value={selectedNodeId} onChange={(event) => onNode(event.target.value)}><option value="">全部设备</option>{nodes.map((item) => <option value={item.nodeId} key={item.nodeId}>{item.name ?? item.nodeId}</option>)}</select></label>
+    <label><Icon name="folder" /><span className="sr-only">{t("workbench.context.workspace")}</span><select aria-label={t("workbench.context.workspace")} value={selectedWorkspaceId} onChange={(event) => onWorkspace(event.target.value)}><option value="">全部工作区</option>{visibleWorkspaces.map((item) => <option value={item.workspaceId} key={item.key}>{item.name ?? item.workspaceId}</option>)}</select></label>
     {onDevices && <button className="context-devices" type="button" onClick={onDevices} aria-label={t("workbench.nav.devices")}><Icon name="node" /><span>{t("workbench.nav.devices")}</span></button>}
   </div>;
 }
@@ -27,13 +28,13 @@ export function ContextRail({ nodes, workspaces, selectedNodeId, selectedWorkspa
   </aside>;
 }
 
-export function HomeView({ groups, nodes, unreadNotifications, onOpen, onNew, onNotifications }: { groups: { continuation?: TaskSummary; approvals: TaskSummary[]; issues: TaskSummary[]; active: TaskSummary[]; recent: TaskSummary[] }; nodes: DeviceSummary[]; unreadNotifications: number; onOpen: (task: TaskSummary) => void; onNew: () => void; onNotifications: () => void }) {
+export function HomeView({ groups, nodes, unreadNotifications, onOpen, onNew, onNotifications, onDevices }: { groups: { continuation?: TaskSummary; approvals: TaskSummary[]; issues: TaskSummary[]; active: TaskSummary[]; recent: TaskSummary[] }; nodes: DeviceSummary[]; unreadNotifications: number; onOpen: (task: TaskSummary) => void; onNew: () => void; onNotifications: () => void; onDevices: () => void }) {
   const { t } = useI18n();
   const warnings = nodes.filter((node) => !canStartTask(node));
   return <div className="task-view home-view">
-    <div className="task-heading"><div><p>Codex</p><h1>{t("workbench.task.continue")}</h1></div><div className="heading-actions"><button className="attention-button" type="button" onClick={onNotifications} aria-label={`${t("workbench.nav.notifications")} ${unreadNotifications}`}><Icon name="bell" />{unreadNotifications > 0 && <span>{unreadNotifications}</span>}</button><button className="button primary" type="button" onClick={onNew}><Icon name="plus" />{t("workbench.nav.newTask")}</button></div></div>
+    <div className="task-heading"><div><p>{t("workbench.task.kicker")}</p><h1>{t("workbench.task.continue")}</h1></div><div className="heading-actions"><button className="context-devices home-devices" type="button" onClick={onDevices}><Icon name="node" />{t("workbench.nav.devices")}</button><button className="attention-button" type="button" onClick={onNotifications} aria-label={`${t("workbench.nav.notifications")} ${unreadNotifications}`}><Icon name="bell" />{unreadNotifications > 0 && <span>{unreadNotifications}</span>}</button><button className="button primary" type="button" onClick={onNew}><Icon name="plus" />{t("workbench.nav.newTask")}</button></div></div>
     {groups.continuation ? <ContinueTaskCard task={groups.continuation} onOpen={() => onOpen(groups.continuation!)} /> : <div className="continue-empty"><Icon name="check" /><div><b>当前没有需要接续的任务</b><p>设备上的任务开始运行或等待审批时，会优先出现在这里。</p></div></div>}
-    {warnings.length > 0 && <div className="health-banner"><Icon name="warning" /><div><b>{warnings.length} 台设备需要注意</b><p>离线或 Codex 不可用的任务仍可查看，恢复后会继续同步。</p></div></div>}
+    {warnings.length > 0 && <div className="health-banner"><Icon name="warning" /><div><b>{warnings.length} 台设备需要注意</b><p>离线或 Agent 不可用的任务仍可查看，恢复后会继续同步。</p></div></div>}
     {groups.approvals.length > 0 && <TaskGroup title="等待我审批" tasks={groups.approvals} onOpen={onOpen} tone="warning" />}
     {groups.issues.length > 0 && <TaskGroup title="需要确认" tasks={groups.issues} onOpen={onOpen} tone="warning" />}
     {groups.active.length > 0 && <TaskGroup title="其它运行中任务" tasks={groups.active} onOpen={onOpen} />}
@@ -48,15 +49,15 @@ function ContinueTaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => v
     <div className="continue-card-top"><StatusPill tone={tone}>{task.pendingApprovals > 0 ? "等待审批" : statusLabel(status)}</StatusPill><time>{formatTime(task.thread.updatedAt)}</time></div>
     <strong>{taskTitle(task)}</strong>
     {task.thread.preview && task.thread.title && <p>{task.thread.preview}</p>}
-    <div className="continue-card-meta"><span><Icon name="node" />{task.node?.name ?? "未命名设备"}</span><span><Icon name="folder" />{task.workspace?.name ?? "工作区"}</span>{task.unreadCount > 0 && <em>{task.unreadCount} 条新进展</em>}</div>
+    <div className="continue-card-meta"><span><Icon name="tool" />{task.agent?.displayName ?? "Agent"}</span><span><Icon name="node" />{task.node?.name ?? "未命名设备"}</span><span><Icon name="folder" />{task.workspace?.name ?? "工作区"}</span>{task.unreadCount > 0 && <em>{task.unreadCount} 条新进展</em>}</div>
     <span className="continue-action">继续查看 <Icon name="chevron" /></span>
   </button>;
 }
 
-export function TasksView({ tasks, allTasks, nodes, workspaces, filter, query, selectedNodeId, selectedWorkspaceId, onFilter, onQuery, onNode, onWorkspace, onOpen, onNew }: { tasks: TaskSummary[]; allTasks: TaskSummary[]; nodes: Array<{ nodeId: string; name?: string }>; workspaces: Array<{ nodeId: string; workspaceId: string; name?: string }>; filter: TaskFilter; query: string; selectedNodeId: string; selectedWorkspaceId: string; onFilter: (value: TaskFilter) => void; onQuery: (value: string) => void; onNode: (value: string) => void; onWorkspace: (value: string) => void; onOpen: (task: TaskSummary) => void; onNew: () => void }) {
+export function TasksView({ tasks, allTasks, filter, query, onFilter, onQuery, onOpen, onNew }: { tasks: TaskSummary[]; allTasks: TaskSummary[]; filter: TaskFilter; query: string; onFilter: (value: TaskFilter) => void; onQuery: (value: string) => void; onOpen: (task: TaskSummary) => void; onNew: () => void }) {
   const { t } = useI18n();
-  return <div className="task-view"><div className="task-heading"><div><p>Codex</p><h1>{t("workbench.task.all")}</h1></div><button className="button primary" type="button" onClick={onNew}><Icon name="plus" />{t("workbench.nav.newTask")}</button></div>
-    <div className="task-controls"><label className="search-field"><span className="sr-only">{t("workbench.nav.search")}</span><Icon name="search" /><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder={t("workbench.task.searchHint")} /></label><div className="context-selects"><select aria-label="筛选设备" value={selectedNodeId} onChange={(event) => { onNode(event.target.value); onWorkspace(""); }}><option value="">全部设备</option>{nodes.map((node) => <option value={node.nodeId} key={node.nodeId}>{node.name ?? node.nodeId}</option>)}</select><select aria-label="筛选工作区" value={selectedWorkspaceId} onChange={(event) => onWorkspace(event.target.value)}><option value="">全部工作区</option>{workspaces.filter((workspace) => !selectedNodeId || workspace.nodeId === selectedNodeId).map((workspace) => <option value={workspace.workspaceId} key={`${workspace.nodeId}:${workspace.workspaceId}`}>{workspace.name ?? workspace.workspaceId}</option>)}</select></div></div>
+  return <div className="task-view"><div className="task-heading"><div><p>{t("workbench.task.kicker")}</p><h1>{t("workbench.task.all")}</h1></div><button className="button primary" type="button" onClick={onNew}><Icon name="plus" />{t("workbench.nav.newTask")}</button></div>
+    <div className="task-controls"><label className="search-field"><span className="sr-only">{t("workbench.nav.search")}</span><Icon name="search" /><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder={t("workbench.task.searchHint")} /></label></div>
     <div className="filter-tabs" role="tablist" aria-label="任务状态">{(["all", "active", "approval", "failed", "completed"] as const).map((value) => <button type="button" role="tab" aria-selected={filter === value} className={filter === value ? "active" : ""} onClick={() => onFilter(value)} key={value}>{filterLabel(value)}</button>)}</div>
     <p className="local-search-note">{t("workbench.task.localSearch", { count: allTasks.length })}</p>
     <div className="task-list">{tasks.map((task) => <TaskRow task={task} onOpen={() => onOpen(task)} key={task.thread.key} />)}{!tasks.length && <EmptyTaskList />}</div>
@@ -83,9 +84,9 @@ function agentCanCreate(agent: AgentProjection): boolean {
 }
 
 function agentStatusLabel(agent: AgentProjection, available: boolean): string {
-  if (available) return "Codex 可用，可创建任务";
-  if (agent.status === "ready") return agent.runtimeMode === "attached" ? "Codex 可查看，需本机托管" : "Codex 当前只读";
-  return "Codex 当前不可用";
+  if (available) return `${agent.displayName} 可用，可创建任务`;
+  if (agent.status === "ready") return agent.runtimeMode === "attached" ? `${agent.displayName} 可查看，需本机托管` : `${agent.displayName} 当前只读`;
+  return `${agent.displayName} 当前不可用`;
 }
 
 function TaskGroup({ title, tasks, empty, tone, onOpen }: { title: string; tasks: TaskSummary[]; empty?: string; tone?: "warning"; onOpen: (task: TaskSummary) => void }) {
@@ -94,7 +95,7 @@ function TaskGroup({ title, tasks, empty, tone, onOpen }: { title: string; tasks
 
 function TaskRow({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
   const status = task.latestTurn?.status ?? task.thread.status;
-  return <button type="button" className="task-row" onClick={onOpen} aria-label={`${taskTitle(task)}，${task.node?.name ?? "未命名设备"}，${task.workspace?.name ?? "工作区"}`}><span className={`task-status ${status ?? "unknown"}`} aria-hidden="true" /><span className="task-copy"><b>{taskTitle(task)}</b><small>{task.node?.name ?? "未命名设备"} · {task.workspace?.name ?? "工作区"}</small></span><span className="task-side">{task.unreadCount > 0 && <strong>{task.unreadCount} 条新进展</strong>}<em>{task.pendingApprovals ? "待审批" : statusLabel(status)}</em><time>{formatTime(task.thread.updatedAt)}</time></span></button>;
+  return <button type="button" className="task-row" onClick={onOpen} aria-label={`${taskTitle(task)}，${task.agent?.displayName ?? "Agent"}，${task.node?.name ?? "未命名设备"}，${task.workspace?.name ?? "工作区"}`}><span className={`task-status ${status ?? "unknown"}`} aria-hidden="true" /><span className="task-copy"><b>{taskTitle(task)}</b><small>{task.agent?.displayName ?? "Agent"} · {task.node?.name ?? "未命名设备"} · {task.workspace?.name ?? "工作区"}</small></span><span className="task-side">{task.unreadCount > 0 && <strong>{task.unreadCount} 条新进展</strong>}<em>{task.pendingApprovals ? "待审批" : statusLabel(status)}</em><time>{formatTime(task.thread.updatedAt)}</time></span></button>;
 }
 
 function EmptyTaskList() {

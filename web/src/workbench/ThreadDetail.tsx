@@ -7,7 +7,7 @@ import { Dialog } from "./Dialog";
 import { Icon } from "./Icon";
 import { selectThreadApprovals } from "./selectors";
 import type { ResourceState, WorkbenchSession } from "./session";
-import { actionLabel, CodePanel, connectionLabel, controlTypeLabel, EmptyState, formatTime, ResourceMessage, shortID, SkeletonTimeline, statusLabel, StatusPill } from "./WorkbenchPrimitives";
+import { actionLabel, CodePanel, connectionLabel, controlTypeLabel, EmptyState, formatTime, ResourceMessage, shortID, SkeletonTimeline, statusLabel, StatusPill, TaskSafetyStatus } from "./WorkbenchPrimitives";
 
 const MarkdownContent = lazy(() => import("./MarkdownContent"));
 
@@ -30,6 +30,8 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   const lease = scope ? session.getLease(scope) : { state: "none", epoch: 0 } as LeaseState;
   const leaseHeld = Boolean(scope && session.canMutate(scope, "run.start"));
 	const agentInstanceId = thread?.agentInstanceId;
+	const agent = agentInstanceId ? state.agents[`${selectedNodeId}\u001f${agentInstanceId}`] : undefined;
+	const agentName = agent?.displayName ?? "Agent";
   const actions = Object.values(state.actions).filter((action) => action.nodeId === selectedNodeId && action.threadId === selectedThreadId).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -182,6 +184,9 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   const inspectorLabels = { activity: t("workbench.inspector.activity"), files: t("workbench.inspector.files"), approvals: t("workbench.inspector.approvals"), details: t("workbench.inspector.details") };
   const placeholder = activeTurn ? "补充要求或纠偏当前执行" : "继续这个任务";
   const taskStatus = activeTurn?.status ?? thread?.status;
+  const taskTone = taskStatus === "failed" || taskStatus === "ambiguous" || taskStatus === "uncertain" ? "danger" : taskStatus === "waiting_approval" || taskStatus === "reconnecting" ? "warning" : taskStatus === "running" || taskStatus === "active" || taskStatus === "inProgress" ? "accent" : "quiet";
+  const recoveryLabel = thread?.recovery !== "none" || thread?.historyState === "partial" || thread?.historyState === "unavailable" ? (thread?.recovery === "history_gap" ? "部分历史不可用" : "历史内容不完整") : undefined;
+  const targetLabel = `${node?.name ?? "未命名设备"} · ${agentName} · ${workspace?.name ?? "工作区"}`;
   const needsResume = !activeTurn && !resumeConfirmed && ["notLoaded", "unavailable"].includes(thread?.status ?? "");
 
   const resumeThread = async () => {
@@ -193,21 +198,21 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
   }
 
   return <section className="thread-detail" aria-label="任务详情">
-    <div className="thread-detail-heading"><button className="mobile-back" type="button" onClick={onBack} aria-label={t("workbench.thread.back")}><Icon name="back" /></button><div className="thread-heading-copy"><p>{node?.name ?? "未命名设备"} · {workspace?.name ?? "工作区"}</p><h1>{thread?.title || thread?.preview || (selectedThreadId ? `任务 ${selectedThreadId.slice(0, 10)}` : "开始新任务")}</h1><div className="thread-context-status"><StatusPill tone={connectionState === "connected" ? "accent" : "warning"}>{connectionLabel(connectionState)}</StatusPill>{thread && <StatusPill tone={taskStatus === "failed" ? "danger" : taskStatus === "running" ? "accent" : "quiet"}>{statusLabel(taskStatus)}</StatusPill>}<span>{leaseHeld ? t("workbench.thread.controllable") : t("workbench.thread.readOnly")}</span></div></div>{thread && <div className="thread-heading-actions"><LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => scope && void session.releaseLease(scope).catch(() => undefined)} />{!activeTurn && <button className="button secondary" type="button" disabled={busy || connectionState !== "connected" || !leaseHeld} onClick={() => void resumeThread()}>{needsResume ? "恢复任务" : "继续执行"}</button>}<button className="button quiet inspector-toggle" type="button" onClick={() => setInspectorOpen(true)} aria-label={t("workbench.thread.openInspector")}><Icon name="details" />{t("workbench.inspector.details")}</button></div>}</div>
+    <div className="thread-detail-heading"><button className="mobile-back" type="button" onClick={onBack} aria-label={t("workbench.thread.back")}><Icon name="back" /></button><div className="thread-heading-copy"><p>{targetLabel}</p><h1>{thread?.title || thread?.preview || (selectedThreadId ? `任务 ${selectedThreadId.slice(0, 10)}` : "开始新任务")}</h1><TaskSafetyStatus connection={connectionLabel(connectionState)} connectionTone={connectionState === "connected" ? "accent" : connectionState === "reauth_required" ? "danger" : "warning"} task={thread ? statusLabel(taskStatus) : undefined} taskTone={taskTone} recovery={recoveryLabel} control={leaseHeld ? t("workbench.thread.controllable") : t("workbench.thread.readOnly")} /></div>{thread && <div className="thread-heading-actions"><LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => scope && void session.releaseLease(scope).catch(() => undefined)} />{!activeTurn && <button className="button secondary" type="button" disabled={busy || connectionState !== "connected" || !leaseHeld} onClick={() => void resumeThread()}>{needsResume ? "恢复任务" : "继续执行"}</button>}<button className="button quiet inspector-toggle" type="button" onClick={() => setInspectorOpen(true)} aria-label={t("workbench.thread.openInspector")}><Icon name="details" />{t("workbench.inspector.details")}</button></div>}</div>
     {thread && (thread.recovery !== "none" || thread.historyState === "partial" || thread.historyState === "unavailable") && <div className="inline-alert warning"><Icon name="warning" /><div><b>{thread.recovery === "history_gap" ? "部分历史不可用" : "历史内容不完整"}</b><p>当前视图可能只包含设备能够恢复的部分内容。</p></div></div>}
-    {node && (!node.online || node.runtimeStatus === "unavailable") && <div className="inline-alert danger"><Icon name="warning" /><div><b>Codex 暂不可用</b><p>本地状态会继续保留，设备恢复连接后重新同步。</p></div></div>}
+    {node && (!node.online || node.runtimeStatus === "unavailable") && <div className="inline-alert danger"><Icon name="warning" /><div><b>{agentName} 暂不可用</b><p>本地状态会继续保留，设备恢复连接后重新同步。</p></div></div>}
     {resource?.state === "error" && <ResourceMessage resource={resource} onRetry={() => void session.loadThread(selectedNodeId, selectedWorkspaceId, selectedThreadId, true)} />}
 
     <div className="thread-content-grid">
       <div className="conversation-pane">
         <div className="thread-scroll" ref={timeline} onScroll={(event) => { const element = event.currentTarget; const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 64; setAtBottom(bottom); if (bottom) setNewItems(0); }}>
           {hiddenCount > 0 && <button className="older-button" type="button" onClick={() => setVisibleItems((value) => value + 100)}>显示更早的 {Math.min(100, hiddenCount)} 项</button>}
-          {resource?.state === "loading" && !turns.length ? <SkeletonTimeline /> : visible.length ? visible.map((turn) => <TurnCard turn={turn} key={turn.key} />) : <EmptyState icon="tasks" title={t("workbench.thread.empty")} detail={t("workbench.thread.emptyHelp")} />}
+          {resource?.state === "loading" && !turns.length ? <SkeletonTimeline /> : visible.length ? visible.map((turn) => <TurnCard turn={turn} agentName={agentName} key={turn.key} />) : <EmptyState icon="tasks" title={t("workbench.thread.empty")} detail={t("workbench.thread.emptyHelp")} />}
           {newItems > 0 && <button className="new-items-button" type="button" onClick={revealLatest}>查看 {newItems} 条新内容</button>}
         </div>
 
         <div className="thread-footer">
-          <div className="composer-context"><span><Icon name="node" />{node?.name ?? "未命名设备"}</span><span><Icon name="folder" />{workspace?.name ?? "工作区"}</span><em>{leaseHeld ? "可操作" : "只读"}</em></div>
+          <div className="composer-context"><span><Icon name="tool" />{agentName}</span><span><Icon name="node" />{node?.name ?? "未命名设备"}</span><span><Icon name="folder" />{workspace?.name ?? "工作区"}</span><em>{leaseHeld ? "可操作" : "只读"}</em></div>
           <div className="mobile-lease-control"><LeaseControl lease={lease} held={leaseHeld} onAcquire={() => void changeLease(false)} onTakeover={() => void changeLease(true)} onRelease={() => scope && void session.releaseLease(scope).catch(() => undefined)} /></div>
           {interactions.map((interaction) => <InteractionQuestionPanel key={interaction.key} interaction={interaction} leaseHeld={leaseHeld} busy={busy} onResolve={(answers) => void resolveInteraction(interaction, answers)} />)}
           {approvals.length > 0 && <button className="mobile-approval-action" type="button" onClick={() => { setInspectorTab("approvals"); setInspectorOpen(true); }}><Icon name="warning" />{t("workbench.approval.review", { count: approvals.length })}</button>}
@@ -225,42 +230,42 @@ export function ThreadDetail({ session, snapshotRevision, connectionState, state
         <div className="inspector-heading"><strong>{t("workbench.inspector.title")}</strong><button type="button" onClick={() => setInspectorOpen(false)} aria-label={t("common.close")}><Icon name="close" /></button></div>
         <div className="inspector-tabs" role="tablist">{(["activity", "files", "approvals", "details"] as const).map((tab) => <button type="button" role="tab" aria-selected={inspectorTab === tab} className={inspectorTab === tab ? "active" : ""} onClick={() => setInspectorTab(tab)} key={tab}>{inspectorLabels[tab]}{tab === "files" && files.length > 0 ? ` ${files.length}` : tab === "approvals" && approvals.length > 0 ? ` ${approvals.length}` : ""}</button>)}</div>
         <div className="inspector-content">
-          {inspectorTab === "activity" && <InspectorActivity turns={turns} actions={actions} plans={plans} />}
-          {inspectorTab === "files" && (files.length ? <FileChanges files={files} session={session} /> : <EmptyState icon="file" title={t("workbench.inspector.noFiles")} detail="Codex 产生的文件与 Diff 会显示在这里。" />)}
-          {inspectorTab === "approvals" && (approvals.length ? <ApprovalPanel approvals={approvals} leaseHeld={leaseHeld} busy={busy} onResolve={(approval, decision) => setConfirmation({ kind: "approval", approval, decision, step: 1 })} /> : <EmptyState icon="check" title={t("workbench.inspector.noApprovals")} detail="审批请求会固定显示在输入区上方。" />)}
-          {inspectorTab === "details" && <dl className="inspector-details"><dt>设备</dt><dd>{node?.name ?? "未命名设备"}</dd><dt>工作区</dt><dd>{workspace?.name ?? "工作区"}</dd><dt>任务状态</dt><dd>{statusLabel(taskStatus)}</dd><dt>历史状态</dt><dd>{thread?.historyState ?? "unknown"}</dd><dt>最新 sequence</dt><dd>{latestSequence}</dd><dt>{t("workbench.details.tokenUsage")}</dt><dd>{thread?.tokenUsage?.totalTokens?.toLocaleString() ?? t("workbench.details.unavailable")}{thread?.tokenUsage?.modelContextWindow ? ` / ${thread.tokenUsage.modelContextWindow.toLocaleString()} context` : ""}</dd><dt>控制状态</dt><dd>{leaseHeld ? "当前浏览器可操作" : lease.state === "occupied" ? "由其他控制端操作" : "只读"}</dd></dl>}
+          {inspectorTab === "activity" && <InspectorActivity turns={turns} actions={actions} plans={plans} agentName={agentName} />}
+          {inspectorTab === "files" && (files.length ? <FileChanges files={files} session={session} /> : <EmptyState icon="file" title={t("workbench.inspector.noFiles")} detail={`${agentName} 产生的文件与 Diff 会显示在这里。`} />)}
+          {inspectorTab === "approvals" && (approvals.length ? <ApprovalPanel approvals={approvals} target={targetLabel} leaseHeld={leaseHeld} busy={busy} onResolve={(approval, decision) => setConfirmation({ kind: "approval", approval, decision, step: 1 })} /> : <EmptyState icon="check" title={t("workbench.inspector.noApprovals")} detail="审批请求会固定显示在输入区上方。" />)}
+          {inspectorTab === "details" && <dl className="inspector-details"><dt>Agent</dt><dd>{agentName}</dd><dt>设备</dt><dd>{node?.name ?? "未命名设备"}</dd><dt>工作区</dt><dd>{workspace?.name ?? "工作区"}</dd><dt>任务状态</dt><dd>{statusLabel(taskStatus)}</dd><dt>历史状态</dt><dd>{thread?.historyState ?? "unknown"}</dd><dt>最新 sequence</dt><dd>{latestSequence}</dd><dt>{t("workbench.details.tokenUsage")}</dt><dd>{thread?.tokenUsage?.totalTokens?.toLocaleString() ?? t("workbench.details.unavailable")}{thread?.tokenUsage?.modelContextWindow ? ` / ${thread.tokenUsage.modelContextWindow.toLocaleString()} context` : ""}</dd><dt>控制状态</dt><dd>{leaseHeld ? "当前浏览器可操作" : lease.state === "occupied" ? "由其他控制端操作" : "只读"}</dd></dl>}
         </div>
       </aside>
       {inspectorOpen && <button className="inspector-scrim" type="button" onClick={() => setInspectorOpen(false)} aria-label="关闭 Inspector" />}
     </div>
 
     {confirmation?.kind === "takeover" && <Dialog title="接管任务控制权" destructive onClose={() => setConfirmation(undefined)} actions={<><button className="button secondary" type="button" onClick={() => setConfirmation(undefined)}>取消</button><button className="button danger solid" type="button" onClick={() => void takeover()}>确认接管</button></>}><p>接管后，当前持有者会立即变为只读，旧控制消息将被拒绝。</p><dl><dt>持有者</dt><dd>{shortID(lease.holderClientId)}</dd><dt>剩余时间</dt><dd>{lease.expiresAt ? formatLeaseTime(lease.expiresAt) : "未知"}</dd></dl></Dialog>}
-    {confirmation?.kind === "approval" && <ApprovalDialog value={confirmation} nodeName={node?.name ?? "未命名设备"} workspaceName={workspace?.name ?? "工作区"} onClose={() => setConfirmation(undefined)} onNext={() => setConfirmation({ ...confirmation, step: 2 })} onConfirm={() => void resolveApproval(confirmation.approval, confirmation.decision)} />}
+    {confirmation?.kind === "approval" && <ApprovalDialog value={confirmation} agentName={agentName} nodeName={node?.name ?? "未命名设备"} workspaceName={workspace?.name ?? "工作区"} onClose={() => setConfirmation(undefined)} onNext={() => setConfirmation({ ...confirmation, step: 2 })} onConfirm={() => void resolveApproval(confirmation.approval, confirmation.decision)} />}
   </section>;
 }
 
-function TurnCard({ turn }: { turn: TurnProjection }) {
-  return <article className={`turn-card ${turn.status ?? ""}`}><header><span>本轮执行</span><b>{statusLabel(turn.status)}</b><time>{formatTime(turn.updatedAt)}</time></header><div className="turn-items">{turn.items.map((item) => <ItemCard item={item} key={item.id} />)}{!turn.items.length && <p className="turn-empty">设备尚未发送可展示内容</p>}</div></article>;
+function TurnCard({ turn, agentName }: { turn: TurnProjection; agentName: string }) {
+  return <article className={`turn-card ${turn.status ?? ""}`}><header><span>本轮执行 · {agentName}</span><b>{statusLabel(turn.status)}</b><time>{formatTime(turn.updatedAt)}</time></header><div className="turn-items">{turn.items.map((item) => <ItemCard item={item} agentName={agentName} key={item.id} />)}{!turn.items.length && <p className="turn-empty">设备尚未发送可展示内容</p>}</div></article>;
 }
 
-function ItemCard({ item }: { item: ThreadItemProjection }) {
+function ItemCard({ item, agentName }: { item: ThreadItemProjection; agentName: string }) {
   const { t } = useI18n();
-  if (item.kind === "agent_message" || item.kind === "user_message") return <div className={`message-item ${item.kind}`}><span>{item.kind === "user_message" ? "你" : "Codex"}</span><Suspense fallback={<p className="plain-message">{item.text || "（空消息）"}</p>}><MarkdownContent value={item.text || "（空消息）"} /></Suspense></div>;
+  if (item.kind === "agent_message" || item.kind === "user_message") return <div className={`message-item ${item.kind}`}><span>{item.kind === "user_message" ? "你" : agentName}</span><Suspense fallback={<p className="plain-message">{item.text || "（空消息）"}</p>}><MarkdownContent value={item.text || "（空消息）"} /></Suspense></div>;
   if (item.kind === "command" || item.kind === "command_output") return <details className="activity-item" open={item.status === "running"}><summary><Icon name="terminal" /><span><b>{item.command || "命令输出"}</b><small>{item.status ?? "执行中"}{item.exitCode !== undefined ? ` / exit ${item.exitCode}` : ""}{item.truncated ? " / 已截断" : ""}</small></span></summary>{item.output && <CodePanel value={item.output} label="复制命令输出" />}</details>;
   if (item.kind === "tool") return <div className="activity-item compact"><Icon name="tool" /><span><b>{item.toolName || "工具调用"}</b><small>{item.status ?? "已记录"}</small></span></div>;
   if (item.kind === "reasoning_summary") return <details className="activity-item reasoning-summary" open={item.status === "streaming"}><summary><Icon name="details" /><span><b>{t("workbench.reasoning.title")}</b><small>{item.partial ? t("workbench.reasoning.partial") : item.status ?? t("workbench.plan.updated")}</small></span></summary><Suspense fallback={<p className="plain-message">{item.text}</p>}><MarkdownContent value={item.text || `（${t("workbench.reasoning.empty")}）`} /></Suspense></details>;
   if (item.kind === "plan") return <div className="activity-item compact"><Icon name="check" /><span><b>{t("workbench.plan.title")}</b><small>{item.text || t("workbench.plan.updated")}</small></span></div>;
   if (item.kind === "file_change" || item.kind === "diff") return <div className="activity-item compact"><Icon name="file" /><span><b>{item.path || "文件变更"}</b><small>{item.changeType || "Diff 已更新"}{item.truncated ? " / 已截断" : ""}</small></span></div>;
-  return <div className="activity-item compact error"><Icon name="warning" /><span><b>{item.errorCode || "未识别活动"}</b><small>{item.errorMessage || "Codex 返回了当前版本无法识别的历史项。"}</small></span></div>;
+  return <div className="activity-item compact error"><Icon name="warning" /><span><b>{item.errorCode || "未识别活动"}</b><small>{item.errorMessage || `${agentName} 返回了当前版本无法识别的历史项。`}</small></span></div>;
 }
 
-function InspectorActivity({ turns, actions, plans }: { turns: TurnProjection[]; actions: ControlActionProjection[]; plans: PlanProjection[] }) {
+function InspectorActivity({ turns, actions, plans, agentName }: { turns: TurnProjection[]; actions: ControlActionProjection[]; plans: PlanProjection[]; agentName: string }) {
   const { t } = useI18n();
   const items = turns.flatMap((turn) => turn.items).filter((item) => item.kind !== "agent_message" && item.kind !== "user_message").slice(-80).reverse();
   return <div className="inspector-activity">
     {plans.slice(0, 1).map((plan) => <section className="plan-panel" key={plan.key}><strong>{t("workbench.plan.title")}</strong>{plan.explanation && <p>{plan.explanation}</p>}<ol>{plan.steps.map((step, index) => <li className={step.status} key={`${index}-${step.text}`}><span className="semantic-state" /><span>{step.text}</span><small>{statusLabel(step.status)}</small></li>)}</ol></section>)}
     {actions.slice(0, 6).map((action) => <article className={`inspector-action ${action.state}`} key={action.messageId}><span className="semantic-state" /><div><b>{controlTypeLabel(action.type)}</b><small>{actionLabel(action.state)} · {formatTime(action.updatedAt)}</small>{action.errorCode && <code>{action.errorCode}</code>}</div></article>)}
-    {items.map((item) => <ItemCard item={item} key={item.id} />)}
+    {items.map((item) => <ItemCard item={item} agentName={agentName} key={item.id} />)}
     {!actions.length && !items.length && <EmptyState icon="tool" title={t("workbench.inspector.noActivity")} detail="命令、工具与控制结果会显示在这里。" />}
   </div>;
 }
@@ -280,15 +285,15 @@ function FileChanges({ files, session }: { files: FileChangeProjection[]; sessio
   return <section className="file-changes"><div className="section-heading"><div><Icon name="file" /><h2>文件变化</h2></div><span>{files.length}</span></div><div>{files.map((file) => <details key={file.key} onToggle={(event) => { if (event.currentTarget.open && !file.diff) void session.loadDiff(file.nodeId, file.workspaceId, file.threadId, file.path).catch(() => undefined); }}><summary><span><b>{file.path}</b><small>{changeLabel(file.changeType)} / 版本 {file.revision}{file.truncated ? " / 已截断" : ""}</small></span><Icon name="chevron" /></summary>{file.diff ? <CodePanel value={file.diff} label="复制 Diff" /> : <p className="diff-loading">展开后从设备读取最多 64 KiB Diff</p>}{file.truncated && <p className="truncate-note">仅展示 {Math.min(file.totalBytes ?? 65_536, 65_536)} / {file.totalBytes ?? "未知"} bytes，摘要 {shortID(file.digest)}</p>}</details>)}</div></section>;
 }
 
-const ApprovalPanel = forwardRef<HTMLElement, { approvals: ApprovalProjection[]; leaseHeld: boolean; busy: boolean; onResolve: (approval: ApprovalProjection, decision: "accept" | "decline") => void }>(function ApprovalPanel({ approvals, leaseHeld, busy, onResolve }, ref) {
+const ApprovalPanel = forwardRef<HTMLElement, { approvals: ApprovalProjection[]; target: string; leaseHeld: boolean; busy: boolean; onResolve: (approval: ApprovalProjection, decision: "accept" | "decline") => void }>(function ApprovalPanel({ approvals, target, leaseHeld, busy, onResolve }, ref) {
   const { t } = useI18n();
-  return <section className="approval-panel" ref={ref}><div className="section-heading"><div><Icon name="warning" /><h2>{t("workbench.approval.pending")}</h2></div><span>{approvals.length}</span></div>{approvals.map((approval) => <article key={approval.key}><div><b>{approval.kind ?? "未知风险操作"}</b><p>{approval.summary ?? "Codex 正在等待审批决定"}</p><small>到期 {formatTime(approval.expiresAt)} / 操作摘要 {shortID(approval.operationDigest)}</small></div><div><button className="button secondary" type="button" disabled={!leaseHeld || busy || !approval.operationDigest} onClick={() => onResolve(approval, "decline")}>拒绝</button><button className="button warning" type="button" disabled={!leaseHeld || busy || !approval.operationDigest} onClick={() => onResolve(approval, "accept")}>批准</button></div></article>)}</section>;
+  return <section className="approval-panel" ref={ref}><div className="section-heading"><div><Icon name="warning" /><h2>{t("workbench.approval.pending")}</h2></div><span>{approvals.length}</span></div><p className="approval-target">目标 · {target}</p>{approvals.map((approval) => <article key={approval.key}><div><b>{approval.kind ?? "未知风险操作"}</b><p>{approval.summary ?? "Agent 正在等待审批决定"}</p><small>到期 {formatTime(approval.expiresAt)} / 操作摘要 {shortID(approval.operationDigest)}</small></div><div><button className="button secondary" type="button" disabled={!leaseHeld || busy || !approval.operationDigest} onClick={() => onResolve(approval, "decline")}>拒绝</button><button className="button warning" type="button" disabled={!leaseHeld || busy || !approval.operationDigest} onClick={() => onResolve(approval, "accept")}>批准</button></div></article>)}</section>;
 });
 
-function ApprovalDialog({ value, nodeName, workspaceName, onClose, onNext, onConfirm }: { value: Extract<Confirmation, { kind: "approval" }>; nodeName: string; workspaceName: string; onClose: () => void; onNext: () => void; onConfirm: () => void }) {
+function ApprovalDialog({ value, agentName, nodeName, workspaceName, onClose, onNext, onConfirm }: { value: Extract<Confirmation, { kind: "approval" }>; agentName: string; nodeName: string; workspaceName: string; onClose: () => void; onNext: () => void; onConfirm: () => void }) {
   const highRisk = isHighRisk(value.approval);
   const final = !highRisk || value.step === 2;
-  return <Dialog title={final ? (value.decision === "accept" ? "确认批准操作" : "确认拒绝操作") : "检查高风险操作"} destructive={value.decision === "accept" && highRisk} onClose={onClose} actions={<><button className="button secondary" type="button" onClick={onClose}>取消</button>{final ? <button className={`button ${value.decision === "accept" ? "warning" : "primary"}`} type="button" onClick={onConfirm}>{value.decision === "accept" ? "发送批准" : "发送拒绝"}</button> : <button className="button warning" type="button" onClick={onNext}>继续确认</button>}</>}><p>{value.approval.summary ?? "Codex 正在等待审批决定"}</p><dl><dt>设备</dt><dd>{nodeName}</dd><dt>工作区</dt><dd>{workspaceName}</dd><dt>风险</dt><dd>{value.approval.risk ?? value.approval.kind ?? "未知"}</dd><dt>操作摘要</dt><dd>{shortID(value.approval.operationDigest)}</dd><dt>到期</dt><dd>{formatTime(value.approval.expiresAt)}</dd></dl>{highRisk && <div className="dialog-warning">这项操作可能执行命令或修改文件。设备会再次校验目标、操作摘要、控制权和有效期。</div>}</Dialog>;
+  return <Dialog title={final ? (value.decision === "accept" ? "确认批准操作" : "确认拒绝操作") : "检查高风险操作"} destructive={value.decision === "accept" && highRisk} onClose={onClose} actions={<><button className="button secondary" type="button" onClick={onClose}>取消</button>{final ? <button className={`button ${value.decision === "accept" ? "warning" : "primary"}`} type="button" onClick={onConfirm}>{value.decision === "accept" ? "发送批准" : "发送拒绝"}</button> : <button className="button warning" type="button" onClick={onNext}>继续确认</button>}</>}><p>{value.approval.summary ?? "Agent 正在等待审批决定"}</p><dl><dt>Agent</dt><dd>{agentName}</dd><dt>设备</dt><dd>{nodeName}</dd><dt>工作区</dt><dd>{workspaceName}</dd><dt>风险</dt><dd>{value.approval.risk ?? value.approval.kind ?? "未知"}</dd><dt>操作摘要</dt><dd>{shortID(value.approval.operationDigest)}</dd><dt>到期</dt><dd>{formatTime(value.approval.expiresAt)}</dd></dl>{highRisk && <div className="dialog-warning">这项操作可能执行命令或修改文件。设备会再次校验目标、操作摘要、控制权和有效期。</div>}</Dialog>;
 }
 
 function LeaseControl({ lease, held, onAcquire, onTakeover, onRelease }: { lease: LeaseState; held: boolean; onAcquire: () => void; onTakeover: () => void; onRelease: () => void }) {

@@ -69,7 +69,7 @@ export function filterTasks(tasks: TaskSummary[], filter: TaskFilter, query: str
     if (filter === "failed" && status !== "failed") return false;
     if (filter === "completed" && status !== "completed") return false;
     if (!normalized) return true;
-    return [task.thread.title, task.thread.preview, task.workspace?.name, task.node?.name]
+    return [task.thread.title, task.thread.preview, task.agent?.displayName, task.workspace?.name, task.node?.name]
       .filter((value): value is string => Boolean(value))
       .some((value) => value.toLocaleLowerCase().includes(normalized));
   });
