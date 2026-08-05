@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -37,32 +38,45 @@ func (linuxProcessManager) Start(ctx context.Context, spec ProcessSpec) (Process
 	if err != nil {
 		return nil, errors.New("platform process stdio is unavailable")
 	}
-	stdout, err := command.StdoutPipe()
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return nil, errors.New("platform process stdio is unavailable")
 	}
-	stderr, err := command.StderrPipe()
+	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		return nil, errors.New("platform process stdio is unavailable")
 	}
+	command.Stdout = stdoutWriter
+	command.Stderr = stderrWriter
 	if err := command.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
+		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		return nil, errors.New("platform process could not be started")
 	}
-	process := &linuxProcess{command: command, stdin: stdin, stdout: stdout, stderr: stderr, done: make(chan struct{})}
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	process := &linuxProcess{command: command, stdin: stdin, stdout: stdout, stderr: stderr, stdoutWriter: stdoutWriter, stderrWriter: stderrWriter, done: make(chan struct{})}
 	go process.reap()
 	return process, nil
 }
 
 type linuxProcess struct {
-	command *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  io.ReadCloser
-	stderr  io.ReadCloser
-	done    chan struct{}
-	mu      sync.RWMutex
-	exit    ProcessExit
-	forced  bool
-	stop    sync.Once
+	command      *exec.Cmd
+	stdin        io.WriteCloser
+	stdout       io.ReadCloser
+	stderr       io.ReadCloser
+	stdoutWriter *os.File
+	stderrWriter *os.File
+	done         chan struct{}
+	mu           sync.RWMutex
+	exit         ProcessExit
+	forced       bool
+	stop         sync.Once
 }
 
 func (p *linuxProcess) Stdin() io.WriteCloser { return p.stdin }
@@ -71,6 +85,8 @@ func (p *linuxProcess) Stderr() io.ReadCloser { return p.stderr }
 
 func (p *linuxProcess) reap() {
 	err := p.command.Wait()
+	_ = p.stdoutWriter.Close()
+	_ = p.stderrWriter.Close()
 	code := 0
 	if err != nil {
 		var exitError *exec.ExitError

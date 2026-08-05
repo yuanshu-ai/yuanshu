@@ -45,29 +45,36 @@ func (*windowsProcessManager) Start(ctx context.Context, spec ProcessSpec) (Proc
 	if err != nil {
 		return nil, ErrUnavailable
 	}
-	stdout, err := command.StdoutPipe()
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		_ = stdin.Close()
 		return nil, ErrUnavailable
 	}
-	stderr, err := command.StderrPipe()
+	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		return nil, ErrUnavailable
 	}
+	command.Stdout = stdoutWriter
+	command.Stderr = stderrWriter
 	job, err := createKillOnCloseJob()
 	if err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		return nil, ErrUnavailable
 	}
 	if err := command.Start(); err != nil {
 		_ = windows.CloseHandle(job)
 		_ = stdin.Close()
 		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) {
 			return nil, ErrNotFound
 		}
@@ -88,13 +95,17 @@ func (*windowsProcessManager) Start(ctx context.Context, spec ProcessSpec) (Proc
 		return nil, ErrUnavailable
 	}
 	process := &windowsProcess{
-		command: command,
-		job:     job,
-		stdin:   stdin,
-		stdout:  stdout,
-		stderr:  stderr,
-		done:    make(chan struct{}),
+		command:      command,
+		job:          job,
+		stdin:        stdin,
+		stdout:       stdout,
+		stderr:       stderr,
+		stdoutWriter: stdoutWriter,
+		stderrWriter: stderrWriter,
+		done:         make(chan struct{}),
 	}
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
 	go process.reap()
 	return process, nil
 }
@@ -143,12 +154,14 @@ func resolveWindowsExecutable(value string) (string, error) {
 }
 
 type windowsProcess struct {
-	command *exec.Cmd
-	job     windows.Handle
-	stdin   io.WriteCloser
-	stdout  io.ReadCloser
-	stderr  io.ReadCloser
-	done    chan struct{}
+	command      *exec.Cmd
+	job          windows.Handle
+	stdin        io.WriteCloser
+	stdout       io.ReadCloser
+	stderr       io.ReadCloser
+	stdoutWriter *os.File
+	stderrWriter *os.File
+	done         chan struct{}
 
 	mu       sync.RWMutex
 	exit     ProcessExit
@@ -209,6 +222,8 @@ func (p *windowsProcess) Stop(ctx context.Context) (ProcessExit, error) {
 
 func (p *windowsProcess) reap() {
 	err := p.command.Wait()
+	_ = p.stdoutWriter.Close()
+	_ = p.stderrWriter.Close()
 	p.mu.Lock()
 	p.exit.Forced = p.stopping
 	if p.command.ProcessState != nil {
