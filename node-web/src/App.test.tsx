@@ -36,6 +36,20 @@ describe("Node control center", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认批准" }));
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some((call) => String(call[1]?.body).includes('"command":"config_approve"') && String(call[1]?.body).includes('"changeId":"chg-1"'))).toBe(true));
   });
+
+  it("can approve a pending browser pairing from the local control center", async () => {
+    const overview = { status: { version: 1, state: "ready", platform: "darwin", config: "ready", identity: "bound", database: "ready", workspaces: 1, codex: "ready", authentication: "authenticated", recovery: "reconciled", remoteControl: "online", autostart: "enabled" }, config: { revision: "rev-1", host: { name: "Office Mac" }, workspaces: [] }, pairings: [{ PairingID: "pair-1", Name: "My browser", Fingerprint: "ABCD-EFGH", ExpiresAt: "2026-08-06T01:00:00Z" }] };
+    vi.mocked(fetch).mockReset()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ session: "session-token" }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(overview), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ protocol: "node-local-v1", ok: true }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...overview, pairings: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "访问权限" }));
+    expect(screen.getByText(/ABCD-EFGH/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "批准" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some((call) => String(call[1]?.body).includes('"command":"pairing_accept"') && String(call[1]?.body).includes('"pairingId":"pair-1"'))).toBe(true));
+  });
 });
 
 it("uses a native workspace token during first setup without exposing a path field", async () => {

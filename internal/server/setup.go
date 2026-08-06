@@ -111,7 +111,7 @@ func setupServer(ctx context.Context, args []string, output io.Writer) error {
 }
 
 func (s *serverSetupService) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	setWebSecurityHeaders(writer)
+	setWebSecurityHeaders(writer, true)
 	if request.Host != s.host || request.Header.Get("Origin") != "" && request.Header.Get("Origin") != "http://"+s.host {
 		writeError(writer, http.StatusForbidden, "forbidden")
 		return

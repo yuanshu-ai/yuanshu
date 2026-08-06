@@ -68,6 +68,28 @@ func TestEmbeddedWebDeliveryServesWorkbenchRuntimeConfigAndAssets(t *testing.T) 
 	}
 }
 
+func TestEmbeddedWebDeliveryCSPAllowsLoopbackWebSocketOnlyForLocalMode(t *testing.T) {
+	local, err := newWebDeliveryHandler(http.NotFoundHandler(), webDeliveryOptions{Enabled: true, AllowLoopbackWS: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPage := httptest.NewRecorder()
+	local.ServeHTTP(localPage, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9527/", nil))
+	if csp := localPage.Header().Get("Content-Security-Policy"); !strings.Contains(csp, " ws:") {
+		t.Fatalf("local CSP does not allow ws: %q", csp)
+	}
+
+	remote, err := newWebDeliveryHandler(http.NotFoundHandler(), webDeliveryOptions{Enabled: true, PublicURL: "https://192.0.2.20:9527"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remotePage := httptest.NewRecorder()
+	remote.ServeHTTP(remotePage, httptest.NewRequest(http.MethodGet, "https://192.0.2.20:9527/", nil))
+	if csp := remotePage.Header().Get("Content-Security-Policy"); strings.Contains(csp, " ws:") {
+		t.Fatalf("remote CSP unexpectedly allows plaintext ws: %q", csp)
+	}
+}
+
 func TestEmbeddedWebDeliveryPreservesPublicServerDiscovery(t *testing.T) {
 	api := withWellKnownDiscovery(http.NotFoundHandler(), wellKnownDiscovery{
 		DeploymentMode: "local",

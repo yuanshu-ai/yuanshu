@@ -14,20 +14,22 @@ import (
 )
 
 type webDeliveryOptions struct {
-	Enabled      bool
-	PublicURL    string
-	AdminEnabled bool
-	Certificate  certificateProvider
+	Enabled         bool
+	PublicURL       string
+	AdminEnabled    bool
+	Certificate     certificateProvider
+	AllowLoopbackWS bool
 }
 
 type webDeliveryHandler struct {
-	api          http.Handler
-	assets       fs.FS
-	files        http.Handler
-	indexHTML    []byte
-	publicURL    string
-	adminEnabled bool
-	certificate  certificateProvider
+	api             http.Handler
+	assets          fs.FS
+	files           http.Handler
+	indexHTML       []byte
+	publicURL       string
+	adminEnabled    bool
+	certificate     certificateProvider
+	allowLoopbackWS bool
 }
 
 func newWebDeliveryHandler(api http.Handler, options webDeliveryOptions) (http.Handler, error) {
@@ -48,6 +50,7 @@ func newWebDeliveryHandler(api http.Handler, options webDeliveryOptions) (http.H
 	return &webDeliveryHandler{
 		api: api, assets: assets, files: http.FileServer(http.FS(assets)),
 		indexHTML: indexHTML, publicURL: strings.TrimSuffix(options.PublicURL, "/"), adminEnabled: options.AdminEnabled, certificate: options.Certificate,
+		allowLoopbackWS: options.AllowLoopbackWS,
 	}, nil
 }
 
@@ -56,7 +59,7 @@ func (h *webDeliveryHandler) ServeHTTP(writer http.ResponseWriter, request *http
 		h.api.ServeHTTP(writer, request)
 		return
 	}
-	setWebSecurityHeaders(writer)
+	setWebSecurityHeaders(writer, h.allowLoopbackWS)
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writer.Header().Set("Allow", "GET, HEAD")
 		writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed")
@@ -218,8 +221,12 @@ func safeWebPath(value string) bool {
 	return true
 }
 
-func setWebSecurityHeaders(writer http.ResponseWriter) {
-	writer.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self' https: wss:; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+func setWebSecurityHeaders(writer http.ResponseWriter, allowLoopbackWS bool) {
+	connectSources := "'self' https: wss:"
+	if allowLoopbackWS {
+		connectSources += " ws:"
+	}
+	writer.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src "+connectSources+"; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 	writer.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 	writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 	writer.Header().Set("Referrer-Policy", "no-referrer")

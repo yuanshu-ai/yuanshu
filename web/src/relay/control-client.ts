@@ -412,7 +412,7 @@ export class ControlClient {
           ...(interactionID ? { itemId: interactionID } : {}),
         } as RelayMessage;
     const input = this.protocolVersion === V11_VERSION ? controlSigningInputV11(message as V11Message) : controlSigningInputV1(message as V1Message);
-    const signature = await crypto.subtle.sign("Ed25519", this.options.identity.privateKey, input as unknown as ArrayBuffer);
+    const signature = await crypto.subtle.sign({ name: "Ed25519" }, this.options.identity.privateKey, input as unknown as ArrayBuffer);
     const signed: RelayMessage = { ...message, signature: bytesToBase64Url(new Uint8Array(signature)) };
     const socket = this.socket;
     if (!socket || this.stateValue !== "connected") throw new Error("control client disconnected before send");
@@ -530,7 +530,7 @@ export class ControlClient {
     try {
       if (challenge.subjectId !== this.options.identity.clientId || Number.isNaN(Date.parse(challenge.expiresAt)) || this.now().getTime() >= Date.parse(challenge.expiresAt)) throw new Error("relay challenge is not for this control client");
       const input = sessionSigningInput(challenge);
-      const signature = await crypto.subtle.sign("Ed25519", this.options.identity.privateKey, input as unknown as ArrayBuffer);
+      const signature = await crypto.subtle.sign({ name: "Ed25519" }, this.options.identity.privateKey, input as unknown as ArrayBuffer);
       this.socket?.send(JSON.stringify({ version: "1", type: "authenticate", signature: bytesToBase64Url(new Uint8Array(signature)) }));
     } catch {
       this.authFailures += 1;

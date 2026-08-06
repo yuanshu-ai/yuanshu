@@ -180,10 +180,11 @@ func Run(ctx context.Context, options Options) error {
 		Invitations:    adminEnabled(options.AdminEnabled),
 	})
 	handler, err = newWebDeliveryHandler(handler, webDeliveryOptions{
-		Enabled:      embeddedWebEnabled(options.WebEnabled),
-		PublicURL:    options.PublicURL,
-		AdminEnabled: adminEnabled(options.AdminEnabled),
-		Certificate:  certificateService,
+		Enabled:         embeddedWebEnabled(options.WebEnabled),
+		PublicURL:       options.PublicURL,
+		AdminEnabled:    adminEnabled(options.AdminEnabled),
+		Certificate:     certificateService,
+		AllowLoopbackWS: effectiveDeploymentMode(options) == DeploymentLocal,
 	})
 	if err != nil {
 		return err
