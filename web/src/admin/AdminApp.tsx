@@ -1,5 +1,8 @@
 import { Children, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { Button as UiButton } from "@yuanshu/ui/base";
+import { Dialog as UiDialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@yuanshu/ui/dialog";
+
 import { BrandMark } from "../BrandMark";
 import { LanguageSwitch, useI18n } from "../i18n";
 import { IndexedDBControlStorage } from "../relay/storage";
@@ -187,31 +190,13 @@ function Security({ data, onDownload }: { data: AdminData; onDownload: () => voi
 
 function RecentAudit({ items }: { items: AdminAudit[] }) { return <section className="admin-block"><h2>安全审计</h2><AdminList empty="还没有管理操作记录">{items.map((item) => <article className="audit-row" key={item.id}><time>{formatDate(item.createdAt)}</time><strong>{auditLabel(item.action)}</strong><span>{item.resourceType} / {shortID(item.resourceRef)}</span><em className={item.result}>{item.result === "succeeded" ? "成功" : item.errorCode || "拒绝"}</em></article>)}</AdminList></section>; }
 
-function NodeInvitationDialog({ busy, onCancel, onCreate }: { busy: boolean; onCancel: () => void; onCreate: (name: string, ttl: number) => void }) { const { t } = useI18n(); const [name,setName]=useState("New Node"); const [ttl,setTTL]=useState(10); return <div className="dialog-layer"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="invite-title"><h2 id="invite-title">{t("admin.addNode")}</h2><p>创建一个单次、短时有效的邀请。邀请码即授权，请通过可信渠道发送。</p><label>显示名称<input autoFocus maxLength={128} value={name} onChange={(event)=>setName(event.target.value)} /></label><label>有效期<select value={ttl} onChange={(event)=>setTTL(Number(event.target.value))}><option value={10}>10 分钟</option><option value={20}>20 分钟</option><option value={30}>30 分钟</option></select></label><div><button className="secondary-button" disabled={busy} onClick={onCancel}>{t("common.cancel")}</button><button className="danger-button solid" disabled={busy||!name.trim()} onClick={()=>onCreate(name.trim(),ttl)}>{busy?"创建中":"创建邀请"}</button></div></section></div>; }
-function IssuedInvitationDialog({ value, onClose }: { value: IssuedNodeInvitation; onClose: () => void }) { const { t } = useI18n(); const download=()=>{const blob=new Blob([value.invite],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=`${value.displayName.replace(/[^A-Za-z0-9_-]+/g,"-")||"node"}.yuanshu-invite`;link.click();URL.revokeObjectURL(url)}; return <div className="dialog-layer"><section className="confirm-dialog invitation-result" role="dialog" aria-modal="true" aria-labelledby="issued-title"><h2 id="issued-title">{t("admin.invitation.created")}</h2><p>秘密只显示这一次，{formatDate(value.expiresAt)} 过期。</p><img src={value.qrCode} alt="Node invitation QR code" /><label>短代码<input className="mono" readOnly value={value.shortCode} /></label><div><button className="secondary-button" onClick={download}>{t("admin.invitation.download")}</button><button className="danger-button solid" onClick={onClose}>{t("common.done")}</button></div></section></div>; }
+function NodeInvitationDialog({ busy, onCancel, onCreate }: { busy: boolean; onCancel: () => void; onCreate: (name: string, ttl: number) => void }) { const { t } = useI18n(); const [name,setName]=useState("New Node"); const [ttl,setTTL]=useState(10); return <UiDialog open onOpenChange={(open) => { if (!open && !busy) onCancel(); }}><DialogContent className="confirm-dialog"><DialogTitle>{t("admin.addNode")}</DialogTitle><DialogDescription>创建一个单次、短时有效的邀请。邀请码即授权，请通过可信渠道发送。</DialogDescription><label>显示名称<input autoFocus maxLength={128} value={name} onChange={(event)=>setName(event.target.value)} /></label><label>有效期<select value={ttl} onChange={(event)=>setTTL(Number(event.target.value))}><option value={10}>10 分钟</option><option value={20}>20 分钟</option><option value={30}>30 分钟</option></select></label><DialogFooter><UiButton variant="secondary" disabled={busy} onClick={onCancel}>{t("common.cancel")}</UiButton><UiButton variant="danger" disabled={busy||!name.trim()} onClick={()=>onCreate(name.trim(),ttl)}>{busy?"创建中":"创建邀请"}</UiButton></DialogFooter></DialogContent></UiDialog>; }
+function IssuedInvitationDialog({ value, onClose }: { value: IssuedNodeInvitation; onClose: () => void }) { const { t } = useI18n(); const download=()=>{const blob=new Blob([value.invite],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=`${value.displayName.replace(/[^A-Za-z0-9_-]+/g,"-")||"node"}.yuanshu-invite`;link.click();URL.revokeObjectURL(url)}; return <UiDialog open onOpenChange={(open) => { if (!open) onClose(); }}><DialogContent className="confirm-dialog invitation-result"><DialogTitle>{t("admin.invitation.created")}</DialogTitle><DialogDescription>秘密只显示这一次，{formatDate(value.expiresAt)} 过期。</DialogDescription><img src={value.qrCode} alt="Node invitation QR code" /><label>短代码<input className="mono" readOnly value={value.shortCode} /></label><DialogFooter><UiButton variant="secondary" onClick={download}>{t("admin.invitation.download")}</UiButton><UiButton variant="primary" onClick={onClose}>{t("common.done")}</UiButton></DialogFooter></DialogContent></UiDialog>; }
 
 function ConfirmDialog({ value, busy, onCancel, onConfirm }: { value: Confirmation; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
   const [typed, setTyped] = useState("");
-  const dialogRef = useRef<HTMLElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const cancelRef = useRef<HTMLButtonElement>(null);
   const allowed = !value.requiredText || typed === value.requiredText;
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    (inputRef.current ?? cancelRef.current)?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) { event.preventDefault(); onCancel(); return; }
-      if (event.key !== "Tab" || !dialogRef.current) return;
-      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])')];
-      if (!focusable.length) return;
-      const first = focusable[0]; const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => { document.removeEventListener("keydown", onKeyDown); previous?.focus(); };
-  }, [busy, onCancel]);
-  return <div className="dialog-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onCancel(); }}><section ref={dialogRef} className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-detail"><h2 id="confirm-title">{value.title}</h2><p id="confirm-detail">{value.detail}</p>{value.requiredText && <label>输入 <strong>{value.requiredText}</strong> 继续<input ref={inputRef} value={typed} onChange={(event) => setTyped(event.target.value)} /></label>}<div><button ref={cancelRef} className="secondary-button" disabled={busy} onClick={onCancel}>取消</button><button className="danger-button solid" disabled={busy || !allowed} onClick={onConfirm}>{busy ? "处理中" : value.confirmLabel}</button></div></section></div>;
+  return <UiDialog open onOpenChange={(open) => { if (!open && !busy) onCancel(); }}><DialogContent className="confirm-dialog" role="alertdialog" onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => { if (busy) event.preventDefault(); }}><DialogTitle>{value.title}</DialogTitle><DialogDescription>{value.detail}</DialogDescription>{value.requiredText && <label>输入 <strong>{value.requiredText}</strong> 继续<input autoFocus value={typed} onChange={(event) => setTyped(event.target.value)} /></label>}<DialogFooter><UiButton variant="secondary" disabled={busy} onClick={onCancel}>取消</UiButton><UiButton variant="danger" disabled={busy || !allowed} onClick={onConfirm}>{busy ? "处理中" : value.confirmLabel}</UiButton></DialogFooter></DialogContent></UiDialog>;
 }
 function AdminGate({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) { return <main className="admin-gate"><BrandMark className="brand-mark-large" /><h1>{title}</h1><p>{detail}</p>{action}</main>; }
 function AdminSkeleton() { return <div className="admin-skeleton" aria-label="正在读取管理状态"><i /><i /><i /><i /></div>; }

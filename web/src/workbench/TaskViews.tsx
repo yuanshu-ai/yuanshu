@@ -1,4 +1,5 @@
 import { Icon } from "./Icon";
+import { Card } from "@yuanshu/ui/base";
 import { useI18n } from "../i18n";
 import { canStartTask, type TaskFilter, type TaskSummary } from "./selectors";
 import { formatTime, ResourceMessage, SkeletonRows, statusLabel, StatusPill } from "./WorkbenchPrimitives";
@@ -90,7 +91,7 @@ function agentStatusLabel(agent: AgentProjection, available: boolean): string {
 }
 
 function TaskGroup({ title, tasks, empty, tone, onOpen }: { title: string; tasks: TaskSummary[]; empty?: string; tone?: "warning"; onOpen: (task: TaskSummary) => void }) {
-  return <section className={`task-group ${tone ?? ""}`}><div className="group-heading"><h2>{title}</h2><span>{tasks.length}</span></div>{tasks.length ? <div className="task-list">{tasks.map((task) => <TaskRow task={task} onOpen={() => onOpen(task)} key={task.thread.key} />)}</div> : empty ? <p className="group-empty">{empty}</p> : null}</section>;
+  return <Card className={`task-group ${tone ?? ""}`}><div className="group-heading"><h2>{title}</h2><span>{tasks.length}</span></div>{tasks.length ? <div className="task-list">{tasks.map((task) => <TaskRow task={task} onOpen={() => onOpen(task)} key={task.thread.key} />)}</div> : empty ? <p className="group-empty">{empty}</p> : null}</Card>;
 }
 
 function TaskRow({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {

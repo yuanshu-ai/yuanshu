@@ -13,7 +13,7 @@
     "readme:check": "node scripts/readme-check.mjs",
     "status:check": "node scripts/status-catalog.mjs check",
     "status:generate": "node scripts/status-catalog.mjs generate",
-    "test": "pnpm --dir web test && pnpm --dir node-web test"
+    "test": "pnpm --dir packages/ui test && pnpm --dir web test && pnpm --dir node-web test"
   },
   "devDependencies": {
     "ajv": "8.20.0",

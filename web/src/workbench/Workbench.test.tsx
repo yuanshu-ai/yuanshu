@@ -125,11 +125,11 @@ describe("personal workbench", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("当前浏览器需要重新配对");
     expect(screen.getByRole("link", { name: "重新配对" })).toHaveAttribute("href", "https://relay.test/pair");
     fireEvent.click(screen.getAllByRole("button", { name: "设置" })[0]);
-    expect(screen.getByRole("button", { name: "基础" })).toHaveAttribute("aria-current", "page");
-    fireEvent.click(screen.getByRole("button", { name: "安全" }));
+    expect(screen.getByRole("tab", { name: "基础" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "安全" }));
     expect(screen.getByRole("heading", { name: "控制端授权" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "管理已授权控制端" })).toHaveAttribute("href", "/admin");
-    fireEvent.click(screen.getByRole("button", { name: "高级" }));
+    fireEvent.click(screen.getByRole("tab", { name: "高级" }));
     expect(screen.getByRole("heading", { name: "Relay 与配对地址" })).toBeInTheDocument();
   });
 

@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { Badge } from "@yuanshu/ui/base";
+
 import type { IconName } from "./Icon";
 import { Icon } from "./Icon";
 import type { ResourceState } from "./session";
@@ -27,7 +29,8 @@ export function CodePanel({ value, label }: { value: string; label: string }) {
 }
 
 export function StatusPill({ tone, children }: { tone?: "accent" | "warning" | "danger" | "quiet"; children: ReactNode }) {
-  return <span className={`status-pill ${tone ?? "quiet"}`}>{children}</span>;
+  const variant = tone === "accent" ? "primary" : tone === "warning" ? "warning" : tone === "danger" ? "danger" : "quiet";
+  return <Badge variant={variant} className={`status-pill ${tone ?? "quiet"}`}>{children}</Badge>;
 }
 
 export function TaskSafetyStatus({ connection, connectionTone, task, taskTone, control, recovery }: { connection: string; connectionTone: "accent" | "warning" | "danger" | "quiet"; task?: string; taskTone?: "accent" | "warning" | "danger" | "quiet"; control: string; recovery?: string }) {

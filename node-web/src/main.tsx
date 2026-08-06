@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import "@yuanshu/ui/styles.css";
 import { App } from "./App";
 import "./app.css";
 import { LanguageProvider, LanguageSwitch } from "./i18n";
