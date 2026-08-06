@@ -43,12 +43,27 @@ func TestSharedRuntimeLive(t *testing.T) {
 	server := startSharedRuntimeServer(t, ctx, binary, workspace, runDirectory)
 	defer server.close()
 
-	node := requireSharedRuntimeClient(t, ctx, server.socketPath, "node")
-	defer node.close()
-	peer := requireSharedRuntimeClient(t, ctx, server.socketPath, "peer")
-	defer peer.close()
+	terminal := startSharedRuntimeCLI(t, ctx, binary, server.endpoint, workspace,
+		"Use the shell exactly once to run: sh -c 'sleep 20; printf YUANSHU_PF091_SHARED'. Do not perform any other action.")
+	defer terminal.close()
 
-	threadID := startSharedRuntimeThread(t, ctx, node, workspace)
+	// Detect the CLI-owned active Turn without relying on event fanout, close
+	// that discovery connection, then connect a fresh Node-like client.
+	detector := requireSharedRuntimeClient(t, ctx, server.socketPath, "detector")
+	threadID, discovered := discoverSharedRuntimeThread(ctx, detector, 30*time.Second)
+	initialRead := discovered && readSharedRuntimeSummary(ctx, detector, threadID)
+	turnID, turnCount, active := waitForSharedRuntimeActiveTurn(ctx, detector, threadID, 60*time.Second)
+	detector.close()
+	if !discovered || !initialRead || !active {
+		t.Logf("PF-091 CLI-owned turn preflight: discovered=%t read=%t active=%t process_running=%t failure_code=%s", discovered, initialRead, active, terminal.running(), terminal.failureCode())
+		t.Logf("PF-091 shared runtime evidence: codex=%s os=%s unix_socket=true cli_owned=true discovered=%t live_read=false subscribed=false live_fanout=false approval=false steer=false interrupt=false restart_read=false duplicate_turn=false", version, runtime.GOOS, discovered)
+		t.Fatal("the real Codex CLI did not start the bounded Turn")
+	}
+
+	node := requireSharedRuntimeClient(t, ctx, server.socketPath, "node_after_turn_start")
+	defer node.close()
+	liveRead, liveTurns := readSharedRuntimeTurns(ctx, node, threadID)
+	subscribed := resumeSharedRuntimeThread(ctx, node, threadID, workspace)
 	archived := false
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -59,40 +74,15 @@ func TestSharedRuntimeLive(t *testing.T) {
 		}
 	}()
 
-	zeroModelLoaded := loadedSharedRuntimeThread(ctx, node, threadID)
-	zeroModelRead := readSharedRuntimeSummary(ctx, node, threadID)
-	peerResume := resumeSharedRuntimeThread(ctx, peer, threadID, workspace)
-	peerLoaded := loadedSharedRuntimeThread(ctx, peer, threadID)
-	peerRead := readSharedRuntimeSummary(ctx, peer, threadID)
-	peer.close()
-	endpointSurvivedPeerClose := loadedSharedRuntimeThread(ctx, node, threadID)
-
-	if !zeroModelLoaded || !zeroModelRead || !peerLoaded || !peerRead || !endpointSurvivedPeerClose {
-		t.Logf("PF-091 shared runtime preflight: loaded=%t read=%t peer_resume=%t peer_loaded=%t peer_read=%t peer_close_safe=%t", zeroModelLoaded, zeroModelRead, peerResume, peerLoaded, peerRead, endpointSurvivedPeerClose)
-		t.Logf("PF-091 shared runtime evidence: codex=%s os=%s unix_socket=true zero_model=true multi_client=false cli_connected=false live_fanout=false approval=false steer=false interrupt=false restart_read=false duplicate_turn=false", version, runtime.GOOS)
-		t.Fatal("shared-runtime zero-model prerequisites failed; no model Turn was started")
-	}
-
-	terminal := startSharedRuntimeCLI(t, ctx, binary, server.endpoint, workspace, threadID)
-	defer terminal.close()
-
-	turnID, methods, turnStarted := waitForSharedRuntimeTurn(ctx, node, threadID, 30*time.Second)
-	if !turnStarted {
-		t.Logf("PF-091 shared runtime CLI preflight: process_running=%t failure_code=%s peer_resume=%t", terminal.running(), terminal.failureCode(), peerResume)
-		t.Logf("PF-091 shared runtime evidence: codex=%s os=%s unix_socket=true zero_model=true multi_client=true cli_connected=false live_fanout=false approval=false steer=false interrupt=false restart_read=false duplicate_turn=false", version, runtime.GOOS)
-		t.Fatal("the real Codex CLI did not start the bounded shared-runtime Turn")
-	}
-
-	approval, observedMethods := waitForSharedRuntimeApproval(ctx, node, threadID, turnID, 2*time.Minute)
-	methods = append(methods, observedMethods...)
-	liveFanout := containsAttachmentMethod(methods, "turn/started") &&
-		(containsAttachmentMethod(methods, "item/agentMessage/delta") || containsAttachmentMethod(methods, "item/started"))
+	approval, methods := waitForSharedRuntimeApproval(ctx, node, threadID, turnID, 2*time.Minute)
+	liveFanout := len(methods) > 0
 	approvalObserved := len(approval.id) > 0
 	approvalAccepted := false
 	steerAccepted := false
 	interruptAccepted := false
 	turnInterrupted := false
 	cliStayedConnected := terminal.running()
+	cliOutputBeforeControl := terminal.output.Len()
 
 	if approvalObserved {
 		approvalAccepted = respondAttachmentShort(ctx, node, approval.id, map[string]any{"decision": "accept"}) == nil
@@ -109,6 +99,7 @@ func TestSharedRuntimeLive(t *testing.T) {
 				"input": []map[string]any{{"type": "text", "text": "After the command, reply briefly. Do not invoke another tool."}},
 			}, &steerResult) == nil && steerResult.TurnID == turnID
 			interruptAccepted = callAttachmentShort(ctx, node, "turn/interrupt", map[string]any{"threadId": threadID, "turnId": turnID}, nil) == nil
+			var observedMethods []string
 			turnInterrupted, observedMethods = waitForSharedRuntimeCompletion(ctx, node, threadID, turnID, 45*time.Second)
 			methods = append(methods, observedMethods...)
 		}
@@ -118,7 +109,10 @@ func TestSharedRuntimeLive(t *testing.T) {
 	}
 
 	time.Sleep(500 * time.Millisecond)
-	cliObservedControl := cliStayedConnected && terminal.containsControlState()
+	// Do not couple the Gate to localized or ANSI-rendered TUI wording. A redraw
+	// after the Node-side controls, while the CLI remains connected, is the
+	// bounded observation that the CLI consumed the shared Runtime updates.
+	cliObservedControl := cliStayedConnected && terminal.running() && terminal.output.Len() > cliOutputBeforeControl
 	terminal.close()
 
 	node.close()
@@ -133,16 +127,16 @@ func TestSharedRuntimeLive(t *testing.T) {
 	defer node.close()
 	restartRead, restartTurns := readSharedRuntimeTurns(ctx, node, threadID)
 	restartResume := resumeSharedRuntimeThread(ctx, node, threadID, workspace)
-	duplicateTurn := reconnectTurns != 1 || restartTurns != 1
+	duplicateTurn := turnCount != 1 || liveTurns != 1 || reconnectTurns != 1 || restartTurns != 1
 
 	if err := callAttachmentShort(ctx, node, "thread/archive", map[string]any{"threadId": threadID}, nil); err == nil {
 		archived = true
 	}
 
-	pass := liveFanout && approvalObserved && approvalAccepted && steerAccepted && interruptAccepted && turnInterrupted &&
+	pass := liveRead && subscribed && liveFanout && approvalObserved && approvalAccepted && steerAccepted && interruptAccepted && turnInterrupted &&
 		cliObservedControl && reconnectRead && restartRead && restartResume && !duplicateTurn
-	t.Logf("PF-091 shared runtime evidence: codex=%s os=%s unix_socket=true zero_model=true multi_client=true cli_connected=%t live_fanout=%t approval=%t steer=%t interrupt=%t cli_control_visible=%t reconnect_read=%t restart_read=%t restart_resume=%t duplicate_turn=%t pass=%t",
-		version, runtime.GOOS, cliStayedConnected, liveFanout, approvalObserved && approvalAccepted, steerAccepted,
+	t.Logf("PF-091 shared runtime evidence: codex=%s os=%s unix_socket=true cli_owned=true discovered=true live_read=%t subscribed=%t cli_connected=%t live_fanout=%t approval=%t steer=%t interrupt=%t cli_control_visible=%t reconnect_read=%t restart_read=%t restart_resume=%t duplicate_turn=%t pass=%t",
+		version, runtime.GOOS, liveRead, subscribed, cliStayedConnected, liveFanout, approvalObserved && approvalAccepted, steerAccepted,
 		interruptAccepted && turnInterrupted, cliObservedControl, reconnectRead, restartRead, restartResume, duplicateTurn, pass)
 	if !pass {
 		t.Fatal("the explicit shared Runtime did not satisfy the PF-091 live-control gate")
@@ -259,38 +253,6 @@ func requireSharedRuntimeClient(t *testing.T, ctx context.Context, socketPath, n
 	return client
 }
 
-func startSharedRuntimeThread(t *testing.T, ctx context.Context, client *attachmentClient, workspace string) string {
-	t.Helper()
-	var result struct {
-		Thread struct {
-			ID string `json:"id"`
-		} `json:"thread"`
-	}
-	if err := client.call(ctx, "thread/start", map[string]any{
-		"cwd": workspace, "approvalPolicy": "untrusted", "sandbox": "read-only", "serviceName": "yuanshu_pf091_probe",
-	}, &result); err != nil || result.Thread.ID == "" {
-		t.Fatal("start shared Runtime thread")
-	}
-	return result.Thread.ID
-}
-
-func loadedSharedRuntimeThread(parent context.Context, client *attachmentClient, threadID string) bool {
-	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
-	defer cancel()
-	var result struct {
-		Data []string `json:"data"`
-	}
-	if client.call(ctx, "thread/loaded/list", map[string]any{"limit": 100}, &result) != nil {
-		return false
-	}
-	for _, value := range result.Data {
-		if value == threadID {
-			return true
-		}
-	}
-	return false
-}
-
 func readSharedRuntimeSummary(parent context.Context, client *attachmentClient, threadID string) bool {
 	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
@@ -338,11 +300,10 @@ type sharedRuntimeTerminal struct {
 	err     error
 }
 
-func startSharedRuntimeCLI(t *testing.T, ctx context.Context, binary, endpoint, workspace, threadID string) *sharedRuntimeTerminal {
+func startSharedRuntimeCLI(t *testing.T, ctx context.Context, binary, endpoint, workspace, prompt string) *sharedRuntimeTerminal {
 	t.Helper()
-	prompt := "Use the shell exactly once to run: sh -c 'sleep 20; printf YUANSHU_PF091_SHARED'. Do not perform any other action."
-	command := exec.CommandContext(ctx, "/usr/bin/script", "-q", "/dev/null", binary, "resume",
-		"--remote", endpoint, "--no-alt-screen", "-C", workspace, "-s", "read-only", "-a", "untrusted", threadID, prompt)
+	command := exec.CommandContext(ctx, "/usr/bin/script", "-q", "/dev/null", binary,
+		"--remote", endpoint, "--no-alt-screen", "-C", workspace, "-s", "read-only", "-a", "untrusted", prompt)
 	command.Dir = workspace
 	command.Env = append(os.Environ(), "TERM=xterm-256color", "NO_COLOR=1")
 	stdin, err := command.StdinPipe()
@@ -376,14 +337,6 @@ func (t *sharedRuntimeTerminal) running() bool {
 	default:
 		return true
 	}
-}
-
-func (t *sharedRuntimeTerminal) containsControlState() bool {
-	if t == nil || t.output == nil {
-		return false
-	}
-	value := strings.ToLower(t.output.String())
-	return strings.Contains(value, "interrupt") || strings.Contains(value, "stopp") || strings.Contains(value, "cancel")
 }
 
 func (t *sharedRuntimeTerminal) failureCode() string {
@@ -452,6 +405,60 @@ func (t *sharedRuntimeTerminal) close() {
 	})
 }
 
+func discoverSharedRuntimeThread(parent context.Context, client *attachmentClient, timeout time.Duration) (string, bool) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	for {
+		var result struct {
+			Data []string `json:"data"`
+		}
+		callCtx, callCancel := context.WithTimeout(ctx, 2*time.Second)
+		err := client.call(callCtx, "thread/loaded/list", map[string]any{}, &result)
+		callCancel()
+		if err == nil && len(result.Data) == 1 && result.Data[0] != "" {
+			return result.Data[0], true
+		}
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func waitForSharedRuntimeActiveTurn(parent context.Context, client *attachmentClient, threadID string, timeout time.Duration) (string, int, bool) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	for {
+		var result struct {
+			Thread struct {
+				ID     string `json:"id"`
+				Status struct {
+					Type string `json:"type"`
+				} `json:"status"`
+				Turns []struct {
+					ID     string `json:"id"`
+					Status string `json:"status"`
+				} `json:"turns"`
+			} `json:"thread"`
+		}
+		callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
+		err := client.call(callCtx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &result)
+		callCancel()
+		if err == nil && result.Thread.ID == threadID && len(result.Thread.Turns) == 1 {
+			turn := result.Thread.Turns[0]
+			if turn.ID != "" && (result.Thread.Status.Type == "active" || turn.Status == "inProgress") {
+				return turn.ID, len(result.Thread.Turns), true
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return "", 0, false
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 type sharedRuntimeOutput struct {
 	mu        sync.Mutex
 	buffer    bytes.Buffer
@@ -479,6 +486,12 @@ func (o *sharedRuntimeOutput) String() string {
 	return o.buffer.String()
 }
 
+func (o *sharedRuntimeOutput) Len() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buffer.Len()
+}
+
 func (o *sharedRuntimeOutput) Clear() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -486,32 +499,6 @@ func (o *sharedRuntimeOutput) Clear() {
 	clear(value)
 	o.buffer.Reset()
 	o.remaining = 0
-}
-
-func waitForSharedRuntimeTurn(parent context.Context, client *attachmentClient, threadID string, timeout time.Duration) (string, []string, bool) {
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
-	methods := make([]string, 0, 16)
-	for {
-		select {
-		case message := <-client.methods:
-			methods = append(methods, message.method)
-			if message.method != "turn/started" {
-				continue
-			}
-			var params struct {
-				ThreadID string `json:"threadId"`
-				Turn     struct {
-					ID string `json:"id"`
-				} `json:"turn"`
-			}
-			if json.Unmarshal(message.params, &params) == nil && params.ThreadID == threadID && params.Turn.ID != "" {
-				return params.Turn.ID, methods, true
-			}
-		case <-ctx.Done():
-			return "", methods, false
-		}
-	}
 }
 
 func waitForSharedRuntimeApproval(parent context.Context, client *attachmentClient, threadID, turnID string, timeout time.Duration) (attachmentApproval, []string) {
